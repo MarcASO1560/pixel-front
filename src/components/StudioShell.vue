@@ -32,7 +32,6 @@ const statusMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
 
 const isAuthenticated = computed(() => Boolean(accessToken.value && currentUser.value));
-const canUseGoogle = computed(() => Boolean(GOOGLE_CLIENT_ID));
 
 onMounted(async () => {
   const storedToken = window.localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -248,8 +247,7 @@ function formatDate(value: string) {
 
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
-        <div v-if="canUseGoogle" ref="googleButtonRef" class="google-button"></div>
-        <p v-else class="notice error">El acceso no esta configurado todavia</p>
+        <div ref="googleButtonRef" class="google-button"></div>
 
         <div v-if="isLoading" class="loading-row">
           <ShieldCheck :size="18" aria-hidden="true" />
