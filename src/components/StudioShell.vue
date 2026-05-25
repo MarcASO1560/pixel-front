@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from "vue";
-import { FolderKanban, LogOut, Plus, RefreshCw, ShieldCheck } from "@lucide/vue";
+import {
+  ChevronRight,
+  Folder,
+  Grid3X3,
+  List,
+  LogOut,
+  Plus,
+  Search,
+  ShieldCheck,
+  UserRound,
+} from "@lucide/vue";
 
 import {
   createProject,
@@ -27,11 +37,26 @@ const currentUser = ref<User | null>(null);
 const projects = ref<Project[]>([]);
 const isLoading = ref(false);
 const isCreatingProject = ref(false);
+const isCreateDialogOpen = ref(false);
 const errorMessage = ref("");
-const statusMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
+const searchQuery = ref("");
+const viewMode = ref<"grid" | "list">("grid");
 
 const isAuthenticated = computed(() => Boolean(accessToken.value && currentUser.value));
+const visibleProjects = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase();
+
+  if (!query) {
+    return projects.value;
+  }
+
+  return projects.value.filter((project) => {
+    const name = project.name.toLowerCase();
+    const description = project.description?.toLowerCase() ?? "";
+    return name.includes(query) || description.includes(query);
+  });
+});
 
 onMounted(async () => {
   const storedToken = window.localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -60,7 +85,6 @@ async function signInWithGoogleCredential(credential: string) {
 
 async function signIn(user: { email: string; display_name: string; is_admin: boolean }) {
   errorMessage.value = "";
-  statusMessage.value = "";
   isLoading.value = true;
 
   try {
@@ -74,7 +98,6 @@ async function signIn(user: { email: string; display_name: string; is_admin: boo
     accessToken.value = session.access_token;
     window.localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
     await loadWorkspace();
-    statusMessage.value = "Sesion iniciada";
   } catch (error) {
     handleError(error);
   } finally {
@@ -188,7 +211,6 @@ async function addProject() {
   }
 
   errorMessage.value = "";
-  statusMessage.value = "";
   isCreatingProject.value = true;
 
   try {
@@ -200,7 +222,7 @@ async function addProject() {
     projects.value = [project, ...projects.value];
     projectForm.name = "";
     projectForm.description = "";
-    statusMessage.value = "Proyecto creado";
+    isCreateDialogOpen.value = false;
   } catch (error) {
     handleError(error);
   } finally {
@@ -215,7 +237,6 @@ function signOut(clearMessage = true) {
   window.localStorage.removeItem(ACCESS_TOKEN_KEY);
   if (clearMessage) {
     errorMessage.value = "";
-    statusMessage.value = "";
   }
 }
 
@@ -256,32 +277,117 @@ function formatDate(value: string) {
       </section>
     </section>
 
-    <section v-else class="workspace-view" aria-label="Proyectos">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Pixel Studio</p>
-          <h1>Proyectos</h1>
-        </div>
-
-        <div class="topbar-actions">
-          <span class="user-pill">{{ currentUser?.display_name || currentUser?.email }}</span>
-          <button class="icon-button" type="button" title="Recargar" @click="loadWorkspace">
-            <RefreshCw :size="18" aria-hidden="true" />
+    <section v-else class="workspace-view" aria-label="Explorador de proyectos">
+      <aside class="explorer-sidebar">
+        <nav class="sidebar-nav" aria-label="Navegacion">
+          <button class="nav-item active" type="button">
+            <Folder :size="18" aria-hidden="true" />
+            <span>Proyectos</span>
           </button>
+        </nav>
+
+        <div class="sidebar-account">
+          <div class="account-avatar">
+            <UserRound :size="18" aria-hidden="true" />
+          </div>
+          <div class="account-copy">
+            <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
+            <span>{{ currentUser?.email }}</span>
+          </div>
           <button class="icon-button" type="button" title="Salir" @click="signOut()">
             <LogOut :size="18" aria-hidden="true" />
           </button>
         </div>
-      </header>
+      </aside>
 
-      <section class="workspace-grid">
-        <aside class="create-panel" aria-labelledby="new-project-title">
-          <h2 id="new-project-title">Nuevo proyecto</h2>
+      <section class="explorer-main">
+        <header class="explorer-commandbar">
+          <button class="command-button primary" type="button" @click="isCreateDialogOpen = true">
+            <Plus :size="18" aria-hidden="true" />
+            <span>Nuevo</span>
+          </button>
+
+          <div class="view-switcher" aria-label="Vista">
+            <button
+              class="icon-button"
+              :class="{ active: viewMode === 'grid' }"
+              type="button"
+              title="Cuadricula"
+              @click="viewMode = 'grid'"
+            >
+              <Grid3X3 :size="18" aria-hidden="true" />
+            </button>
+            <button
+              class="icon-button"
+              :class="{ active: viewMode === 'list' }"
+              type="button"
+              title="Lista"
+              @click="viewMode = 'list'"
+            >
+              <List :size="18" aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        <div class="explorer-pathbar">
+          <div class="breadcrumb" aria-label="Ruta">
+            <span>Inicio</span>
+            <ChevronRight :size="16" aria-hidden="true" />
+            <strong>Proyectos</strong>
+          </div>
+
+          <label class="search-box">
+            <Search :size="17" aria-hidden="true" />
+            <input v-model="searchQuery" type="search" placeholder="Buscar proyectos" />
+          </label>
+        </div>
+
+        <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
+
+        <section class="content-header">
+          <h1>Proyectos</h1>
+          <span>{{ visibleProjects.length }} elementos</span>
+        </section>
+
+        <section class="file-area" aria-live="polite">
+          <div v-if="isLoading" class="empty-state">Cargando...</div>
+
+          <div v-else-if="visibleProjects.length === 0" class="empty-state">
+            <Folder :size="34" aria-hidden="true" />
+            <span>{{ projects.length === 0 ? "Esta carpeta esta vacia" : "Sin resultados" }}</span>
+          </div>
+
+          <div v-else :class="['file-collection', viewMode]">
+            <article v-for="project in visibleProjects" :key="project.id" class="project-item">
+              <div class="project-icon">
+                <Folder :size="44" aria-hidden="true" />
+              </div>
+              <div class="project-copy">
+                <h2>{{ project.name }}</h2>
+                <p>{{ project.description || "Sin descripcion" }}</p>
+                <time :datetime="project.updated_at">{{ formatDate(project.updated_at) }}</time>
+              </div>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <div
+        v-if="isCreateDialogOpen"
+        class="dialog-backdrop"
+        role="presentation"
+        @click.self="isCreateDialogOpen = false"
+      >
+        <section class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+          <header>
+            <h2 id="new-project-title">Nuevo proyecto</h2>
+            <button class="text-button" type="button" @click="isCreateDialogOpen = false">Cancelar</button>
+          </header>
 
           <form @submit.prevent="addProject">
             <label>
               <span>Nombre</span>
-              <input v-model="projectForm.name" type="text" required />
+              <input v-model="projectForm.name" type="text" required autofocus />
             </label>
 
             <label>
@@ -291,36 +397,11 @@ function formatDate(value: string) {
 
             <button type="submit" class="primary-action" :disabled="isCreatingProject">
               <Plus :size="18" aria-hidden="true" />
-              <span>{{ isCreatingProject ? "Creando..." : "Crear" }}</span>
+              <span>{{ isCreatingProject ? "Creando..." : "Crear proyecto" }}</span>
             </button>
           </form>
-
-          <p v-if="statusMessage" class="notice success">{{ statusMessage }}</p>
-          <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
-        </aside>
-
-        <section class="project-list" aria-live="polite">
-          <div class="list-header">
-            <h2>Biblioteca</h2>
-            <span>{{ projects.length }} proyectos</span>
-          </div>
-
-          <div v-if="isLoading" class="empty-state">Cargando...</div>
-
-          <div v-else-if="projects.length === 0" class="empty-state">
-            <FolderKanban :size="28" aria-hidden="true" />
-            <span>Sin proyectos</span>
-          </div>
-
-          <article v-for="project in projects" v-else :key="project.id" class="project-row">
-            <div>
-              <h3>{{ project.name }}</h3>
-              <p>{{ project.description || "Sin descripcion" }}</p>
-            </div>
-            <time :datetime="project.updated_at">{{ formatDate(project.updated_at) }}</time>
-          </article>
         </section>
-      </section>
+      </div>
     </section>
   </main>
 </template>
