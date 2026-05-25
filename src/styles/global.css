@@ -219,55 +219,8 @@ textarea:focus {
 }
 
 .workspace-view {
-  display: grid;
-  grid-template-columns: 264px minmax(0, 1fr);
   min-height: 100vh;
   background: #0f1013;
-}
-
-.explorer-sidebar {
-  display: grid;
-  grid-template-rows: 1fr auto;
-  min-height: 100vh;
-  border-right: 1px solid #272b34;
-  background: #15171d;
-  padding: 12px;
-}
-
-.sidebar-nav {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-}
-
-.nav-item {
-  justify-content: flex-start;
-  gap: 10px;
-  width: 100%;
-  height: 38px;
-  padding: 0 10px;
-  background: transparent;
-  color: #c4cad5;
-  font-weight: 700;
-}
-
-.nav-item:hover,
-.nav-item.active {
-  background: #242933;
-  color: #ffffff;
-}
-
-.nav-item.active {
-  box-shadow: inset 3px 0 0 #67d9c8;
-}
-
-.sidebar-account {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 34px;
-  gap: 10px;
-  align-items: center;
-  border-top: 1px solid #272b34;
-  padding-top: 12px;
 }
 
 .account-avatar {
@@ -330,9 +283,28 @@ textarea:focus {
   padding: 0 18px;
 }
 
+.commandbar-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
 .view-switcher {
   display: flex;
   gap: 6px;
+}
+
+.topbar-account {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 190px) 34px;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #343946;
+  border-radius: 8px;
+  background: #181b22;
+  padding: 5px;
 }
 
 .explorer-pathbar {
@@ -701,34 +673,6 @@ textarea:focus {
 }
 
 @media (max-width: 860px) {
-  .workspace-view {
-    grid-template-columns: 1fr;
-  }
-
-  .explorer-sidebar {
-    min-height: auto;
-    border-right: 0;
-    border-bottom: 1px solid #272b34;
-  }
-
-  .sidebar-nav {
-    display: flex;
-    overflow-x: auto;
-  }
-
-  .nav-item {
-    width: auto;
-    min-width: 126px;
-  }
-
-  .sidebar-account {
-    margin-top: 10px;
-  }
-
-  .explorer-main {
-    min-height: calc(100vh - 112px);
-  }
-
   .explorer-pathbar {
     grid-template-columns: 1fr;
   }
@@ -739,6 +683,21 @@ textarea:focus {
 }
 
 @media (max-width: 560px) {
+  .explorer-commandbar {
+    display: grid;
+    gap: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .commandbar-actions {
+    justify-content: space-between;
+  }
+
+  .topbar-account {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+  }
+
   .explorer-commandbar,
   .explorer-pathbar,
   .filter-bar,
@@ -765,9 +724,5 @@ textarea:focus {
   .filter-control select {
     width: 100%;
     min-width: 0;
-  }
-
-  .sidebar-account {
-    grid-template-columns: 34px minmax(0, 1fr) 34px;
   }
 }

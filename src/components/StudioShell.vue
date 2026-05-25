@@ -719,35 +719,6 @@ function formatDate(value: string) {
     </section>
 
     <section v-else class="workspace-view" aria-label="Explorador de proyectos">
-      <aside class="explorer-sidebar">
-        <nav class="sidebar-nav" aria-label="Navegacion">
-          <button class="nav-item active" type="button" @click="goToProjects">
-            <Folder :size="18" aria-hidden="true" />
-            <span>Proyectos</span>
-          </button>
-        </nav>
-
-        <div class="sidebar-account">
-          <img
-            v-if="currentUser?.avatar_url"
-            class="account-photo"
-            :src="currentUser.avatar_url"
-            alt=""
-            referrerpolicy="no-referrer"
-          />
-          <div v-else class="account-avatar">
-            <UserRound :size="18" aria-hidden="true" />
-          </div>
-          <div class="account-copy">
-            <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
-            <span>{{ currentUser?.email }}</span>
-          </div>
-          <button class="icon-button" type="button" title="Salir" @click="signOut()">
-            <LogOut :size="18" aria-hidden="true" />
-          </button>
-        </div>
-      </aside>
-
       <section class="explorer-main">
         <header class="explorer-commandbar">
           <button class="command-button primary" type="button" @click="isCreateDialogOpen = true">
@@ -755,25 +726,47 @@ function formatDate(value: string) {
             <span>{{ createButtonLabel }}</span>
           </button>
 
-          <div class="view-switcher" aria-label="Vista">
-            <button
-              class="icon-button"
-              :class="{ active: viewMode === 'grid' }"
-              type="button"
-              title="Cuadricula"
-              @click="viewMode = 'grid'"
-            >
-              <Grid3X3 :size="18" aria-hidden="true" />
-            </button>
-            <button
-              class="icon-button"
-              :class="{ active: viewMode === 'list' }"
-              type="button"
-              title="Lista"
-              @click="viewMode = 'list'"
-            >
-              <List :size="18" aria-hidden="true" />
-            </button>
+          <div class="commandbar-actions">
+            <div class="view-switcher" aria-label="Vista">
+              <button
+                class="icon-button"
+                :class="{ active: viewMode === 'grid' }"
+                type="button"
+                title="Cuadricula"
+                @click="viewMode = 'grid'"
+              >
+                <Grid3X3 :size="18" aria-hidden="true" />
+              </button>
+              <button
+                class="icon-button"
+                :class="{ active: viewMode === 'list' }"
+                type="button"
+                title="Lista"
+                @click="viewMode = 'list'"
+              >
+                <List :size="18" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div class="topbar-account">
+              <img
+                v-if="currentUser?.avatar_url"
+                class="account-photo"
+                :src="currentUser.avatar_url"
+                alt=""
+                referrerpolicy="no-referrer"
+              />
+              <div v-else class="account-avatar">
+                <UserRound :size="18" aria-hidden="true" />
+              </div>
+              <div class="account-copy">
+                <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
+                <span>{{ currentUser?.email }}</span>
+              </div>
+              <button class="icon-button" type="button" title="Salir" @click="signOut()">
+                <LogOut :size="18" aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </header>
 
