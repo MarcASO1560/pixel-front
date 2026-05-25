@@ -1,0 +1,328 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #101114;
+  color: #f4f5f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 240px),
+    #101114;
+}
+
+.auth-view {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel,
+.create-panel {
+  width: min(100%, 420px);
+  border: 1px solid #2d3037;
+  border-radius: 8px;
+  background: #17191f;
+  padding: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.brand-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid #3a5f5a;
+  border-radius: 8px;
+  color: #8ee0cf;
+  background: #10221f;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+h2 {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+h3 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+p {
+  color: #a8adb8;
+}
+
+form {
+  display: grid;
+  gap: 16px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: #c8ccd5;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid #333743;
+  border-radius: 6px;
+  outline: none;
+  background: #101218;
+  color: #f4f5f7;
+}
+
+input {
+  height: 40px;
+  padding: 0 12px;
+}
+
+textarea {
+  resize: vertical;
+  padding: 10px 12px;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #65d6c3;
+  box-shadow: 0 0 0 3px rgba(101, 214, 195, 0.12);
+}
+
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.check-row input {
+  width: 18px;
+  height: 18px;
+}
+
+.primary-action,
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+}
+
+.primary-action {
+  gap: 9px;
+  height: 42px;
+  padding: 0 16px;
+  background: #65d6c3;
+  color: #071311;
+  font-weight: 800;
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.notice {
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.notice.error {
+  border: 1px solid #6b2c38;
+  background: #2a1117;
+  color: #ffb7c1;
+}
+
+.notice.success {
+  border: 1px solid #2e5d4b;
+  background: #102119;
+  color: #9ae8c5;
+}
+
+.workspace-view {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 24px;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: #65d6c3;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-pill {
+  max-width: min(42vw, 280px);
+  overflow: hidden;
+  border: 1px solid #30343d;
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #dce1ea;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #30343d;
+  background: #17191f;
+  color: #dce1ea;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.create-panel {
+  position: sticky;
+  top: 24px;
+}
+
+.create-panel h2 {
+  margin-bottom: 18px;
+}
+
+.project-list {
+  display: grid;
+  gap: 10px;
+}
+
+.list-header,
+.project-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.list-header {
+  min-height: 40px;
+}
+
+.list-header span,
+.project-row time {
+  color: #8f96a3;
+  font-size: 13px;
+}
+
+.project-row {
+  min-height: 76px;
+  border: 1px solid #2d3037;
+  border-radius: 8px;
+  background: #17191f;
+  padding: 14px 16px;
+}
+
+.project-row p {
+  margin-top: 5px;
+  font-size: 13px;
+}
+
+.empty-state {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed #343944;
+  border-radius: 8px;
+  color: #9da4af;
+  background: #14161b;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .workspace-view {
+    padding: 16px;
+  }
+
+  .topbar,
+  .workspace-grid {
+    display: grid;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .create-panel {
+    position: static;
+    width: 100%;
+  }
+
+  .project-row {
+    display: grid;
+  }
+}
