@@ -748,7 +748,7 @@ function formatDate(value: string) {
               </button>
             </div>
 
-            <div class="topbar-account">
+            <div class="topbar-account" :title="currentUser?.email || undefined">
               <img
                 v-if="currentUser?.avatar_url"
                 class="account-photo"
@@ -759,14 +759,12 @@ function formatDate(value: string) {
               <div v-else class="account-avatar">
                 <UserRound :size="18" aria-hidden="true" />
               </div>
-              <div class="account-copy">
-                <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
-                <span>{{ currentUser?.email }}</span>
-              </div>
-              <button class="icon-button" type="button" title="Salir" @click="signOut()">
-                <LogOut :size="18" aria-hidden="true" />
-              </button>
+              <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
             </div>
+
+            <button class="icon-button" type="button" title="Salir" @click="signOut()">
+              <LogOut :size="18" aria-hidden="true" />
+            </button>
           </div>
         </header>
 

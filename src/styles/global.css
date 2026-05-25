@@ -225,8 +225,8 @@ textarea:focus {
 
 .account-avatar {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   place-items: center;
   border-radius: 6px;
   background: #222832;
@@ -234,35 +234,12 @@ textarea:focus {
 }
 
 .account-photo {
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   border: 1px solid #343946;
   border-radius: 50%;
   object-fit: cover;
   background: #222832;
-}
-
-.account-copy {
-  min-width: 0;
-}
-
-.account-copy strong,
-.account-copy span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-copy strong {
-  color: #eef1f5;
-  font-size: 13px;
-}
-
-.account-copy span {
-  margin-top: 2px;
-  color: #8e96a4;
-  font-size: 12px;
 }
 
 .explorer-main {
@@ -285,7 +262,7 @@ textarea:focus {
 
 .commandbar-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   min-width: 0;
 }
@@ -296,15 +273,26 @@ textarea:focus {
 }
 
 .topbar-account {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 190px) 34px;
-  gap: 10px;
+  display: inline-flex;
+  gap: 8px;
   align-items: center;
   min-width: 0;
+  max-width: 240px;
+  height: 34px;
   border: 1px solid #343946;
-  border-radius: 8px;
+  border-radius: 999px;
   background: #181b22;
-  padding: 5px;
+  padding: 3px 11px 3px 4px;
+}
+
+.topbar-account strong {
+  overflow: hidden;
+  color: #eef1f5;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .explorer-pathbar {
@@ -695,7 +683,7 @@ textarea:focus {
   }
 
   .topbar-account {
-    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    max-width: min(54vw, 220px);
   }
 
   .explorer-commandbar,
