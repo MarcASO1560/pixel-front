@@ -83,7 +83,32 @@ const GOOGLE_CLIENT_ID = import.meta.env.PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 const DEFAULT_IS_ADMIN = import.meta.env.PUBLIC_DEFAULT_IS_ADMIN === "true";
 
-const folderColors = ["#f1c84b", "#67d9c8", "#82aaff", "#c792ea", "#f78c6c", "#9ccc65"];
+const folderColors = [
+  "#ffd84a",
+  "#ffb23f",
+  "#ff7a59",
+  "#ff5caf",
+  "#d66bff",
+  "#9b7cff",
+  "#78a8ff",
+  "#5cc8ff",
+  "#67f7d5",
+  "#65d98f",
+  "#a6e85f",
+  "#d6f264",
+  "#ffffff",
+  "#cfd7e6",
+  "#9aa7c0",
+  "#6d7891",
+  "#f4a7b9",
+  "#e6b673",
+  "#b994ff",
+  "#7de7ff",
+  "#9cffd1",
+  "#c4ff7a",
+  "#ffef99",
+  "#ff9f8a",
+];
 const icons = {
   bulletList: BulletListIcon,
   chevronRight: ChevronRightIcon,
@@ -1220,16 +1245,22 @@ function formatDate(value: string) {
 
               <fieldset class="color-field">
                 <legend>Color</legend>
-                <button
-                  v-for="color in folderColors"
-                  :key="color"
-                  class="color-swatch"
-                  :class="{ active: folderForm.color === color }"
-                  type="button"
-                  :style="{ backgroundColor: color }"
-                  :title="color"
-                  @click="folderForm.color = color"
-                ></button>
+                <div class="color-grid">
+                  <button
+                    v-for="color in folderColors"
+                    :key="color"
+                    class="color-swatch"
+                    :class="{ active: folderForm.color === color }"
+                    type="button"
+                    :style="{ backgroundColor: color }"
+                    :title="color"
+                    @click="folderForm.color = color"
+                  ></button>
+                  <label class="custom-color" title="Color personalizado">
+                    <input v-model="folderForm.color" type="color" aria-label="Color personalizado" />
+                    <span :style="{ backgroundColor: folderForm.color }"></span>
+                  </label>
+                </div>
               </fieldset>
             </template>
 
@@ -1266,16 +1297,22 @@ function formatDate(value: string) {
 
             <fieldset v-if="editingItem?.kind === 'folder'" class="color-field">
               <legend>Color</legend>
-              <button
-                v-for="color in folderColors"
-                :key="color"
-                class="color-swatch"
-                :class="{ active: folderEditForm.color === color }"
-                type="button"
-                :style="{ backgroundColor: color }"
-                :title="color"
-                @click="folderEditForm.color = color"
-              ></button>
+              <div class="color-grid">
+                <button
+                  v-for="color in folderColors"
+                  :key="color"
+                  class="color-swatch"
+                  :class="{ active: folderEditForm.color === color }"
+                  type="button"
+                  :style="{ backgroundColor: color }"
+                  :title="color"
+                  @click="folderEditForm.color = color"
+                ></button>
+                <label class="custom-color" title="Color personalizado">
+                  <input v-model="folderEditForm.color" type="color" aria-label="Color personalizado" />
+                  <span :style="{ backgroundColor: folderEditForm.color }"></span>
+                </label>
+              </div>
             </fieldset>
 
             <button type="submit" class="primary-action" :disabled="isUpdatingItem">
