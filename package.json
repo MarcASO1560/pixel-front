@@ -11,8 +11,9 @@
   },
   "dependencies": {
     "@astrojs/vue": "^5.0.0",
-    "@fontsource/pixelify-sans": "^5.2.7",
+    "@fontsource/vt323": "^5.2.7",
     "astro": "^5.0.0",
+    "pixelarticons": "^2.1.1",
     "vue": "^3.5.0"
   },
   "devDependencies": {

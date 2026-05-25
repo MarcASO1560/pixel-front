@@ -1,12 +1,9 @@
-@import "@fontsource/pixelify-sans/latin-400.css";
-@import "@fontsource/pixelify-sans/latin-500.css";
-@import "@fontsource/pixelify-sans/latin-600.css";
-@import "@fontsource/pixelify-sans/latin-700.css";
+@import "@fontsource/vt323/latin-400.css";
 
 :root {
   color-scheme: dark;
-  font-family: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-pixel: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
+  font-family: "VT323", ui-monospace, "Cascadia Mono", monospace;
+  --font-pixel: "VT323", ui-monospace, "Cascadia Mono", monospace;
   --bg: #0a0c12;
   --panel: #111722;
   --panel-raised: #182032;
@@ -233,149 +230,35 @@ textarea:focus {
   color: #ffffff;
 }
 
-.pixel-icon {
-  --icon-color: currentColor;
-  position: relative;
-  display: inline-block;
-  width: 18px;
-  height: 18px;
+.pixelart-icon {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
+  place-items: center;
   color: inherit;
+  line-height: 1;
+}
+
+.pixelart-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
   image-rendering: pixelated;
+  shape-rendering: crispEdges;
 }
 
-.pixel-icon-grid {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 2px 2px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 7px 2px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 12px 2px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 2px 7px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 7px 7px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 12px 7px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 2px 12px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 7px 12px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 12px 12px / 4px 4px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-list {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 3px 4px / 12px 2px,
-    linear-gradient(var(--icon-color) 0 0) 3px 8px / 12px 2px,
-    linear-gradient(var(--icon-color) 0 0) 3px 12px / 12px 2px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-sliders {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 2px 4px / 14px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 9px / 14px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 14px / 14px 2px,
-    linear-gradient(var(--cyan) 0 0) 5px 2px / 3px 6px,
-    linear-gradient(var(--cyan) 0 0) 11px 7px / 3px 6px,
-    linear-gradient(var(--cyan) 0 0) 7px 12px / 3px 6px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-logout {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 2px 3px / 6px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 13px / 6px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 3px / 2px 12px,
-    linear-gradient(var(--icon-color) 0 0) 8px 8px / 7px 2px,
-    linear-gradient(var(--icon-color) 0 0) 12px 5px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 14px 7px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 12px 10px / 2px 2px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-search {
-  width: 17px;
-  height: 17px;
-  background:
-    linear-gradient(var(--icon-color) 0 0) 4px 2px / 6px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 4px / 2px 6px,
-    linear-gradient(var(--icon-color) 0 0) 4px 10px / 6px 2px,
-    linear-gradient(var(--icon-color) 0 0) 10px 4px / 2px 6px,
-    linear-gradient(var(--icon-color) 0 0) 11px 11px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 13px 13px / 2px 2px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-reset {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 5px 3px / 8px 2px,
-    linear-gradient(var(--icon-color) 0 0) 3px 5px / 2px 6px,
-    linear-gradient(var(--icon-color) 0 0) 5px 11px / 7px 2px,
-    linear-gradient(var(--icon-color) 0 0) 12px 9px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 13px 7px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 7px 1px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 5px 2px / 2px 2px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-chevron {
-  width: 12px;
-  height: 12px;
-  background:
-    linear-gradient(var(--icon-color) 0 0) 3px 2px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 5px 4px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 7px 6px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 5px 8px / 2px 2px,
-    linear-gradient(var(--icon-color) 0 0) 3px 10px / 2px 2px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-user {
-  background:
-    linear-gradient(var(--icon-color) 0 0) 6px 3px / 6px 6px,
-    linear-gradient(var(--icon-color) 0 0) 4px 11px / 10px 2px,
-    linear-gradient(var(--icon-color) 0 0) 2px 13px / 14px 3px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-shield {
-  width: 20px;
-  height: 20px;
-  background:
-    linear-gradient(var(--icon-color) 0 0) 5px 2px / 10px 2px,
-    linear-gradient(var(--icon-color) 0 0) 3px 4px / 2px 7px,
-    linear-gradient(var(--icon-color) 0 0) 15px 4px / 2px 7px,
-    linear-gradient(var(--icon-color) 0 0) 5px 11px / 2px 3px,
-    linear-gradient(var(--icon-color) 0 0) 13px 11px / 2px 3px,
-    linear-gradient(var(--icon-color) 0 0) 7px 14px / 6px 2px,
-    linear-gradient(var(--cyan) 0 0) 8px 7px / 4px 2px,
-    linear-gradient(var(--cyan) 0 0) 10px 5px / 2px 6px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-folder-empty {
-  width: 34px;
-  height: 26px;
-  background:
-    linear-gradient(var(--yellow) 0 0) 2px 9px / 30px 15px,
-    linear-gradient(color-mix(in srgb, var(--yellow) 70%, #ffffff) 0 0) 2px 5px / 13px 5px,
-    linear-gradient(#9b7f24 0 0) 5px 18px / 24px 3px;
-  background-repeat: no-repeat;
-}
-
-.pixel-icon-pencil {
+.breadcrumb-chevron {
   width: 16px;
   height: 16px;
-  background:
-    linear-gradient(var(--icon-color) 0 0) 10px 2px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 8px 4px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 6px 6px / 4px 4px,
-    linear-gradient(var(--icon-color) 0 0) 4px 8px / 4px 4px,
-    linear-gradient(var(--yellow) 0 0) 2px 12px / 4px 2px;
-  background-repeat: no-repeat;
+  color: #758198;
 }
 
-.pixel-icon-plus {
-  background:
-    linear-gradient(currentColor 0 0) 8px 3px / 3px 12px,
-    linear-gradient(currentColor 0 0) 3px 8px / 13px 3px;
-  background-repeat: no-repeat;
+.empty-folder-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--yellow);
 }
 
 .google-button {
@@ -442,20 +325,20 @@ textarea:focus {
 
 .explorer-commandbar {
   display: flex;
-  min-height: 56px;
+  min-height: 52px;
   align-items: center;
   justify-content: stretch;
-  gap: 12px;
+  gap: 10px;
   border-bottom: 1px solid var(--line-soft);
   background: rgba(13, 17, 26, 0.92);
-  padding: 0 18px;
+  padding: 0 14px;
   box-shadow: inset 0 -2px 0 #05070b;
 }
 
 .commandbar-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 6px;
   align-items: center;
   justify-content: flex-start;
   width: 100%;
@@ -470,7 +353,7 @@ textarea:focus {
 .desktop-filter-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -495,7 +378,7 @@ textarea:focus {
   align-items: center;
   margin-left: auto;
   min-width: 0;
-  max-width: 240px;
+  max-width: 340px;
   height: 34px;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -507,9 +390,9 @@ textarea:focus {
 .topbar-account strong {
   overflow: hidden;
   color: #eef1f5;
-  font-size: 13px;
+  font-size: 19px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -521,7 +404,7 @@ textarea:focus {
   align-items: center;
   border-bottom: 1px solid var(--line-soft);
   background: rgba(12, 16, 24, 0.88);
-  padding: 10px 18px;
+  padding: 8px 14px;
 }
 
 .filter-control {
@@ -535,7 +418,7 @@ textarea:focus {
 
 .filter-control span {
   color: #8f98a7;
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -550,28 +433,29 @@ textarea:focus {
 }
 
 .filter-control select {
-  min-width: 122px;
+  min-width: 124px;
   height: 32px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--panel-raised);
   color: var(--text);
   padding: 0 30px 0 10px;
+  font-size: 18px;
   box-shadow: 0 2px 0 #05070b;
 }
 
 .filter-control.compact select {
-  min-width: 118px;
+  min-width: 120px;
   height: 32px;
 }
 
 .filter-control.compact.wide select {
-  min-width: 174px;
+  min-width: 184px;
 }
 
 .filter-toggle {
   display: inline-flex;
-  gap: 7px;
+  gap: 8px;
   align-items: center;
   height: 32px;
   border: 1px solid var(--line);
@@ -579,15 +463,15 @@ textarea:focus {
   background: var(--panel-raised);
   color: #c5ccd8;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: 18px;
   font-weight: 700;
 }
 
 .filter-toggle input {
   appearance: none;
   display: grid;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   place-items: center;
   border: 2px solid #54617a;
   background: #0b1018;
@@ -625,10 +509,6 @@ textarea:focus {
   box-shadow: 0 2px 0 #05070b;
 }
 
-.filter-reset span {
-  display: none;
-}
-
 .filter-reset:hover {
   border-color: #4d5a6b;
   background: #252b35;
@@ -651,7 +531,7 @@ textarea:focus {
   gap: 8px;
   padding: 0 11px;
   color: #9fa7b5;
-  font-size: 13px;
+  font-size: 19px;
 }
 
 .breadcrumb button {
@@ -692,6 +572,7 @@ textarea:focus {
   border: 0;
   background: transparent;
   padding: 0;
+  font-size: 19px;
   box-shadow: none;
 }
 
@@ -710,7 +591,7 @@ textarea:focus {
 
 .content-header span {
   color: #8f98a7;
-  font-size: 13px;
+  font-size: 18px;
 }
 
 .file-area {
@@ -721,8 +602,8 @@ textarea:focus {
 
 .file-collection.grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 150px));
+  gap: 14px;
 }
 
 .file-collection.list {
@@ -753,27 +634,28 @@ textarea:focus {
 
 .file-collection.grid .project-open {
   display: grid;
+  align-content: start;
   justify-items: center;
-  min-height: 150px;
-  padding: 16px 12px 12px;
+  min-height: 142px;
+  padding: 16px 10px 12px;
   text-align: center;
 }
 
 .file-collection.grid.small {
-  grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(128px, 128px));
 }
 
 .file-collection.grid.small .project-open {
-  min-height: 124px;
+  min-height: 126px;
   padding: 12px 9px 9px;
 }
 
 .file-collection.grid.large {
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(178px, 178px));
 }
 
 .file-collection.grid.large .project-open {
-  min-height: 182px;
+  min-height: 168px;
   padding: 22px 16px 16px;
 }
 
@@ -820,18 +702,17 @@ textarea:focus {
 }
 
 .file-collection.grid .create-blueprint .project-open {
-  align-content: center;
-  min-height: 150px;
+  min-height: 142px;
   padding: 18px 10px 12px;
 }
 
 .file-collection.grid.small .create-blueprint .project-open {
-  min-height: 124px;
+  min-height: 126px;
   padding: 14px 8px 10px;
 }
 
 .file-collection.grid.large .create-blueprint .project-open {
-  min-height: 182px;
+  min-height: 168px;
   padding: 24px 14px 16px;
 }
 
@@ -876,155 +757,47 @@ textarea:focus {
 .project-icon {
   display: grid;
   place-items: center;
-  color: var(--yellow);
+  color: var(--folder-color, var(--yellow));
 }
 
 .file-collection.grid .project-icon {
   margin-bottom: 8px;
 }
 
-.pixel-folder {
-  position: relative;
-  display: block;
-  width: 44px;
-  height: 32px;
-  border: 3px solid color-mix(in srgb, var(--folder-color, var(--yellow)) 86%, #ffffff);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.3), transparent 36%),
-    linear-gradient(135deg, var(--folder-color, var(--yellow)), color-mix(in srgb, var(--folder-color, var(--yellow)) 78%, #0b0f18));
-  box-shadow:
-    inset -4px -5px 0 rgba(0, 0, 0, 0.2),
-    inset 3px 3px 0 rgba(255, 255, 255, 0.18),
-    0 3px 0 rgba(0, 0, 0, 0.55);
-  image-rendering: pixelated;
+.item-glyph {
+  width: 58px;
+  height: 58px;
+  color: inherit;
+  filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.58));
 }
 
-.pixel-folder::before {
-  position: absolute;
-  top: -13px;
-  left: -3px;
-  width: 22px;
-  height: 10px;
-  border: 3px solid color-mix(in srgb, var(--folder-color, var(--yellow)) 86%, #ffffff);
-  border-bottom: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 44%),
-    var(--folder-color, var(--yellow));
-  content: "";
+.project-glyph {
+  color: var(--blue);
 }
 
-.blueprint-folder {
-  width: 44px;
-  height: 32px;
-  border-color: color-mix(in srgb, var(--cyan) 86%, #ffffff);
-  border-style: solid;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 36%),
-    linear-gradient(135deg, color-mix(in srgb, var(--cyan) 82%, #ffffff), color-mix(in srgb, var(--cyan) 58%, #08151b));
-  box-shadow:
-    inset -4px -5px 0 rgba(0, 0, 0, 0.2),
-    inset 3px 3px 0 rgba(255, 255, 255, 0.18),
-    0 3px 0 rgba(0, 0, 0, 0.55);
+.create-glyph {
+  color: var(--cyan);
 }
 
-.blueprint-folder::before {
-  border-color: color-mix(in srgb, var(--cyan) 86%, #ffffff);
-  border-style: solid;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 44%),
-    color-mix(in srgb, var(--cyan) 82%, #ffffff);
+.file-collection.list .item-glyph {
+  width: 36px;
+  height: 36px;
 }
 
-.blueprint-folder::after {
-  position: absolute;
-  right: -7px;
-  bottom: -7px;
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 2px solid #b8fff3;
-  background: #07302b;
-  color: #b8fff3;
-  content: "+";
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
-  text-shadow: 0 2px 0 #05241f;
-}
-
-.file-collection.list.small .pixel-folder {
+.file-collection.list.small .item-glyph {
   width: 30px;
-  height: 22px;
-  border-width: 2px;
+  height: 30px;
 }
 
-.file-collection.list.small .pixel-folder::before {
-  top: -9px;
-  left: -2px;
-  width: 16px;
-  height: 7px;
-  border-width: 2px;
+.file-collection.grid.small .item-glyph {
+  width: 52px;
+  height: 52px;
 }
 
-.file-collection.list.small .blueprint-folder::after {
-  right: -6px;
-  bottom: -6px;
-  width: 16px;
-  height: 16px;
-  font-size: 14px;
-}
-
-.file-collection.grid.small .blueprint-folder {
-  width: 36px;
-  height: 26px;
-}
-
-.file-collection.grid.small .pixel-folder {
-  width: 36px;
-  height: 26px;
-}
-
-.file-collection.grid.small .pixel-folder::before {
-  top: -11px;
-  width: 18px;
-  height: 8px;
-}
-
-.file-collection.grid.small .blueprint-folder::after {
-  right: -6px;
-  bottom: -6px;
-  width: 16px;
-  height: 16px;
-  font-size: 14px;
-}
-
-.file-collection.grid.large .pixel-folder,
-.file-collection.list.large .pixel-folder {
-  width: 56px;
-  height: 40px;
-}
-
-.file-collection.grid.large .blueprint-folder,
-.file-collection.list.large .blueprint-folder {
-  width: 56px;
-  height: 40px;
-}
-
-.file-collection.grid.large .pixel-folder::before,
-.file-collection.list.large .pixel-folder::before {
-  top: -15px;
-  width: 28px;
-  height: 12px;
-}
-
-.file-collection.grid.large .blueprint-folder::after,
-.file-collection.list.large .blueprint-folder::after {
-  right: -8px;
-  bottom: -8px;
-  width: 22px;
-  height: 22px;
-  font-size: 18px;
+.file-collection.grid.large .item-glyph,
+.file-collection.list.large .item-glyph {
+  width: 70px;
+  height: 70px;
 }
 
 .project-copy {
@@ -1042,14 +815,16 @@ textarea:focus {
 
 .project-copy h2 {
   color: var(--text);
-  font-size: 14px;
+  font-size: 21px;
+  line-height: 1;
 }
 
 .project-copy p,
 .project-copy time {
-  margin-top: 4px;
+  margin-top: 3px;
   color: #8f98a7;
-  font-size: 12px;
+  font-size: 17px;
+  line-height: 1.05;
 }
 
 .file-collection.hide-descriptions .project-copy p,
@@ -1070,7 +845,7 @@ textarea:focus {
   font-weight: 700;
 }
 
-.empty-state .pixel-icon {
+.empty-state .pixelart-icon {
   color: #f1c84b;
 }
 
@@ -1134,11 +909,11 @@ textarea:focus {
 
 .item-action {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 6px;
+  right: 6px;
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
@@ -1149,6 +924,11 @@ textarea:focus {
   box-shadow: 0 2px 0 #05070b;
 }
 
+.file-collection.grid .item-action {
+  top: 8px;
+  right: 8px;
+}
+
 .project-item:hover .item-action,
 .project-item:focus-within .item-action {
   opacity: 1;
@@ -1157,6 +937,45 @@ textarea:focus {
 .item-action:hover {
   border-color: var(--pink);
   color: #ffffff;
+}
+
+.create-option-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(103, 247, 213, 0.36);
+  border-radius: 4px;
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.05) 1px, transparent 1px),
+    #0c141f;
+  background-size: 10px 10px;
+  padding: 10px;
+}
+
+.create-option-icon {
+  width: 42px;
+  height: 42px;
+  color: var(--cyan);
+}
+
+.create-option-card strong,
+.create-option-card span {
+  display: block;
+}
+
+.create-option-card strong {
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.create-option-card span {
+  margin-top: 2px;
+  color: #8fdfd1;
+  font-size: 17px;
+  line-height: 1.05;
 }
 
 @media (max-width: 860px) {
@@ -1214,7 +1033,7 @@ textarea:focus {
     display: none;
   }
 
-  .mobile-filter-drawer summary .pixel-icon {
+  .mobile-filter-drawer summary .pixelart-icon {
     color: var(--cyan);
   }
 

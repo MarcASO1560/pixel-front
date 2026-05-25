@@ -1,5 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import BulletListIcon from "pixelarticons/svg/bulletlist.svg?raw";
+import ChevronRightIcon from "pixelarticons/svg/chevron-right.svg?raw";
+import FilterIcon from "pixelarticons/svg/filter.svg?raw";
+import FolderIcon from "pixelarticons/svg/folder.svg?raw";
+import FolderPlusIcon from "pixelarticons/svg/folder-plus.svg?raw";
+import GamepadIcon from "pixelarticons/svg/gamepad.svg?raw";
+import GridIcon from "pixelarticons/svg/grid-3x3.svg?raw";
+import LogoutIcon from "pixelarticons/svg/logout.svg?raw";
+import PenSquareIcon from "pixelarticons/svg/pen-square.svg?raw";
+import PlusBoxIcon from "pixelarticons/svg/plus-box.svg?raw";
+import PlusIcon from "pixelarticons/svg/plus.svg?raw";
+import ReloadIcon from "pixelarticons/svg/reload.svg?raw";
+import SearchIcon from "pixelarticons/svg/search.svg?raw";
+import ShieldIcon from "pixelarticons/svg/shield.svg?raw";
+import UserIcon from "pixelarticons/svg/user.svg?raw";
 
 import {
   createProject,
@@ -68,6 +83,23 @@ const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 const DEFAULT_IS_ADMIN = import.meta.env.PUBLIC_DEFAULT_IS_ADMIN === "true";
 
 const folderColors = ["#f1c84b", "#67d9c8", "#82aaff", "#c792ea", "#f78c6c", "#9ccc65"];
+const icons = {
+  bulletList: BulletListIcon,
+  chevronRight: ChevronRightIcon,
+  filter: FilterIcon,
+  folder: FolderIcon,
+  folderPlus: FolderPlusIcon,
+  project: GamepadIcon,
+  create: PlusBoxIcon,
+  grid: GridIcon,
+  logout: LogoutIcon,
+  penSquare: PenSquareIcon,
+  plus: PlusIcon,
+  reload: ReloadIcon,
+  search: SearchIcon,
+  shield: ShieldIcon,
+  user: UserIcon,
+} as const;
 
 const projectForm = reactive({
   name: "",
@@ -137,11 +169,14 @@ const currentTitle = computed(() => currentFolder.value?.name ?? selectedProject
 const searchPlaceholder = computed(() =>
   selectedProject.value ? "Buscar en esta carpeta" : "Buscar proyectos",
 );
-const createActionLabel = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
+const createActionLabel = computed(() => "CREA");
 const createActionDescription = computed(() =>
-  selectedProject.value ? "Anadir carpeta en esta ubicacion" : "Anadir proyecto al explorador",
+  selectedProject.value ? "Nueva carpeta en esta ubicacion" : "Nuevo proyecto creativo",
 );
-const dialogTitle = computed(() => createActionLabel.value);
+const createOptionLabel = computed(() => (selectedProject.value ? "Carpeta" : "Proyecto"));
+const createOptionIcon = computed(() => (selectedProject.value ? icons.folderPlus : icons.project));
+const createSubmitLabel = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
+const dialogTitle = computed(() => "Crea");
 const hasSearchQuery = computed(() => Boolean(searchQuery.value.trim()));
 const currentLocationKey = computed(() => {
   if (!selectedProject.value) {
@@ -745,7 +780,7 @@ function formatDate(value: string) {
       <section class="auth-panel">
         <div class="brand-row">
           <div class="brand-mark">
-            <span class="pixel-icon pixel-icon-shield" aria-hidden="true"></span>
+            <span class="pixelart-icon" aria-hidden="true" v-html="icons.shield"></span>
           </div>
           <div>
             <h1 id="auth-title">Pixel Studio</h1>
@@ -758,7 +793,7 @@ function formatDate(value: string) {
         <div ref="googleButtonRef" class="google-button"></div>
 
         <div v-if="isLoading" class="loading-row">
-          <span class="pixel-icon pixel-icon-shield" aria-hidden="true"></span>
+          <span class="pixelart-icon" aria-hidden="true" v-html="icons.shield"></span>
           <span>Entrando...</span>
         </div>
       </section>
@@ -776,7 +811,7 @@ function formatDate(value: string) {
                 title="Cuadricula"
                 @click="viewMode = 'grid'"
               >
-                <span class="pixel-icon pixel-icon-grid" aria-hidden="true"></span>
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.grid"></span>
               </button>
               <button
                 class="icon-button"
@@ -785,7 +820,7 @@ function formatDate(value: string) {
                 title="Lista"
                 @click="viewMode = 'list'"
               >
-                <span class="pixel-icon pixel-icon-list" aria-hidden="true"></span>
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.bulletList"></span>
               </button>
             </div>
 
@@ -841,7 +876,7 @@ function formatDate(value: string) {
                 </label>
 
                 <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                  <span class="pixel-icon pixel-icon-reset" aria-hidden="true"></span>
+                  <span class="pixelart-icon" aria-hidden="true" v-html="icons.reload"></span>
                 </button>
               </div>
             </div>
@@ -855,19 +890,19 @@ function formatDate(value: string) {
                 referrerpolicy="no-referrer"
               />
               <div v-else class="account-avatar">
-                <span class="pixel-icon pixel-icon-user" aria-hidden="true"></span>
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.user"></span>
               </div>
               <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
             </div>
 
             <button class="icon-button logout-button" type="button" title="Salir" @click="signOut()">
-              <span class="pixel-icon pixel-icon-logout" aria-hidden="true"></span>
+              <span class="pixelart-icon" aria-hidden="true" v-html="icons.logout"></span>
             </button>
           </div>
 
           <details class="mobile-filter-drawer">
             <summary>
-              <span class="pixel-icon pixel-icon-sliders" aria-hidden="true"></span>
+              <span class="pixelart-icon" aria-hidden="true" v-html="icons.filter"></span>
               <span>Vista y filtros</span>
             </summary>
 
@@ -920,7 +955,7 @@ function formatDate(value: string) {
               </label>
 
               <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                <span class="pixel-icon pixel-icon-reset" aria-hidden="true"></span>
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.reload"></span>
                 <span>Restablecer</span>
               </button>
             </div>
@@ -931,17 +966,17 @@ function formatDate(value: string) {
           <div class="breadcrumb" aria-label="Ruta">
             <button type="button" @click="goToProjects">Proyectos</button>
             <template v-if="selectedProject">
-              <span class="pixel-icon pixel-icon-chevron" aria-hidden="true"></span>
+              <span class="pixelart-icon breadcrumb-chevron" aria-hidden="true" v-html="icons.chevronRight"></span>
               <button type="button" @click="goToProjectRoot">{{ selectedProject.name }}</button>
             </template>
             <template v-for="folder in breadcrumbFolders" :key="folder.id">
-              <span class="pixel-icon pixel-icon-chevron" aria-hidden="true"></span>
+              <span class="pixelart-icon breadcrumb-chevron" aria-hidden="true" v-html="icons.chevronRight"></span>
               <button type="button" @click="goToFolder(folder.id)">{{ folder.name }}</button>
             </template>
           </div>
 
           <label class="search-box">
-            <span class="pixel-icon pixel-icon-search" aria-hidden="true"></span>
+            <span class="pixelart-icon" aria-hidden="true" v-html="icons.search"></span>
             <input v-model="searchQuery" type="search" :placeholder="searchPlaceholder" />
           </label>
         </div>
@@ -957,7 +992,7 @@ function formatDate(value: string) {
           <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
 
           <div v-else-if="visibleItems.length === 0 && hasSearchQuery" class="empty-state">
-            <span class="pixel-icon pixel-icon-folder-empty" aria-hidden="true"></span>
+            <span class="pixelart-icon empty-folder-icon" aria-hidden="true" v-html="icons.folder"></span>
             <span>{{ emptyMessage }}</span>
           </div>
 
@@ -977,7 +1012,12 @@ function formatDate(value: string) {
             >
               <button class="project-open" type="button" @click="openItem(item)">
                 <div class="project-icon" :style="{ '--folder-color': item.color || undefined }">
-                  <span class="pixel-folder" aria-hidden="true"></span>
+                  <span
+                    class="pixelart-icon item-glyph"
+                    :class="{ 'project-glyph': item.kind === 'project', 'folder-glyph': item.kind === 'folder' }"
+                    aria-hidden="true"
+                    v-html="item.kind === 'project' ? icons.project : icons.folder"
+                  ></span>
                 </div>
                 <div class="project-copy">
                   <h2>{{ item.name }}</h2>
@@ -995,14 +1035,14 @@ function formatDate(value: string) {
                 title="Editar carpeta"
                 @click="openEditFolder(item.raw)"
               >
-                <span class="pixel-icon pixel-icon-pencil" aria-hidden="true"></span>
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
               </button>
             </article>
 
             <article v-if="!hasSearchQuery" class="project-item create-blueprint">
               <button class="project-open create-open" type="button" @click="isCreateDialogOpen = true">
                 <div class="project-icon create-icon">
-                  <span class="pixel-folder blueprint-folder" aria-hidden="true"></span>
+                  <span class="pixelart-icon item-glyph create-glyph" aria-hidden="true" v-html="icons.create"></span>
                 </div>
                 <div class="project-copy">
                   <h2>{{ createActionLabel }}</h2>
@@ -1027,6 +1067,14 @@ function formatDate(value: string) {
           </header>
 
           <form @submit.prevent="addItem">
+            <div class="create-option-card" aria-label="Tipo de creacion">
+              <span class="pixelart-icon create-option-icon" aria-hidden="true" v-html="createOptionIcon"></span>
+              <div>
+                <strong>{{ createOptionLabel }}</strong>
+                <span>{{ createActionDescription }}</span>
+              </div>
+            </div>
+
             <template v-if="!isInsideProject">
               <label>
                 <span>Nombre</span>
@@ -1061,8 +1109,8 @@ function formatDate(value: string) {
             </template>
 
             <button type="submit" class="primary-action" :disabled="isCreatingItem">
-              <span class="pixel-icon pixel-icon-plus" aria-hidden="true"></span>
-              <span>{{ isCreatingItem ? "Creando..." : dialogTitle }}</span>
+              <span class="pixelart-icon" aria-hidden="true" v-html="icons.plus"></span>
+              <span>{{ isCreatingItem ? "Creando..." : createSubmitLabel }}</span>
             </button>
           </form>
         </section>
@@ -1101,7 +1149,7 @@ function formatDate(value: string) {
             </fieldset>
 
             <button type="submit" class="primary-action" :disabled="isUpdatingFolder">
-              <span class="pixel-icon pixel-icon-pencil" aria-hidden="true"></span>
+              <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
               <span>{{ isUpdatingFolder ? "Guardando..." : "Guardar cambios" }}</span>
             </button>
           </form>
