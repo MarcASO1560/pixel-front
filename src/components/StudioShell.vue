@@ -131,6 +131,7 @@ const isCreateDialogOpen = ref(false);
 const isEditDialogOpen = ref(false);
 const isUpdatingItem = ref(false);
 const editingItem = ref<ExplorerItem | null>(null);
+const selectedItemKey = ref<string | null>(null);
 const errorMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
 const searchQuery = ref("");
@@ -202,6 +203,9 @@ const visibleItems = computed<ExplorerItem[]>(() => {
 
   return [...items].sort(compareExplorerItems);
 });
+const selectedExplorerItem = computed(() =>
+  visibleItems.value.find((item) => getItemKey(item) === selectedItemKey.value) ?? null,
+);
 const projectItems = computed<ExplorerItem[]>(() =>
   projects.value.map((project) => ({
     kind: "project",
@@ -265,6 +269,12 @@ watch(searchQuery, (value) => {
     [currentLocationKey.value]: value,
   };
   saveExplorerState();
+});
+
+watch(visibleItems, (items) => {
+  if (selectedItemKey.value && !items.some((item) => getItemKey(item) === selectedItemKey.value)) {
+    selectedItemKey.value = null;
+  }
 });
 
 function restoreExplorerState() {
@@ -413,6 +423,30 @@ function compareExplorerItems(first: ExplorerItem, second: ExplorerItem) {
   }
 
   return result * direction;
+}
+
+function getItemKey(item: ExplorerItem) {
+  return `${item.kind}:${item.id}`;
+}
+
+function selectItem(item: ExplorerItem) {
+  selectedItemKey.value = getItemKey(item);
+}
+
+function clearSelectedItem() {
+  selectedItemKey.value = null;
+}
+
+function getItemKindLabel(item: ExplorerItem) {
+  return item.kind === "project" ? "Proyecto" : "Carpeta";
+}
+
+function getItemDescription(item: ExplorerItem) {
+  if (item.description?.trim()) {
+    return item.description;
+  }
+
+  return item.kind === "folder" ? "Carpeta" : "Sin descripcion";
 }
 
 function updateSortBy(value: Event) {
@@ -627,6 +661,7 @@ async function addProject() {
     });
 
     projects.value = [project, ...projects.value];
+    selectedItemKey.value = `project:${project.id}`;
     projectForm.name = "";
     projectForm.description = "";
     closeCreateDialog();
@@ -656,6 +691,7 @@ async function addFolder() {
       folders: [...(projectTree.value?.folders ?? []), folder],
       resources: projectTree.value?.resources ?? [],
     };
+    selectedItemKey.value = `folder:${folder.id}`;
     folderForm.name = "";
     folderForm.color = folderColors[0];
     closeCreateDialog();
@@ -667,6 +703,7 @@ async function addFolder() {
 }
 
 function openEditItem(item: ExplorerItem) {
+  selectItem(item);
   editingItem.value = item;
   folderEditForm.name = item.name;
   folderEditForm.description = item.kind === "project" ? item.description ?? "" : "";
@@ -732,6 +769,7 @@ async function updateItemDetails() {
 }
 
 async function openItem(item: ExplorerItem) {
+  clearSelectedItem();
   if (item.kind === "project") {
     selectedProject.value = item.raw;
     projectTree.value = null;
@@ -748,18 +786,21 @@ async function openItem(item: ExplorerItem) {
 }
 
 function goToProjectRoot() {
+  clearSelectedItem();
   currentFolderId.value = null;
   applySearchForCurrentLocation();
   saveExplorerState();
 }
 
 function goToFolder(folderId: string) {
+  clearSelectedItem();
   currentFolderId.value = folderId;
   applySearchForCurrentLocation();
   saveExplorerState();
 }
 
 function goToProjects() {
+  clearSelectedItem();
   selectedProject.value = null;
   projectTree.value = null;
   currentFolderId.value = null;
@@ -775,6 +816,7 @@ function signOut(clearMessage = true) {
   accessToken.value = null;
   currentUser.value = null;
   projects.value = [];
+  clearSelectedItem();
   selectedProject.value = null;
   projectTree.value = null;
   currentFolderId.value = null;
@@ -1011,69 +1053,130 @@ function formatDate(value: string) {
           <span>{{ visibleItems.length }} elementos</span>
         </section>
 
-        <section class="file-area" aria-live="polite">
-          <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
+        <div class="explorer-split" :class="{ 'with-preview': selectedExplorerItem }">
+          <section class="file-area" aria-live="polite">
+            <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
 
-          <div v-else-if="visibleItems.length === 0 && hasSearchQuery" class="empty-state">
-            <span class="pixelart-icon empty-folder-icon" aria-hidden="true" v-html="icons.folder"></span>
-            <span>{{ emptyMessage }}</span>
-          </div>
+            <div v-else-if="visibleItems.length === 0 && hasSearchQuery" class="empty-state">
+              <span class="pixelart-icon empty-folder-icon" aria-hidden="true" v-html="icons.folder"></span>
+              <span>{{ emptyMessage }}</span>
+            </div>
 
-          <div
-            v-else
-            :class="[
-              'file-collection',
-              viewMode,
-              itemSize,
-              { 'hide-descriptions': !showDescriptions, 'hide-dates': !showDates },
-            ]"
-          >
-            <article
-              v-for="item in visibleItems"
-              :key="`${item.kind}-${item.id}`"
-              class="project-item"
+            <div
+              v-else
+              :class="[
+                'file-collection',
+                viewMode,
+                itemSize,
+                { 'hide-descriptions': !showDescriptions, 'hide-dates': !showDates },
+              ]"
             >
-              <button class="project-open" type="button" @click="openItem(item)">
-                <div class="project-icon" :style="{ '--folder-color': item.color || undefined }">
-                  <span
-                    class="pixelart-icon item-glyph"
-                    :class="{ 'project-glyph': item.kind === 'project', 'folder-glyph': item.kind === 'folder' }"
-                    aria-hidden="true"
-                    v-html="item.kind === 'project' ? icons.project : icons.folder"
-                  ></span>
-                </div>
-                <div class="project-copy">
-                  <h2>{{ item.name }}</h2>
-                  <p v-if="showDescriptions">
-                    {{ item.description || (item.kind === 'folder' ? 'Carpeta' : 'Sin descripcion') }}
-                  </p>
-                  <time v-if="showDates" :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
-                </div>
-              </button>
+              <article
+                v-for="item in visibleItems"
+                :key="`${item.kind}-${item.id}`"
+                class="project-item"
+                :class="{ selected: selectedItemKey === getItemKey(item) }"
+              >
+                <button
+                  class="project-open"
+                  type="button"
+                  @click="selectItem(item)"
+                  @dblclick="openItem(item)"
+                  @keydown.enter.prevent="openItem(item)"
+                >
+                  <div class="project-icon" :style="{ '--folder-color': item.color || undefined }">
+                    <span
+                      class="pixelart-icon item-glyph"
+                      :class="{ 'project-glyph': item.kind === 'project', 'folder-glyph': item.kind === 'folder' }"
+                      aria-hidden="true"
+                      v-html="item.kind === 'project' ? icons.project : icons.folder"
+                    ></span>
+                  </div>
+                  <div class="project-copy">
+                    <h2>{{ item.name }}</h2>
+                    <p v-if="showDescriptions">
+                      {{ getItemDescription(item) }}
+                    </p>
+                    <time v-if="showDates" :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
+                  </div>
+                </button>
 
+                <button
+                  class="item-action"
+                  type="button"
+                  :title="item.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
+                  @click="openEditItem(item)"
+                >
+                  <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
+                </button>
+              </article>
+
+              <article v-if="!hasSearchQuery" class="project-item create-blueprint">
+                <button class="project-open create-open" type="button" @click="isCreateDialogOpen = true">
+                  <div class="project-icon create-icon">
+                    <span class="pixelart-icon item-glyph create-glyph" aria-hidden="true" v-html="icons.create"></span>
+                  </div>
+                  <div class="project-copy">
+                    <h2>{{ createActionLabel }}</h2>
+                    <p v-if="showDescriptions" class="create-description">{{ createActionDescription }}</p>
+                  </div>
+                </button>
+              </article>
+            </div>
+          </section>
+
+          <aside v-if="selectedExplorerItem" class="preview-panel" aria-label="Detalle seleccionado">
+            <header class="preview-header">
+              <div class="preview-icon" :style="{ '--folder-color': selectedExplorerItem.color || undefined }">
+                <span
+                  class="pixelart-icon preview-glyph"
+                  :class="{ 'project-glyph': selectedExplorerItem.kind === 'project' }"
+                  aria-hidden="true"
+                  v-html="selectedExplorerItem.kind === 'project' ? icons.project : icons.folder"
+                ></span>
+              </div>
+              <div class="preview-title">
+                <span>{{ getItemKindLabel(selectedExplorerItem) }}</span>
+                <h2>{{ selectedExplorerItem.name }}</h2>
+              </div>
               <button
-                class="item-action"
+                class="icon-button"
                 type="button"
-                :title="item.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
-                @click="openEditItem(item)"
+                :title="selectedExplorerItem.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
+                @click="openEditItem(selectedExplorerItem)"
               >
                 <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
               </button>
-            </article>
+            </header>
 
-            <article v-if="!hasSearchQuery" class="project-item create-blueprint">
-              <button class="project-open create-open" type="button" @click="isCreateDialogOpen = true">
-                <div class="project-icon create-icon">
-                  <span class="pixelart-icon item-glyph create-glyph" aria-hidden="true" v-html="icons.create"></span>
-                </div>
-                <div class="project-copy">
-                  <h2>{{ createActionLabel }}</h2>
-                  <p v-if="showDescriptions" class="create-description">{{ createActionDescription }}</p>
-                </div>
-              </button>
-            </article>
-          </div>
-        </section>
+            <section class="preview-block">
+              <h3>Descripcion</h3>
+              <p class="preview-description">{{ getItemDescription(selectedExplorerItem) }}</p>
+            </section>
+
+            <dl class="preview-facts">
+              <div>
+                <dt>Tipo</dt>
+                <dd>{{ getItemKindLabel(selectedExplorerItem) }}</dd>
+              </div>
+              <div>
+                <dt>Modificado</dt>
+                <dd>{{ formatDate(selectedExplorerItem.updated_at) }}</dd>
+              </div>
+              <div>
+                <dt>Creado</dt>
+                <dd>{{ formatDate(selectedExplorerItem.created_at) }}</dd>
+              </div>
+              <div v-if="selectedExplorerItem.kind === 'folder'">
+                <dt>Color</dt>
+                <dd>
+                  <span class="preview-color" :style="{ backgroundColor: selectedExplorerItem.color || folderColors[0] }"></span>
+                  {{ selectedExplorerItem.color || folderColors[0] }}
+                </dd>
+              </div>
+            </dl>
+          </aside>
+        </div>
       </section>
 
       <div
