@@ -84,31 +84,32 @@ const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 const DEFAULT_IS_ADMIN = import.meta.env.PUBLIC_DEFAULT_IS_ADMIN === "true";
 
 const folderColors = [
-  "#ffd84a",
-  "#ffb23f",
   "#ff7a59",
-  "#ff5caf",
-  "#d66bff",
-  "#9b7cff",
-  "#78a8ff",
-  "#5cc8ff",
-  "#67f7d5",
-  "#65d98f",
-  "#a6e85f",
+  "#ff9f8a",
+  "#ffb23f",
+  "#e6b673",
+  "#ffd84a",
+  "#ffef99",
   "#d6f264",
+  "#c4ff7a",
+  "#a6e85f",
+  "#65d98f",
+  "#9cffd1",
+  "#67f7d5",
+  "#7de7ff",
+  "#5cc8ff",
+  "#78a8ff",
+  "#9b7cff",
+  "#b994ff",
+  "#d66bff",
+  "#ff5caf",
+  "#f4a7b9",
   "#ffffff",
   "#cfd7e6",
   "#9aa7c0",
   "#6d7891",
-  "#f4a7b9",
-  "#e6b673",
-  "#b994ff",
-  "#7de7ff",
-  "#9cffd1",
-  "#c4ff7a",
-  "#ffef99",
-  "#ff9f8a",
 ];
+const defaultProjectColor = "#78a8ff";
 const icons = {
   bulletList: BulletListIcon,
   chevronRight: ChevronRightIcon,
@@ -130,6 +131,7 @@ const icons = {
 const projectForm = reactive({
   name: "",
   description: "",
+  color: defaultProjectColor,
 });
 
 const folderForm = reactive({
@@ -239,7 +241,7 @@ const projectItems = computed<ExplorerItem[]>(() =>
     description: project.description,
     created_at: project.created_at,
     updated_at: project.updated_at,
-    color: null,
+    color: getProjectColor(project),
     raw: project,
   })),
 );
@@ -452,6 +454,11 @@ function compareExplorerItems(first: ExplorerItem, second: ExplorerItem) {
 
 function getItemKey(item: ExplorerItem) {
   return `${item.kind}:${item.id}`;
+}
+
+function getProjectColor(project: Project) {
+  const color = project.settings?.color;
+  return typeof color === "string" && color ? color : defaultProjectColor;
 }
 
 function selectItem(item: ExplorerItem) {
@@ -683,12 +690,16 @@ async function addProject() {
     const project = await createProject(accessToken.value, {
       name: projectForm.name.trim(),
       description: projectForm.description.trim() || null,
+      settings: {
+        color: projectForm.color,
+      },
     });
 
     projects.value = [project, ...projects.value];
     selectedItemKey.value = `project:${project.id}`;
     projectForm.name = "";
     projectForm.description = "";
+    projectForm.color = defaultProjectColor;
     closeCreateDialog();
   } catch (error) {
     handleError(error);
@@ -751,9 +762,14 @@ async function updateItemDetails() {
 
   try {
     if (editingItem.value.kind === "project") {
+      const projectSettings = editingItem.value.raw.settings ?? {};
       const updatedProject = await updateProject(accessToken.value, editingItem.value.id, {
         name: folderEditForm.name.trim(),
         description: folderEditForm.description.trim() || null,
+        settings: {
+          ...projectSettings,
+          color: folderEditForm.color,
+        },
       });
 
       projects.value = projects.value.map((project) =>
@@ -1192,11 +1208,14 @@ function formatDate(value: string) {
                 <dt>Creado</dt>
                 <dd>{{ formatDate(selectedExplorerItem.created_at) }}</dd>
               </div>
-              <div v-if="selectedExplorerItem.kind === 'folder'">
+              <div>
                 <dt>Color</dt>
                 <dd>
-                  <span class="preview-color" :style="{ backgroundColor: selectedExplorerItem.color || folderColors[0] }"></span>
-                  {{ selectedExplorerItem.color || folderColors[0] }}
+                  <span
+                    class="preview-color"
+                    :style="{ backgroundColor: selectedExplorerItem.color || defaultProjectColor }"
+                  ></span>
+                  {{ selectedExplorerItem.color || defaultProjectColor }}
                 </dd>
               </div>
             </dl>
@@ -1235,6 +1254,26 @@ function formatDate(value: string) {
                 <span>Descripcion</span>
                 <textarea v-model="projectForm.description" rows="4"></textarea>
               </label>
+
+              <fieldset class="color-field">
+                <legend>Color</legend>
+                <div class="color-grid">
+                  <button
+                    v-for="color in folderColors"
+                    :key="color"
+                    class="color-swatch"
+                    :class="{ active: projectForm.color === color }"
+                    type="button"
+                    :style="{ backgroundColor: color }"
+                    :title="color"
+                    @click="projectForm.color = color"
+                  ></button>
+                  <label class="custom-color" title="Color personalizado">
+                    <input v-model="projectForm.color" type="color" aria-label="Color personalizado" />
+                    <span :style="{ backgroundColor: projectForm.color }"></span>
+                  </label>
+                </div>
+              </fieldset>
             </template>
 
             <template v-else>
@@ -1295,7 +1334,7 @@ function formatDate(value: string) {
               <textarea v-model="folderEditForm.description" rows="4"></textarea>
             </label>
 
-            <fieldset v-if="editingItem?.kind === 'folder'" class="color-field">
+            <fieldset v-if="editingItem" class="color-field">
               <legend>Color</legend>
               <div class="color-grid">
                 <button

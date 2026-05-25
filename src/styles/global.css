@@ -794,7 +794,7 @@ textarea:focus {
 }
 
 .project-glyph {
-  color: var(--blue);
+  color: var(--folder-color, var(--blue));
 }
 
 .create-glyph {
@@ -1040,6 +1040,7 @@ textarea:focus {
   grid-template-columns: repeat(auto-fill, minmax(28px, 28px));
   gap: 8px;
   align-items: center;
+  max-width: 100%;
 }
 
 .color-swatch {
