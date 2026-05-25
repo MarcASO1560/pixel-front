@@ -905,7 +905,13 @@ function formatDate(value: string) {
 
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
-        <div ref="googleButtonRef" class="google-button"></div>
+        <div class="google-button-shell">
+          <div ref="googleButtonRef" class="google-button"></div>
+          <div class="google-button-face" aria-hidden="true">
+            <span class="google-mark">G</span>
+            <span>Entrar con Google</span>
+          </div>
+        </div>
 
         <div v-if="isLoading" class="loading-row">
           <span class="pixelart-icon" aria-hidden="true" v-html="icons.shield"></span>

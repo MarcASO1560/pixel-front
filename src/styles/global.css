@@ -535,6 +535,23 @@ button:disabled {
   }
 }
 
+@keyframes auth-button-idle {
+  50% {
+    border-color: rgba(255, 216, 74, 0.66);
+  }
+}
+
+@keyframes auth-button-sweep {
+  0%,
+  42% {
+    transform: translateX(-120%);
+  }
+  72%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
 h1,
 h2,
 h3,
@@ -693,17 +710,95 @@ textarea:focus {
   color: var(--yellow);
 }
 
+.google-button-shell {
+  position: relative;
+  width: 100%;
+  min-height: 50px;
+}
+
 .google-button {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: 50px;
   align-items: center;
   justify-content: stretch;
+  opacity: 0.01;
 }
 
 .google-button > div,
 .google-button iframe {
+  min-height: 50px !important;
   width: 100% !important;
+}
+
+.google-button-face {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  min-height: 50px;
+  overflow: hidden;
+  align-items: center;
+  border: 1px solid rgba(103, 247, 213, 0.62);
+  border-radius: 4px;
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.06) 1px, transparent 1px),
+    #151d2b;
+  background-size: 8px 8px;
+  color: var(--text);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 3px 0 #05070b;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  animation: auth-button-idle 3s steps(3, end) infinite;
+}
+
+.google-button-face::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(103, 247, 213, 0.16),
+    transparent
+  );
+  content: "";
+  transform: translateX(-120%);
+  animation: auth-button-sweep 3.4s steps(6, end) infinite;
+}
+
+.google-mark {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  background: #f4f7ff;
+  color: #4285f4;
+  font-family: Arial, sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.google-button-shell:hover .google-button-face {
+  border-color: var(--cyan);
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.08) 1px, transparent 1px),
+    #182437;
+  color: #ffffff;
+}
+
+.google-button-shell:active .google-button-face {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 1px 0 #05070b;
 }
 
 .loading-row {
