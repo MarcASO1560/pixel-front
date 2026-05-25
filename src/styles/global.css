@@ -279,6 +279,15 @@ textarea:focus {
   color: #67d9c8;
 }
 
+.account-photo {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #343946;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #222832;
+}
+
 .account-copy {
   min-width: 0;
 }
@@ -320,9 +329,40 @@ textarea:focus {
   padding: 0 18px;
 }
 
+.toolbar-group {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 .view-switcher {
   display: flex;
   gap: 6px;
+}
+
+.density-switcher {
+  display: flex;
+  height: 34px;
+  border: 1px solid #343946;
+  border-radius: 6px;
+  background: #181b22;
+  padding: 3px;
+}
+
+.density-switcher button {
+  min-width: 78px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #9fa7b5;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.density-switcher button:hover,
+.density-switcher button.active {
+  background: #2a303b;
+  color: #ffffff;
 }
 
 .explorer-pathbar {
@@ -351,6 +391,25 @@ textarea:focus {
   padding: 0 11px;
   color: #9fa7b5;
   font-size: 13px;
+}
+
+.breadcrumb button {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: #eef1f5;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb button:first-child {
+  color: #aab2c0;
+}
+
+.breadcrumb button:hover {
+  color: #67d9c8;
 }
 
 .breadcrumb strong {
@@ -410,11 +469,13 @@ textarea:focus {
 }
 
 .project-item {
+  appearance: none;
   min-width: 0;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: inherit;
+  text-align: inherit;
 }
 
 .file-collection.grid .project-item {
@@ -425,6 +486,15 @@ textarea:focus {
   text-align: center;
 }
 
+.file-collection.grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+}
+
+.file-collection.grid.compact .project-item {
+  min-height: 124px;
+  padding: 12px 9px 9px;
+}
+
 .file-collection.list .project-item {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
@@ -432,6 +502,13 @@ textarea:focus {
   align-items: center;
   min-height: 58px;
   padding: 7px 10px;
+}
+
+.file-collection.list.compact .project-item {
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 9px;
+  min-height: 42px;
+  padding: 4px 8px;
 }
 
 .project-item:hover {
@@ -447,6 +524,16 @@ textarea:focus {
 
 .file-collection.grid .project-icon {
   margin-bottom: 8px;
+}
+
+.file-collection.list.compact .project-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.file-collection.grid.compact .project-icon svg {
+  width: 36px;
+  height: 36px;
 }
 
 .project-copy {
@@ -472,6 +559,15 @@ textarea:focus {
   margin-top: 4px;
   color: #8f98a7;
   font-size: 12px;
+}
+
+.file-collection.list.compact .project-copy p,
+.file-collection.list.compact .project-copy time {
+  display: none;
+}
+
+.file-collection.grid.compact .project-copy time {
+  display: none;
 }
 
 .empty-state {
@@ -517,6 +613,35 @@ textarea:focus {
   margin-bottom: 16px;
 }
 
+.color-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.color-field legend {
+  width: 100%;
+  margin-bottom: 7px;
+  color: #cbd1dc;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+
+.color-swatch.active {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px #343946;
+}
+
 @media (max-width: 860px) {
   .workspace-view {
     grid-template-columns: 1fr;
@@ -549,6 +674,11 @@ textarea:focus {
   .explorer-pathbar {
     grid-template-columns: 1fr;
   }
+
+  .toolbar-group {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 @media (max-width: 560px) {
@@ -568,6 +698,10 @@ textarea:focus {
 
   .file-collection.grid {
     grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  }
+
+  .density-switcher button {
+    min-width: 68px;
   }
 
   .sidebar-account {
