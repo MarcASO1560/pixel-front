@@ -332,7 +332,8 @@ button:disabled {
       transparent 1px 24px
     );
   content: "";
-  animation: auth-grid-drift 9s steps(9, end) infinite;
+  animation: auth-grid-drift 18s linear infinite;
+  will-change: transform;
 }
 
 .auth-view::after {
@@ -348,6 +349,7 @@ button:disabled {
   opacity: 0.7;
   animation: auth-scan 3.8s linear infinite;
   pointer-events: none;
+  will-change: transform;
 }
 
 .auth-pixels {
@@ -366,7 +368,8 @@ button:disabled {
     0 0 0 1px rgba(184, 255, 243, 0.34),
     0 0 14px rgba(103, 247, 213, 0.36);
   opacity: 0.2;
-  animation: auth-pixel-float 5.6s steps(8, end) infinite;
+  animation: auth-pixel-float 5.6s ease-in-out infinite;
+  will-change: opacity, transform;
 }
 
 .auth-pixels span:nth-child(3n) {
@@ -424,7 +427,8 @@ button:disabled {
   gap: 22px;
   border-color: rgba(103, 247, 213, 0.32);
   padding: 22px;
-  animation: auth-panel-idle 4.8s steps(4, end) infinite;
+  animation: auth-panel-idle 4.8s ease-in-out infinite;
+  will-change: transform;
 }
 
 .auth-panel::before {
@@ -434,7 +438,8 @@ button:disabled {
   border-radius: inherit;
   content: "";
   pointer-events: none;
-  animation: auth-border-blink 2.6s steps(2, end) infinite;
+  animation: auth-border-blink 2.6s ease-in-out infinite;
+  will-change: border-color, box-shadow;
 }
 
 .auth-brand {
@@ -464,7 +469,8 @@ button:disabled {
 }
 
 .auth-mark {
-  animation: auth-mark-pulse 1.8s steps(2, end) infinite;
+  animation: auth-mark-pulse 1.8s ease-in-out infinite;
+  will-change: color, box-shadow;
 }
 
 @media (min-width: 760px) {
@@ -757,7 +763,8 @@ textarea:focus {
   font-weight: 700;
   line-height: 1;
   text-align: center;
-  animation: auth-button-idle 3s steps(3, end) infinite;
+  animation: auth-button-idle 3s ease-in-out infinite;
+  will-change: border-color;
 }
 
 .google-button-face::after {
@@ -771,7 +778,8 @@ textarea:focus {
   );
   content: "";
   transform: translateX(-120%);
-  animation: auth-button-sweep 3.4s steps(6, end) infinite;
+  animation: auth-button-sweep 3.4s ease-in-out infinite;
+  will-change: transform;
 }
 
 .google-mark {
