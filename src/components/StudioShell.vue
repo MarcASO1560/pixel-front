@@ -1006,7 +1006,7 @@ function formatDate(value: string) {
                 </div>
                 <div class="project-copy">
                   <h2>{{ createActionLabel }}</h2>
-                  <p v-if="showDescriptions">{{ createActionDescription }}</p>
+                  <p v-if="showDescriptions" class="create-description">{{ createActionDescription }}</p>
                 </div>
               </button>
             </article>

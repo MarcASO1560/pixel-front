@@ -819,6 +819,22 @@ textarea:focus {
   box-shadow: inset 0 0 0 1px rgba(103, 247, 213, 0.08);
 }
 
+.file-collection.grid .create-blueprint .project-open {
+  align-content: center;
+  min-height: 150px;
+  padding: 18px 10px 12px;
+}
+
+.file-collection.grid.small .create-blueprint .project-open {
+  min-height: 124px;
+  padding: 14px 8px 10px;
+}
+
+.file-collection.grid.large .create-blueprint .project-open {
+  min-height: 182px;
+  padding: 24px 14px 16px;
+}
+
 .file-collection.list .create-blueprint {
   margin-top: 6px;
   border-style: dashed;
@@ -834,6 +850,10 @@ textarea:focus {
 
 .create-blueprint .project-copy p {
   color: #72cdbf;
+}
+
+.file-collection.grid .create-blueprint .create-description {
+  display: none;
 }
 
 .file-collection.list:not(.hide-dates) .create-blueprint .project-copy::after {
@@ -894,6 +914,8 @@ textarea:focus {
 }
 
 .blueprint-folder {
+  width: 44px;
+  height: 32px;
   border-color: color-mix(in srgb, var(--cyan) 86%, #ffffff);
   border-style: solid;
   background:
@@ -953,6 +975,11 @@ textarea:focus {
   font-size: 14px;
 }
 
+.file-collection.grid.small .blueprint-folder {
+  width: 36px;
+  height: 26px;
+}
+
 .file-collection.grid.small .pixel-folder {
   width: 36px;
   height: 26px;
@@ -974,6 +1001,12 @@ textarea:focus {
 
 .file-collection.grid.large .pixel-folder,
 .file-collection.list.large .pixel-folder {
+  width: 56px;
+  height: 40px;
+}
+
+.file-collection.grid.large .blueprint-folder,
+.file-collection.list.large .blueprint-folder {
   width: 56px;
   height: 40px;
 }
