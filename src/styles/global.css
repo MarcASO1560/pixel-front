@@ -310,6 +310,17 @@ textarea:focus {
   gap: 6px;
 }
 
+.desktop-filter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: end;
+}
+
+.mobile-filter-drawer {
+  display: none;
+}
+
 .topbar-account {
   display: inline-flex;
   gap: 8px;
@@ -401,6 +412,7 @@ textarea:focus {
 
 .filter-reset {
   display: inline-flex;
+  gap: 7px;
   width: 32px;
   height: 30px;
   align-items: center;
@@ -410,6 +422,10 @@ textarea:focus {
   background: var(--panel-raised);
   color: #c5ccd8;
   box-shadow: 0 2px 0 #05070b;
+}
+
+.filter-reset span {
+  display: none;
 }
 
 .filter-reset:hover {
@@ -606,13 +622,15 @@ textarea:focus {
   display: block;
   width: 44px;
   height: 32px;
-  border: 3px solid var(--folder-color, var(--yellow));
+  border: 3px solid color-mix(in srgb, var(--folder-color, var(--yellow)) 86%, #ffffff);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
-    rgba(255, 216, 74, 0.08);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3), transparent 36%),
+    linear-gradient(135deg, var(--folder-color, var(--yellow)), color-mix(in srgb, var(--folder-color, var(--yellow)) 78%, #0b0f18));
   box-shadow:
-    inset 0 0 0 2px rgba(0, 0, 0, 0.24),
+    inset -4px -5px 0 rgba(0, 0, 0, 0.2),
+    inset 3px 3px 0 rgba(255, 255, 255, 0.18),
     0 3px 0 rgba(0, 0, 0, 0.55);
+  image-rendering: pixelated;
 }
 
 .pixel-folder::before {
@@ -621,9 +639,11 @@ textarea:focus {
   left: -3px;
   width: 22px;
   height: 10px;
-  border: 3px solid var(--folder-color, var(--yellow));
+  border: 3px solid color-mix(in srgb, var(--folder-color, var(--yellow)) 86%, #ffffff);
   border-bottom: 0;
-  background: #0f141e;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 44%),
+    var(--folder-color, var(--yellow));
   content: "";
 }
 
@@ -807,17 +827,100 @@ textarea:focus {
 @media (max-width: 560px) {
   .explorer-commandbar {
     display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
     gap: 10px;
     padding-top: 10px;
     padding-bottom: 10px;
   }
 
+  .command-button.primary {
+    width: 100%;
+  }
+
   .commandbar-actions {
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    justify-content: stretch;
+  }
+
+  .desktop-filter-strip {
+    display: none;
+  }
+
+  .mobile-filter-drawer {
+    display: block;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: rgba(18, 24, 36, 0.94);
+    box-shadow: 0 2px 0 #05070b;
+  }
+
+  .mobile-filter-drawer summary {
+    display: flex;
+    height: 34px;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    padding: 0 10px;
+    color: #eef1f5;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 850;
+  }
+
+  .mobile-filter-drawer summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-filter-drawer summary svg {
+    color: var(--cyan);
+  }
+
+  .mobile-filter-drawer[open] summary {
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .mobile-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .mobile-filter-grid .filter-control.wide,
+  .mobile-filter-grid .filter-reset {
+    grid-column: 1 / -1;
+  }
+
+  .mobile-filter-grid .filter-toggle {
+    justify-content: flex-start;
+  }
+
+  .mobile-filter-grid .filter-reset {
+    width: 100%;
+  }
+
+  .mobile-filter-grid .filter-reset span {
+    display: inline;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .view-switcher {
+    min-width: 0;
   }
 
   .topbar-account {
-    max-width: min(54vw, 220px);
+    width: 100%;
+    max-width: none;
+  }
+
+  .logout-button {
+    justify-self: end;
   }
 
   .explorer-commandbar,
@@ -842,5 +945,6 @@ textarea:focus {
   .filter-control.compact select,
   .filter-control.compact.wide select {
     min-width: 0;
+    width: 100%;
   }
 }
