@@ -54,6 +54,7 @@ type SortBy = "name" | "updated_at" | "created_at";
 type SortDirection = "asc" | "desc";
 
 type ExplorerState = {
+  version?: number;
   preferences?: {
     viewMode?: ViewMode;
     itemSize?: ItemSize;
@@ -112,6 +113,7 @@ const showDescriptions = ref(true);
 const showDates = ref(true);
 const foldersFirst = ref(true);
 let isApplyingSearch = false;
+let isRestoringState = false;
 
 const isAuthenticated = computed(() => Boolean(accessToken.value && currentUser.value));
 const isInsideProject = computed(() => Boolean(selectedProject.value));
@@ -228,6 +230,7 @@ watch(searchQuery, (value) => {
 
 function restoreExplorerState() {
   try {
+    isRestoringState = true;
     const rawState = window.localStorage.getItem(EXPLORER_STATE_KEY);
     if (!rawState) {
       applySearchForCurrentLocation();
@@ -235,6 +238,7 @@ function restoreExplorerState() {
     }
 
     const state = JSON.parse(rawState) as ExplorerState;
+    const isLegacyState = state.version !== 2;
     const preferences = state.preferences;
 
     if (isViewMode(preferences?.viewMode)) {
@@ -248,6 +252,9 @@ function restoreExplorerState() {
     }
     if (isSortDirection(preferences?.sortDirection)) {
       sortDirection.value = preferences.sortDirection;
+    }
+    if (isLegacyState && preferences?.sortBy === "name") {
+      sortDirection.value = "asc";
     }
     if (typeof preferences?.showDescriptions === "boolean") {
       showDescriptions.value = preferences.showDescriptions;
@@ -267,11 +274,14 @@ function restoreExplorerState() {
     applySearchForCurrentLocation();
   } catch {
     resetExplorerPreferences(false);
+  } finally {
+    isRestoringState = false;
   }
 }
 
 function saveExplorerState() {
   const state: ExplorerState = {
+    version: 2,
     preferences: {
       viewMode: viewMode.value,
       itemSize: itemSize.value,
@@ -354,13 +364,29 @@ function compareExplorerItems(first: ExplorerItem, second: ExplorerItem) {
   let result = 0;
 
   if (sortBy.value === "name") {
-    result = first.name.localeCompare(second.name, "es", { sensitivity: "base" });
+    result = first.name.localeCompare(second.name, "es", {
+      numeric: true,
+      sensitivity: "base",
+    });
   } else {
     result =
       new Date(first[sortBy.value]).getTime() - new Date(second[sortBy.value]).getTime();
   }
 
   return result * direction;
+}
+
+function updateSortBy(value: Event) {
+  const target = value.target as HTMLSelectElement;
+  if (!isSortBy(target.value)) {
+    return;
+  }
+
+  sortBy.value = target.value;
+
+  if (!isRestoringState) {
+    sortDirection.value = sortBy.value === "name" ? "asc" : "desc";
+  }
 }
 
 function isViewMode(value: unknown): value is ViewMode {
@@ -790,7 +816,7 @@ function formatDate(value: string) {
 
           <label class="filter-control">
             <span>Orden</span>
-            <select v-model="sortBy">
+            <select :value="sortBy" @change="updateSortBy">
               <option value="updated_at">Modificado</option>
               <option value="created_at">Creado</option>
               <option value="name">Nombre</option>
@@ -798,10 +824,16 @@ function formatDate(value: string) {
           </label>
 
           <label class="filter-control">
-            <span>Direccion</span>
+            <span>{{ sortBy === "name" ? "Alfabetico" : "Tiempo" }}</span>
             <select v-model="sortDirection">
-              <option value="desc">Descendente</option>
-              <option value="asc">Ascendente</option>
+              <template v-if="sortBy === 'name'">
+                <option value="asc">A-Z</option>
+                <option value="desc">Z-A</option>
+              </template>
+              <template v-else>
+                <option value="desc">Recientes primero</option>
+                <option value="asc">Antiguos primero</option>
+              </template>
             </select>
           </label>
 
