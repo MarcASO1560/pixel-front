@@ -12,16 +12,10 @@ import {
 } from "../lib/api";
 
 const ACCESS_TOKEN_KEY = "pixel-studio-access-token";
-const DEFAULT_AUTH_TOKEN = import.meta.env.VITE_FRONTEND_AUTH_TOKEN ?? "";
+const FRONTEND_AUTH_TOKEN = import.meta.env.VITE_FRONTEND_AUTH_TOKEN ?? "";
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
-
-const authForm = reactive({
-  auth_token: DEFAULT_AUTH_TOKEN,
-  email: "",
-  display_name: "",
-  is_admin: true,
-});
+const DEFAULT_IS_ADMIN = import.meta.env.VITE_DEFAULT_IS_ADMIN === "true";
 
 const projectForm = reactive({
   name: "",
@@ -61,7 +55,7 @@ async function signInWithGoogleCredential(credential: string) {
   await signIn({
     email: profile.email,
     display_name: profile.name || profile.email,
-    is_admin: authForm.is_admin,
+    is_admin: DEFAULT_IS_ADMIN,
   });
 }
 
@@ -72,7 +66,7 @@ async function signIn(user: { email: string; display_name: string; is_admin: boo
 
   try {
     const session = await createSession({
-      auth_token: authForm.auth_token,
+      auth_token: FRONTEND_AUTH_TOKEN,
       email: user.email,
       display_name: user.display_name || null,
       is_admin: user.is_admin,
@@ -90,8 +84,8 @@ async function signIn(user: { email: string; display_name: string; is_admin: boo
 }
 
 async function initializeGoogleSignIn() {
-  if (!GOOGLE_CLIENT_ID) {
-    errorMessage.value = "Falta VITE_GOOGLE_CLIENT_ID en el entorno";
+  if (!GOOGLE_CLIENT_ID || !FRONTEND_AUTH_TOKEN) {
+    errorMessage.value = "El acceso no esta configurado todavia";
     return;
   }
 
@@ -179,7 +173,7 @@ async function loadWorkspace() {
       getCurrentUser(accessToken.value),
       listProjects(accessToken.value),
     ]);
-      currentUser.value = user;
+    currentUser.value = user;
     projects.value = projectList;
   } catch (error) {
     signOut(false);
@@ -241,7 +235,7 @@ function formatDate(value: string) {
 <template>
   <main class="app-shell">
     <section v-if="!isAuthenticated" class="auth-view" aria-labelledby="auth-title">
-      <form class="auth-panel" @submit.prevent="signIn">
+      <section class="auth-panel">
         <div class="brand-row">
           <div class="brand-mark">
             <ShieldCheck :size="24" aria-hidden="true" />
@@ -252,26 +246,16 @@ function formatDate(value: string) {
           </div>
         </div>
 
-        <label>
-          <span>Token privado</span>
-          <input v-model="authForm.auth_token" type="password" autocomplete="off" required />
-        </label>
-
-        <label class="check-row">
-          <input v-model="authForm.is_admin" type="checkbox" />
-          <span>Admin</span>
-        </label>
-
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
         <div v-if="canUseGoogle" ref="googleButtonRef" class="google-button"></div>
-        <p v-else class="notice error">Falta configurar Google Client ID</p>
+        <p v-else class="notice error">El acceso no esta configurado todavia</p>
 
         <div v-if="isLoading" class="loading-row">
           <ShieldCheck :size="18" aria-hidden="true" />
           <span>Entrando...</span>
         </div>
-      </form>
+      </section>
     </section>
 
     <section v-else class="workspace-view" aria-label="Proyectos">
