@@ -151,8 +151,12 @@ const currentTitle = computed(() => currentFolder.value?.name ?? selectedProject
 const searchPlaceholder = computed(() =>
   selectedProject.value ? "Buscar en esta carpeta" : "Buscar proyectos",
 );
-const createButtonLabel = computed(() => (selectedProject.value ? "Nueva carpeta" : "Nuevo proyecto"));
-const dialogTitle = computed(() => createButtonLabel.value);
+const createActionLabel = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
+const createActionDescription = computed(() =>
+  selectedProject.value ? "Anadir carpeta en esta ubicacion" : "Anadir proyecto al explorador",
+);
+const dialogTitle = computed(() => createActionLabel.value);
+const hasSearchQuery = computed(() => Boolean(searchQuery.value.trim()));
 const currentLocationKey = computed(() => {
   if (!selectedProject.value) {
     return "root";
@@ -777,11 +781,6 @@ function formatDate(value: string) {
     <section v-else class="workspace-view" aria-label="Explorador de proyectos">
       <section class="explorer-main">
         <header class="explorer-commandbar">
-          <button class="command-button primary" type="button" @click="isCreateDialogOpen = true">
-            <Plus :size="18" aria-hidden="true" />
-            <span>{{ createButtonLabel }}</span>
-          </button>
-
           <div class="commandbar-actions">
             <div class="view-switcher" aria-label="Vista">
               <button
@@ -967,7 +966,7 @@ function formatDate(value: string) {
         <section class="file-area" aria-live="polite">
           <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
 
-          <div v-else-if="visibleItems.length === 0" class="empty-state">
+          <div v-else-if="visibleItems.length === 0 && hasSearchQuery" class="empty-state">
             <Folder :size="34" aria-hidden="true" />
             <span>{{ emptyMessage }}</span>
           </div>
@@ -1007,6 +1006,18 @@ function formatDate(value: string) {
                 @click="openEditFolder(item.raw)"
               >
                 <Pencil :size="14" aria-hidden="true" />
+              </button>
+            </article>
+
+            <article v-if="!hasSearchQuery" class="project-item create-blueprint">
+              <button class="project-open create-open" type="button" @click="isCreateDialogOpen = true">
+                <div class="project-icon create-icon">
+                  <span class="pixel-folder blueprint-folder" aria-hidden="true"></span>
+                </div>
+                <div class="project-copy">
+                  <h2>{{ createActionLabel }}</h2>
+                  <p v-if="showDescriptions">{{ createActionDescription }}</p>
+                </div>
               </button>
             </article>
           </div>

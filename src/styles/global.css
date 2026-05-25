@@ -288,7 +288,7 @@ textarea:focus {
   display: flex;
   min-height: 56px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   border-bottom: 1px solid var(--line-soft);
   background: rgba(13, 17, 26, 0.92);
@@ -607,6 +607,38 @@ textarea:focus {
     0 3px 0 #05070b;
 }
 
+.create-blueprint {
+  border-color: rgba(103, 247, 213, 0.34);
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.06) 1px, transparent 1px),
+    rgba(10, 18, 27, 0.74);
+  background-size: 10px 10px;
+  box-shadow: inset 0 0 0 1px rgba(103, 247, 213, 0.08);
+}
+
+.create-blueprint .project-open {
+  color: var(--cyan);
+}
+
+.create-blueprint .project-copy h2 {
+  color: #b8fff3;
+}
+
+.create-blueprint .project-copy p {
+  color: #72cdbf;
+}
+
+.create-blueprint:hover,
+.create-blueprint:focus-within {
+  border-color: var(--cyan);
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.1) 1px, transparent 1px),
+    rgba(12, 31, 39, 0.9);
+  background-size: 10px 10px;
+}
+
 .project-icon {
   display: grid;
   place-items: center;
@@ -647,6 +679,42 @@ textarea:focus {
   content: "";
 }
 
+.blueprint-folder {
+  border-color: var(--cyan);
+  border-style: dashed;
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.16) 1px, transparent 1px),
+    rgba(103, 247, 213, 0.08);
+  background-size: 7px 7px;
+  box-shadow:
+    inset 0 0 0 2px rgba(103, 247, 213, 0.12),
+    0 3px 0 rgba(0, 0, 0, 0.55);
+}
+
+.blueprint-folder::before {
+  border-color: var(--cyan);
+  border-style: dashed;
+  background:
+    linear-gradient(rgba(103, 247, 213, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 247, 213, 0.16) 1px, transparent 1px),
+    rgba(103, 247, 213, 0.08);
+  background-size: 7px 7px;
+}
+
+.blueprint-folder::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #b8fff3;
+  content: "+";
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 2px 0 #05241f;
+}
+
 .file-collection.list.small .pixel-folder {
   width: 30px;
   height: 22px;
@@ -661,6 +729,10 @@ textarea:focus {
   border-width: 2px;
 }
 
+.file-collection.list.small .blueprint-folder::after {
+  font-size: 18px;
+}
+
 .file-collection.grid.small .pixel-folder {
   width: 36px;
   height: 26px;
@@ -670,6 +742,10 @@ textarea:focus {
   top: -11px;
   width: 18px;
   height: 8px;
+}
+
+.file-collection.grid.small .blueprint-folder::after {
+  font-size: 20px;
 }
 
 .file-collection.grid.large .pixel-folder,
@@ -683,6 +759,11 @@ textarea:focus {
   top: -15px;
   width: 28px;
   height: 12px;
+}
+
+.file-collection.grid.large .blueprint-folder::after,
+.file-collection.list.large .blueprint-folder::after {
+  font-size: 30px;
 }
 
 .project-copy {
@@ -832,10 +913,6 @@ textarea:focus {
     gap: 10px;
     padding-top: 10px;
     padding-bottom: 10px;
-  }
-
-  .command-button.primary {
-    width: 100%;
   }
 
   .commandbar-actions {
