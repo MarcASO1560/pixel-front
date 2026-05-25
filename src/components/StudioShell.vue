@@ -1,19 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
-import {
-  ChevronRight,
-  Folder,
-  Grid3X3,
-  List,
-  LogOut,
-  Pencil,
-  Plus,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  SlidersHorizontal,
-  UserRound,
-} from "@lucide/vue";
 
 import {
   createProject,
@@ -759,7 +745,7 @@ function formatDate(value: string) {
       <section class="auth-panel">
         <div class="brand-row">
           <div class="brand-mark">
-            <ShieldCheck :size="24" aria-hidden="true" />
+            <span class="pixel-icon pixel-icon-shield" aria-hidden="true"></span>
           </div>
           <div>
             <h1 id="auth-title">Pixel Studio</h1>
@@ -772,7 +758,7 @@ function formatDate(value: string) {
         <div ref="googleButtonRef" class="google-button"></div>
 
         <div v-if="isLoading" class="loading-row">
-          <ShieldCheck :size="18" aria-hidden="true" />
+          <span class="pixel-icon pixel-icon-shield" aria-hidden="true"></span>
           <span>Entrando...</span>
         </div>
       </section>
@@ -790,7 +776,7 @@ function formatDate(value: string) {
                 title="Cuadricula"
                 @click="viewMode = 'grid'"
               >
-                <Grid3X3 :size="18" aria-hidden="true" />
+                <span class="pixel-icon pixel-icon-grid" aria-hidden="true"></span>
               </button>
               <button
                 class="icon-button"
@@ -799,7 +785,7 @@ function formatDate(value: string) {
                 title="Lista"
                 @click="viewMode = 'list'"
               >
-                <List :size="18" aria-hidden="true" />
+                <span class="pixel-icon pixel-icon-list" aria-hidden="true"></span>
               </button>
             </div>
 
@@ -855,7 +841,7 @@ function formatDate(value: string) {
                 </label>
 
                 <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                  <RotateCcw :size="16" aria-hidden="true" />
+                  <span class="pixel-icon pixel-icon-reset" aria-hidden="true"></span>
                 </button>
               </div>
             </div>
@@ -869,19 +855,19 @@ function formatDate(value: string) {
                 referrerpolicy="no-referrer"
               />
               <div v-else class="account-avatar">
-                <UserRound :size="18" aria-hidden="true" />
+                <span class="pixel-icon pixel-icon-user" aria-hidden="true"></span>
               </div>
               <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
             </div>
 
             <button class="icon-button logout-button" type="button" title="Salir" @click="signOut()">
-              <LogOut :size="18" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-logout" aria-hidden="true"></span>
             </button>
           </div>
 
           <details class="mobile-filter-drawer">
             <summary>
-              <SlidersHorizontal :size="17" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-sliders" aria-hidden="true"></span>
               <span>Vista y filtros</span>
             </summary>
 
@@ -934,7 +920,7 @@ function formatDate(value: string) {
               </label>
 
               <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                <RotateCcw :size="16" aria-hidden="true" />
+                <span class="pixel-icon pixel-icon-reset" aria-hidden="true"></span>
                 <span>Restablecer</span>
               </button>
             </div>
@@ -945,17 +931,17 @@ function formatDate(value: string) {
           <div class="breadcrumb" aria-label="Ruta">
             <button type="button" @click="goToProjects">Proyectos</button>
             <template v-if="selectedProject">
-              <ChevronRight :size="16" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-chevron" aria-hidden="true"></span>
               <button type="button" @click="goToProjectRoot">{{ selectedProject.name }}</button>
             </template>
             <template v-for="folder in breadcrumbFolders" :key="folder.id">
-              <ChevronRight :size="16" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-chevron" aria-hidden="true"></span>
               <button type="button" @click="goToFolder(folder.id)">{{ folder.name }}</button>
             </template>
           </div>
 
           <label class="search-box">
-            <Search :size="17" aria-hidden="true" />
+            <span class="pixel-icon pixel-icon-search" aria-hidden="true"></span>
             <input v-model="searchQuery" type="search" :placeholder="searchPlaceholder" />
           </label>
         </div>
@@ -971,7 +957,7 @@ function formatDate(value: string) {
           <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
 
           <div v-else-if="visibleItems.length === 0 && hasSearchQuery" class="empty-state">
-            <Folder :size="34" aria-hidden="true" />
+            <span class="pixel-icon pixel-icon-folder-empty" aria-hidden="true"></span>
             <span>{{ emptyMessage }}</span>
           </div>
 
@@ -1009,7 +995,7 @@ function formatDate(value: string) {
                 title="Editar carpeta"
                 @click="openEditFolder(item.raw)"
               >
-                <Pencil :size="14" aria-hidden="true" />
+                <span class="pixel-icon pixel-icon-pencil" aria-hidden="true"></span>
               </button>
             </article>
 
@@ -1075,7 +1061,7 @@ function formatDate(value: string) {
             </template>
 
             <button type="submit" class="primary-action" :disabled="isCreatingItem">
-              <Plus :size="18" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-plus" aria-hidden="true"></span>
               <span>{{ isCreatingItem ? "Creando..." : dialogTitle }}</span>
             </button>
           </form>
@@ -1115,7 +1101,7 @@ function formatDate(value: string) {
             </fieldset>
 
             <button type="submit" class="primary-action" :disabled="isUpdatingFolder">
-              <Pencil :size="18" aria-hidden="true" />
+              <span class="pixel-icon pixel-icon-pencil" aria-hidden="true"></span>
               <span>{{ isUpdatingFolder ? "Guardando..." : "Guardar cambios" }}</span>
             </button>
           </form>
