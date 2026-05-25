@@ -249,6 +249,14 @@ textarea:focus {
   shape-rendering: crispEdges;
 }
 
+.pixelart-icon svg [fill]:not([fill="none"]) {
+  fill: currentColor;
+}
+
+.pixelart-icon svg [stroke]:not([stroke="none"]) {
+  stroke: currentColor;
+}
+
 .breadcrumb-chevron {
   width: 16px;
   height: 16px;
