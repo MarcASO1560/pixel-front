@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { FolderKanban, LogOut, Plus, RefreshCw, ShieldCheck } from "@lucide/vue";
 
 import {
@@ -13,11 +13,13 @@ import {
 
 const ACCESS_TOKEN_KEY = "pixel-studio-access-token";
 const DEFAULT_AUTH_TOKEN = import.meta.env.VITE_FRONTEND_AUTH_TOKEN ?? "";
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 
 const authForm = reactive({
   auth_token: DEFAULT_AUTH_TOKEN,
-  email: "admin@example.com",
-  display_name: "Admin",
+  email: "",
+  display_name: "",
   is_admin: true,
 });
 
@@ -33,20 +35,37 @@ const isLoading = ref(false);
 const isCreatingProject = ref(false);
 const errorMessage = ref("");
 const statusMessage = ref("");
+const googleButtonRef = ref<HTMLElement | null>(null);
 
 const isAuthenticated = computed(() => Boolean(accessToken.value && currentUser.value));
+const canUseGoogle = computed(() => Boolean(GOOGLE_CLIENT_ID));
 
 onMounted(async () => {
   const storedToken = window.localStorage.getItem(ACCESS_TOKEN_KEY);
-  if (!storedToken) {
-    return;
+  if (storedToken) {
+    accessToken.value = storedToken;
+    await loadWorkspace();
   }
 
-  accessToken.value = storedToken;
-  await loadWorkspace();
+  if (!isAuthenticated.value) {
+    await initializeGoogleSignIn();
+  }
 });
 
-async function signIn() {
+async function signInWithGoogleCredential(credential: string) {
+  const profile = decodeGoogleCredential(credential);
+  if (!profile.email) {
+    throw new Error("Google no devolvio un email valido");
+  }
+
+  await signIn({
+    email: profile.email,
+    display_name: profile.name || profile.email,
+    is_admin: authForm.is_admin,
+  });
+}
+
+async function signIn(user: { email: string; display_name: string; is_admin: boolean }) {
   errorMessage.value = "";
   statusMessage.value = "";
   isLoading.value = true;
@@ -54,9 +73,9 @@ async function signIn() {
   try {
     const session = await createSession({
       auth_token: authForm.auth_token,
-      email: authForm.email,
-      display_name: authForm.display_name || null,
-      is_admin: authForm.is_admin,
+      email: user.email,
+      display_name: user.display_name || null,
+      is_admin: user.is_admin,
     });
 
     accessToken.value = session.access_token;
@@ -68,6 +87,83 @@ async function signIn() {
   } finally {
     isLoading.value = false;
   }
+}
+
+async function initializeGoogleSignIn() {
+  if (!GOOGLE_CLIENT_ID) {
+    errorMessage.value = "Falta VITE_GOOGLE_CLIENT_ID en el entorno";
+    return;
+  }
+
+  try {
+    await loadGoogleScript();
+    await nextTick();
+
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: async (response) => {
+        try {
+          await signInWithGoogleCredential(response.credential);
+        } catch (error) {
+          handleError(error);
+        }
+      },
+    });
+
+    if (googleButtonRef.value) {
+      window.google.accounts.id.renderButton(googleButtonRef.value, {
+        theme: "filled_black",
+        size: "large",
+        width: 320,
+        text: "signin_with",
+        shape: "rectangular",
+      });
+    }
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function loadGoogleScript() {
+  return new Promise<void>((resolve, reject) => {
+    if (window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      `script[src="${GOOGLE_SCRIPT_SRC}"]`,
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("No se pudo cargar Google")), {
+        once: true,
+      });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = GOOGLE_SCRIPT_SRC;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("No se pudo cargar Google"));
+    document.head.appendChild(script);
+  });
+}
+
+function decodeGoogleCredential(credential: string): { email?: string; name?: string } {
+  const [, payload] = credential.split(".");
+  const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+  const json = decodeURIComponent(
+    atob(normalizedPayload)
+      .split("")
+      .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
+      .join(""),
+  );
+
+  return JSON.parse(json) as { email?: string; name?: string };
 }
 
 async function loadWorkspace() {
@@ -83,7 +179,7 @@ async function loadWorkspace() {
       getCurrentUser(accessToken.value),
       listProjects(accessToken.value),
     ]);
-    currentUser.value = user;
+      currentUser.value = user;
     projects.value = projectList;
   } catch (error) {
     signOut(false);
@@ -152,23 +248,13 @@ function formatDate(value: string) {
           </div>
           <div>
             <h1 id="auth-title">Pixel Studio</h1>
-            <p>Acceso privado</p>
+            <p>Accede con Google</p>
           </div>
         </div>
 
         <label>
-          <span>Token</span>
+          <span>Token privado</span>
           <input v-model="authForm.auth_token" type="password" autocomplete="off" required />
-        </label>
-
-        <label>
-          <span>Email</span>
-          <input v-model="authForm.email" type="email" autocomplete="email" required />
-        </label>
-
-        <label>
-          <span>Nombre</span>
-          <input v-model="authForm.display_name" type="text" autocomplete="name" />
         </label>
 
         <label class="check-row">
@@ -178,10 +264,13 @@ function formatDate(value: string) {
 
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
-        <button type="submit" class="primary-action" :disabled="isLoading">
+        <div v-if="canUseGoogle" ref="googleButtonRef" class="google-button"></div>
+        <p v-else class="notice error">Falta configurar Google Client ID</p>
+
+        <div v-if="isLoading" class="loading-row">
           <ShieldCheck :size="18" aria-hidden="true" />
-          <span>{{ isLoading ? "Entrando..." : "Entrar" }}</span>
-        </button>
+          <span>Entrando...</span>
+        </div>
       </form>
     </section>
 

@@ -173,6 +173,24 @@ textarea:focus {
   opacity: 0.62;
 }
 
+.google-button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-row {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  color: #a8fff0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .notice {
   border-radius: 6px;
   padding: 10px 12px;
