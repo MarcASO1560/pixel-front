@@ -702,8 +702,13 @@ textarea:focus {
 }
 
 .file-collection.grid .create-blueprint .project-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
   min-height: 142px;
-  padding: 18px 10px 12px;
+  padding: 14px 10px;
 }
 
 .file-collection.grid.small .create-blueprint .project-open {
@@ -725,8 +730,13 @@ textarea:focus {
   color: var(--cyan);
 }
 
+.file-collection.grid .create-blueprint .project-icon {
+  margin-bottom: 0;
+}
+
 .create-blueprint .project-copy h2 {
   color: #b8fff3;
+  letter-spacing: 0;
 }
 
 .create-blueprint .project-copy p {

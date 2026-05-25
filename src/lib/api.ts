@@ -42,6 +42,13 @@ export type ProjectCreate = {
   thumbnail_url?: string | null;
 };
 
+export type ProjectUpdate = {
+  name?: string;
+  description?: string | null;
+  settings?: Record<string, unknown>;
+  thumbnail_url?: string | null;
+};
+
 export type ProjectFolder = {
   id: string;
   project_id: string;
@@ -144,6 +151,21 @@ export function createProject(accessToken: string, payload: ProjectCreate): Prom
         thumbnail_url: null,
         ...payload,
       }),
+    },
+    accessToken,
+  );
+}
+
+export function updateProject(
+  accessToken: string,
+  projectId: string,
+  payload: ProjectUpdate,
+): Promise<Project> {
+  return request<Project>(
+    `/projects/${projectId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     },
     accessToken,
   );

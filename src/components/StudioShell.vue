@@ -27,6 +27,7 @@ import {
   type ProjectFolder,
   type ProjectTree,
   type User,
+  updateProject,
   updateProjectFolder,
 } from "../lib/api";
 
@@ -113,6 +114,7 @@ const folderForm = reactive({
 
 const folderEditForm = reactive({
   name: "",
+  description: "",
   color: folderColors[0],
 });
 
@@ -126,9 +128,9 @@ const isLoading = ref(false);
 const isLoadingTree = ref(false);
 const isCreatingItem = ref(false);
 const isCreateDialogOpen = ref(false);
-const isEditFolderDialogOpen = ref(false);
-const isUpdatingFolder = ref(false);
-const editingFolder = ref<ProjectFolder | null>(null);
+const isEditDialogOpen = ref(false);
+const isUpdatingItem = ref(false);
+const editingItem = ref<ExplorerItem | null>(null);
 const errorMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
 const searchQuery = ref("");
@@ -177,6 +179,7 @@ const createOptionLabel = computed(() => (selectedProject.value ? "Carpeta" : "P
 const createOptionIcon = computed(() => (selectedProject.value ? icons.folderPlus : icons.project));
 const createSubmitLabel = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
 const dialogTitle = computed(() => "Crea");
+const editDialogTitle = computed(() => (editingItem.value?.kind === "project" ? "Editar proyecto" : "Editar carpeta"));
 const hasSearchQuery = computed(() => Boolean(searchQuery.value.trim()));
 const currentLocationKey = computed(() => {
   if (!selectedProject.value) {
@@ -663,48 +666,68 @@ async function addFolder() {
   }
 }
 
-function openEditFolder(folder: ProjectFolder) {
-  editingFolder.value = folder;
-  folderEditForm.name = folder.name;
-  folderEditForm.color = folder.color || folderColors[0];
-  isEditFolderDialogOpen.value = true;
+function openEditItem(item: ExplorerItem) {
+  editingItem.value = item;
+  folderEditForm.name = item.name;
+  folderEditForm.description = item.kind === "project" ? item.description ?? "" : "";
+  folderEditForm.color = item.color || folderColors[0];
+  isEditDialogOpen.value = true;
 }
 
-function closeEditFolderDialog() {
-  isEditFolderDialogOpen.value = false;
-  editingFolder.value = null;
+function closeEditDialog() {
+  isEditDialogOpen.value = false;
+  editingItem.value = null;
 }
 
-async function updateFolderDetails() {
-  if (!accessToken.value || !selectedProject.value || !editingFolder.value || !folderEditForm.name.trim()) {
+async function updateItemDetails() {
+  if (!accessToken.value || !editingItem.value || !folderEditForm.name.trim()) {
     return;
   }
 
   errorMessage.value = "";
-  isUpdatingFolder.value = true;
+  isUpdatingItem.value = true;
 
   try {
-    const updatedFolder = await updateProjectFolder(
-      accessToken.value,
-      selectedProject.value.id,
-      editingFolder.value.id,
-      {
+    if (editingItem.value.kind === "project") {
+      const updatedProject = await updateProject(accessToken.value, editingItem.value.id, {
         name: folderEditForm.name.trim(),
-        color: folderEditForm.color,
-      },
-    );
+        description: folderEditForm.description.trim() || null,
+      });
 
-    projectTree.value = {
-      folders: (projectTree.value?.folders ?? []).map((folder) =>
-        folder.id === updatedFolder.id ? updatedFolder : folder,
-      ),
-      resources: projectTree.value?.resources ?? [],
-    };
-    closeEditFolderDialog();
+      projects.value = projects.value.map((project) =>
+        project.id === updatedProject.id ? updatedProject : project,
+      );
+      if (selectedProject.value?.id === updatedProject.id) {
+        selectedProject.value = updatedProject;
+      }
+    } else {
+      if (!selectedProject.value) {
+        return;
+      }
+
+      const updatedFolder = await updateProjectFolder(
+        accessToken.value,
+        selectedProject.value.id,
+        editingItem.value.id,
+        {
+          name: folderEditForm.name.trim(),
+          color: folderEditForm.color,
+        },
+      );
+
+      projectTree.value = {
+        folders: (projectTree.value?.folders ?? []).map((folder) =>
+          folder.id === updatedFolder.id ? updatedFolder : folder,
+        ),
+        resources: projectTree.value?.resources ?? [],
+      };
+    }
+
+    closeEditDialog();
   } catch (error) {
     handleError(error);
   } finally {
-    isUpdatingFolder.value = false;
+    isUpdatingItem.value = false;
   }
 }
 
@@ -1029,11 +1052,10 @@ function formatDate(value: string) {
               </button>
 
               <button
-                v-if="item.kind === 'folder'"
                 class="item-action"
                 type="button"
-                title="Editar carpeta"
-                @click="openEditFolder(item.raw)"
+                :title="item.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
+                @click="openEditItem(item)"
               >
                 <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
               </button>
@@ -1117,24 +1139,29 @@ function formatDate(value: string) {
       </div>
 
       <div
-        v-if="isEditFolderDialogOpen"
+        v-if="isEditDialogOpen"
         class="dialog-backdrop"
         role="presentation"
-        @click.self="closeEditFolderDialog"
+        @click.self="closeEditDialog"
       >
-        <section class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-folder-title">
+        <section class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-item-title">
           <header>
-            <h2 id="edit-folder-title">Editar carpeta</h2>
-            <button class="text-button" type="button" @click="closeEditFolderDialog">Cancelar</button>
+            <h2 id="edit-item-title">{{ editDialogTitle }}</h2>
+            <button class="text-button" type="button" @click="closeEditDialog">Cancelar</button>
           </header>
 
-          <form @submit.prevent="updateFolderDetails">
+          <form @submit.prevent="updateItemDetails">
             <label>
               <span>Nombre</span>
               <input v-model="folderEditForm.name" type="text" required autofocus />
             </label>
 
-            <fieldset class="color-field">
+            <label v-if="editingItem?.kind === 'project'">
+              <span>Descripcion</span>
+              <textarea v-model="folderEditForm.description" rows="4"></textarea>
+            </label>
+
+            <fieldset v-if="editingItem?.kind === 'folder'" class="color-field">
               <legend>Color</legend>
               <button
                 v-for="color in folderColors"
@@ -1148,9 +1175,9 @@ function formatDate(value: string) {
               ></button>
             </fieldset>
 
-            <button type="submit" class="primary-action" :disabled="isUpdatingFolder">
+            <button type="submit" class="primary-action" :disabled="isUpdatingItem">
               <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
-              <span>{{ isUpdatingFolder ? "Guardando..." : "Guardar cambios" }}</span>
+              <span>{{ isUpdatingItem ? "Guardando..." : "Guardar cambios" }}</span>
             </button>
           </form>
         </section>
