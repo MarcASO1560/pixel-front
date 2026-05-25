@@ -12,10 +12,10 @@ import {
 } from "../lib/api";
 
 const ACCESS_TOKEN_KEY = "pixel-studio-access-token";
-const FRONTEND_AUTH_TOKEN = import.meta.env.VITE_FRONTEND_AUTH_TOKEN ?? "";
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+const FRONTEND_AUTH_TOKEN = import.meta.env.PUBLIC_FRONTEND_AUTH_TOKEN ?? "";
+const GOOGLE_CLIENT_ID = import.meta.env.PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
-const DEFAULT_IS_ADMIN = import.meta.env.VITE_DEFAULT_IS_ADMIN === "true";
+const DEFAULT_IS_ADMIN = import.meta.env.PUBLIC_DEFAULT_IS_ADMIN === "true";
 
 const projectForm = reactive({
   name: "",

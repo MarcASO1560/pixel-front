@@ -10,6 +10,8 @@ Copy-Item .env.example .env
 npm.cmd run dev
 ```
 
+Las variables que usa el navegador deben empezar por `PUBLIC_`, porque Astro solo expone al cliente las variables con ese prefijo.
+
 Aplicacion local:
 
 ```text
