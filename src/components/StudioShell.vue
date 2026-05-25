@@ -575,10 +575,14 @@ async function initializeGoogleSignIn() {
     });
 
     if (googleButtonRef.value) {
+      const buttonWidth = Math.min(
+        360,
+        Math.max(200, Math.floor(googleButtonRef.value.getBoundingClientRect().width)),
+      );
       window.google.accounts.id.renderButton(googleButtonRef.value, {
         theme: "filled_black",
         size: "large",
-        width: 320,
+        width: buttonWidth,
         text: "signin_with",
         shape: "rectangular",
       });
@@ -883,12 +887,17 @@ function formatDate(value: string) {
 <template>
   <main class="app-shell">
     <section v-if="!isAuthenticated" class="auth-view" aria-labelledby="auth-title">
+      <div class="auth-pixels" aria-hidden="true">
+        <span v-for="index in 28" :key="index"></span>
+      </div>
+
       <section class="auth-panel">
-        <div class="brand-row">
-          <div class="brand-mark">
-            <span class="pixelart-icon" aria-hidden="true" v-html="icons.shield"></span>
+        <div class="auth-brand">
+          <div class="auth-mark">
+            <span class="pixelart-icon auth-mark-icon" aria-hidden="true" v-html="icons.shield"></span>
           </div>
           <div>
+            <span>Pixel Art Studio</span>
             <h1 id="auth-title">Pixel Studio</h1>
             <p>Accede con Google</p>
           </div>
