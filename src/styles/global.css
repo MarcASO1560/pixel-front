@@ -286,7 +286,7 @@ textarea:focus {
 
 .explorer-commandbar {
   display: flex;
-  min-height: 58px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -298,8 +298,10 @@ textarea:focus {
 
 .commandbar-actions {
   display: flex;
-  gap: 8px;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: end;
+  justify-content: flex-end;
   min-width: 0;
 }
 
@@ -342,19 +344,13 @@ textarea:focus {
   padding: 10px 18px;
 }
 
-.filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: end;
-  border-bottom: 1px solid var(--line-soft);
-  background: rgba(12, 16, 24, 0.78);
-  padding: 10px 18px;
-}
-
 .filter-control {
   display: grid;
   gap: 5px;
+}
+
+.filter-control.compact {
+  gap: 3px;
 }
 
 .filter-control span {
@@ -364,7 +360,7 @@ textarea:focus {
 }
 
 .filter-control select {
-  min-width: 128px;
+  min-width: 122px;
   height: 32px;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -374,11 +370,20 @@ textarea:focus {
   box-shadow: 0 2px 0 #05070b;
 }
 
+.filter-control.compact select {
+  min-width: 108px;
+  height: 30px;
+}
+
+.filter-control.compact.wide select {
+  min-width: 152px;
+}
+
 .filter-toggle {
   display: inline-flex;
   gap: 7px;
   align-items: center;
-  height: 32px;
+  height: 30px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--panel-raised);
@@ -397,7 +402,7 @@ textarea:focus {
 .filter-reset {
   display: inline-flex;
   width: 32px;
-  height: 32px;
+  height: 30px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
@@ -797,9 +802,6 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .filter-bar {
-    align-items: start;
-  }
 }
 
 @media (max-width: 560px) {
@@ -820,7 +822,6 @@ textarea:focus {
 
   .explorer-commandbar,
   .explorer-pathbar,
-  .filter-bar,
   .content-header,
   .file-area {
     padding-right: 12px;
@@ -837,12 +838,9 @@ textarea:focus {
     grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   }
 
-  .filter-control {
-    flex: 1 1 130px;
-  }
-
-  .filter-control select {
-    width: 100%;
+  .filter-control.compact,
+  .filter-control.compact select,
+  .filter-control.compact.wide select {
     min-width: 0;
   }
 }
