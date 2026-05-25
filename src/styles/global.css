@@ -280,9 +280,9 @@ textarea:focus {
   max-width: 240px;
   height: 34px;
   border: 1px solid #343946;
-  border-radius: 999px;
+  border-radius: 6px;
   background: #181b22;
-  padding: 3px 11px 3px 4px;
+  padding: 3px 10px 3px 4px;
 }
 
 .topbar-account strong {
