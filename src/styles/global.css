@@ -1,7 +1,12 @@
+@import "@fontsource/pixelify-sans/latin-400.css";
+@import "@fontsource/pixelify-sans/latin-500.css";
+@import "@fontsource/pixelify-sans/latin-600.css";
+@import "@fontsource/pixelify-sans/latin-700.css";
+
 :root {
   color-scheme: dark;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-pixel: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
   --bg: #0a0c12;
   --panel: #111722;
   --panel-raised: #182032;
@@ -39,6 +44,12 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+select option {
+  background: var(--panel-raised);
+  color: var(--text);
+  font-family: var(--font-pixel);
 }
 
 button {
@@ -134,7 +145,7 @@ label {
   gap: 7px;
   color: #cbd1dc;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 input,
@@ -183,7 +194,7 @@ textarea:focus {
   border: 1px solid #9affee;
   background: var(--cyan);
   color: #061311;
-  font-weight: 800;
+  font-weight: 700;
   box-shadow: 0 3px 0 #0b756b;
 }
 
@@ -198,7 +209,7 @@ textarea:focus {
   padding: 0 10px;
   background: transparent;
   color: #b8bfcb;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .text-button:hover {
@@ -237,14 +248,14 @@ textarea:focus {
   min-height: 34px;
   color: #a8fff0;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .notice {
   border-radius: 6px;
   padding: 10px 12px;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .notice.error {
@@ -352,7 +363,7 @@ textarea:focus {
   overflow: hidden;
   color: #eef1f5;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -380,7 +391,7 @@ textarea:focus {
 .filter-control span {
   color: #8f98a7;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .desktop-filter-strip .filter-control span {
@@ -424,13 +435,35 @@ textarea:focus {
   color: #c5ccd8;
   padding: 0 10px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .filter-toggle input {
+  appearance: none;
+  display: grid;
   width: 15px;
   height: 15px;
-  accent-color: var(--cyan);
+  place-items: center;
+  border: 2px solid #54617a;
+  background: #0b1018;
+  box-shadow: inset 0 0 0 2px #182032;
+}
+
+.filter-toggle input:checked {
+  border-color: #b8fff3;
+  background: var(--cyan);
+  box-shadow:
+    inset 0 0 0 2px rgba(6, 19, 17, 0.12),
+    0 0 0 1px rgba(103, 247, 213, 0.18);
+}
+
+.filter-toggle input:checked::after {
+  width: 4px;
+  height: 7px;
+  border: solid #061311;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: translateY(-1px) rotate(45deg);
 }
 
 .filter-reset {
@@ -482,7 +515,7 @@ textarea:focus {
   border: 0;
   background: transparent;
   color: #eef1f5;
-  font-weight: 750;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -748,7 +781,7 @@ textarea:focus {
   color: #b8fff3;
   content: "+";
   font-size: 16px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1;
   text-shadow: 0 2px 0 #05241f;
 }
@@ -856,7 +889,7 @@ textarea:focus {
   border-radius: 4px;
   color: #a0a8b5;
   background: rgba(17, 23, 34, 0.72);
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .empty-state svg {
@@ -905,7 +938,7 @@ textarea:focus {
   margin-bottom: 7px;
   color: #cbd1dc;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .color-swatch {
@@ -996,7 +1029,7 @@ textarea:focus {
     color: #eef1f5;
     cursor: pointer;
     font-size: 13px;
-    font-weight: 850;
+    font-weight: 700;
   }
 
   .mobile-filter-drawer summary::-webkit-details-marker {
@@ -1038,7 +1071,7 @@ textarea:focus {
   .mobile-filter-grid .filter-reset span {
     display: inline;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .view-switcher {
