@@ -6,6 +6,7 @@ import {
   Grid3X3,
   List,
   LogOut,
+  Pencil,
   Plus,
   RotateCcw,
   Search,
@@ -24,6 +25,7 @@ import {
   type ProjectFolder,
   type ProjectTree,
   type User,
+  updateProjectFolder,
 } from "../lib/api";
 
 type ExplorerItem =
@@ -90,6 +92,11 @@ const folderForm = reactive({
   color: folderColors[0],
 });
 
+const folderEditForm = reactive({
+  name: "",
+  color: folderColors[0],
+});
+
 const accessToken = ref<string | null>(null);
 const currentUser = ref<User | null>(null);
 const projects = ref<Project[]>([]);
@@ -100,6 +107,9 @@ const isLoading = ref(false);
 const isLoadingTree = ref(false);
 const isCreatingItem = ref(false);
 const isCreateDialogOpen = ref(false);
+const isEditFolderDialogOpen = ref(false);
+const isUpdatingFolder = ref(false);
+const editingFolder = ref<ProjectFolder | null>(null);
 const errorMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
 const searchQuery = ref("");
@@ -627,6 +637,51 @@ async function addFolder() {
   }
 }
 
+function openEditFolder(folder: ProjectFolder) {
+  editingFolder.value = folder;
+  folderEditForm.name = folder.name;
+  folderEditForm.color = folder.color || folderColors[0];
+  isEditFolderDialogOpen.value = true;
+}
+
+function closeEditFolderDialog() {
+  isEditFolderDialogOpen.value = false;
+  editingFolder.value = null;
+}
+
+async function updateFolderDetails() {
+  if (!accessToken.value || !selectedProject.value || !editingFolder.value || !folderEditForm.name.trim()) {
+    return;
+  }
+
+  errorMessage.value = "";
+  isUpdatingFolder.value = true;
+
+  try {
+    const updatedFolder = await updateProjectFolder(
+      accessToken.value,
+      selectedProject.value.id,
+      editingFolder.value.id,
+      {
+        name: folderEditForm.name.trim(),
+        color: folderEditForm.color,
+      },
+    );
+
+    projectTree.value = {
+      folders: (projectTree.value?.folders ?? []).map((folder) =>
+        folder.id === updatedFolder.id ? updatedFolder : folder,
+      ),
+      resources: projectTree.value?.resources ?? [],
+    };
+    closeEditFolderDialog();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    isUpdatingFolder.value = false;
+  }
+}
+
 async function openItem(item: ExplorerItem) {
   if (item.kind === "project") {
     selectedProject.value = item.raw;
@@ -872,24 +927,34 @@ function formatDate(value: string) {
               { 'hide-descriptions': !showDescriptions, 'hide-dates': !showDates },
             ]"
           >
-            <button
+            <article
               v-for="item in visibleItems"
               :key="`${item.kind}-${item.id}`"
               class="project-item"
-              type="button"
-              @click="openItem(item)"
             >
-              <div class="project-icon" :style="{ color: item.color || undefined }">
-                <Folder :size="44" aria-hidden="true" />
-              </div>
-              <div class="project-copy">
-                <h2>{{ item.name }}</h2>
-                <p v-if="showDescriptions">
-                  {{ item.description || (item.kind === 'folder' ? 'Carpeta' : 'Sin descripcion') }}
-                </p>
-                <time v-if="showDates" :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
-              </div>
-            </button>
+              <button class="project-open" type="button" @click="openItem(item)">
+                <div class="project-icon" :style="{ '--folder-color': item.color || undefined }">
+                  <span class="pixel-folder" aria-hidden="true"></span>
+                </div>
+                <div class="project-copy">
+                  <h2>{{ item.name }}</h2>
+                  <p v-if="showDescriptions">
+                    {{ item.description || (item.kind === 'folder' ? 'Carpeta' : 'Sin descripcion') }}
+                  </p>
+                  <time v-if="showDates" :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
+                </div>
+              </button>
+
+              <button
+                v-if="item.kind === 'folder'"
+                class="item-action"
+                type="button"
+                title="Editar carpeta"
+                @click="openEditFolder(item.raw)"
+              >
+                <Pencil :size="14" aria-hidden="true" />
+              </button>
+            </article>
           </div>
         </section>
       </section>
@@ -943,6 +1008,46 @@ function formatDate(value: string) {
             <button type="submit" class="primary-action" :disabled="isCreatingItem">
               <Plus :size="18" aria-hidden="true" />
               <span>{{ isCreatingItem ? "Creando..." : dialogTitle }}</span>
+            </button>
+          </form>
+        </section>
+      </div>
+
+      <div
+        v-if="isEditFolderDialogOpen"
+        class="dialog-backdrop"
+        role="presentation"
+        @click.self="closeEditFolderDialog"
+      >
+        <section class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-folder-title">
+          <header>
+            <h2 id="edit-folder-title">Editar carpeta</h2>
+            <button class="text-button" type="button" @click="closeEditFolderDialog">Cancelar</button>
+          </header>
+
+          <form @submit.prevent="updateFolderDetails">
+            <label>
+              <span>Nombre</span>
+              <input v-model="folderEditForm.name" type="text" required autofocus />
+            </label>
+
+            <fieldset class="color-field">
+              <legend>Color</legend>
+              <button
+                v-for="color in folderColors"
+                :key="color"
+                class="color-swatch"
+                :class="{ active: folderEditForm.color === color }"
+                type="button"
+                :style="{ backgroundColor: color }"
+                :title="color"
+                @click="folderEditForm.color = color"
+              ></button>
+            </fieldset>
+
+            <button type="submit" class="primary-action" :disabled="isUpdatingFolder">
+              <Pencil :size="18" aria-hidden="true" />
+              <span>{{ isUpdatingFolder ? "Guardando..." : "Guardar cambios" }}</span>
             </button>
           </form>
         </section>

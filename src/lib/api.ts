@@ -79,6 +79,12 @@ export type ProjectFolderCreate = {
   parent_id?: string | null;
 };
 
+export type ProjectFolderUpdate = {
+  name?: string;
+  color?: string | null;
+  position?: number;
+};
+
 async function request<T>(path: string, options: RequestInit = {}, accessToken?: string): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
@@ -162,6 +168,22 @@ export function createProjectFolder(
         parent_id: null,
         ...payload,
       }),
+    },
+    accessToken,
+  );
+}
+
+export function updateProjectFolder(
+  accessToken: string,
+  projectId: string,
+  folderId: string,
+  payload: ProjectFolderUpdate,
+): Promise<ProjectFolder> {
+  return request<ProjectFolder>(
+    `/projects/${projectId}/folders/${folderId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     },
     accessToken,
   );
