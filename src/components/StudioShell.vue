@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import {
   ChevronRight,
   Folder,
@@ -7,6 +7,7 @@ import {
   List,
   LogOut,
   Plus,
+  RotateCcw,
   Search,
   ShieldCheck,
   UserRound,
@@ -31,6 +32,7 @@ type ExplorerItem =
       id: string;
       name: string;
       description?: string | null;
+      created_at: string;
       updated_at: string;
       color?: string | null;
       raw: Project;
@@ -40,12 +42,36 @@ type ExplorerItem =
       id: string;
       name: string;
       description?: string | null;
+      created_at: string;
       updated_at: string;
       color?: string | null;
       raw: ProjectFolder;
     };
 
+type ViewMode = "grid" | "list";
+type ItemSize = "small" | "medium" | "large";
+type SortBy = "name" | "updated_at" | "created_at";
+type SortDirection = "asc" | "desc";
+
+type ExplorerState = {
+  preferences?: {
+    viewMode?: ViewMode;
+    itemSize?: ItemSize;
+    sortBy?: SortBy;
+    sortDirection?: SortDirection;
+    showDescriptions?: boolean;
+    showDates?: boolean;
+    foldersFirst?: boolean;
+  };
+  location?: {
+    projectId?: string | null;
+    folderId?: string | null;
+    searchByLocation?: Record<string, string>;
+  };
+};
+
 const ACCESS_TOKEN_KEY = "pixel-studio-access-token";
+const EXPLORER_STATE_KEY = "pixel-studio-explorer-state";
 const FRONTEND_AUTH_TOKEN = import.meta.env.PUBLIC_FRONTEND_AUTH_TOKEN ?? "";
 const GOOGLE_CLIENT_ID = import.meta.env.PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
@@ -76,8 +102,16 @@ const isCreateDialogOpen = ref(false);
 const errorMessage = ref("");
 const googleButtonRef = ref<HTMLElement | null>(null);
 const searchQuery = ref("");
-const viewMode = ref<"grid" | "list">("grid");
-const density = ref<"comfortable" | "compact">("comfortable");
+const searchByLocation = ref<Record<string, string>>({});
+const pendingLocation = ref<{ projectId: string | null; folderId: string | null } | null>(null);
+const viewMode = ref<ViewMode>("grid");
+const itemSize = ref<ItemSize>("medium");
+const sortBy = ref<SortBy>("updated_at");
+const sortDirection = ref<SortDirection>("desc");
+const showDescriptions = ref(true);
+const showDates = ref(true);
+const foldersFirst = ref(true);
+let isApplyingSearch = false;
 
 const isAuthenticated = computed(() => Boolean(accessToken.value && currentUser.value));
 const isInsideProject = computed(() => Boolean(selectedProject.value));
@@ -106,19 +140,26 @@ const searchPlaceholder = computed(() =>
 );
 const createButtonLabel = computed(() => (selectedProject.value ? "Nueva carpeta" : "Nuevo proyecto"));
 const dialogTitle = computed(() => createButtonLabel.value);
-const visibleItems = computed<ExplorerItem[]>(() => {
-  const query = searchQuery.value.trim().toLowerCase();
-  const items = selectedProject.value ? folderItems.value : projectItems.value;
-
-  if (!query) {
-    return items;
+const currentLocationKey = computed(() => {
+  if (!selectedProject.value) {
+    return "root";
   }
 
-  return items.filter((item) => {
-    const name = item.name.toLowerCase();
-    const description = item.description?.toLowerCase() ?? "";
-    return name.includes(query) || description.includes(query);
-  });
+  return `project:${selectedProject.value.id}:folder:${currentFolderId.value ?? "root"}`;
+});
+const visibleItems = computed<ExplorerItem[]>(() => {
+  const query = searchQuery.value.trim().toLowerCase();
+  let items = selectedProject.value ? folderItems.value : projectItems.value;
+
+  if (query) {
+    items = items.filter((item) => {
+      const name = item.name.toLowerCase();
+      const description = item.description?.toLowerCase() ?? "";
+      return name.includes(query) || description.includes(query);
+    });
+  }
+
+  return [...items].sort(compareExplorerItems);
 });
 const projectItems = computed<ExplorerItem[]>(() =>
   projects.value.map((project) => ({
@@ -126,6 +167,7 @@ const projectItems = computed<ExplorerItem[]>(() =>
     id: project.id,
     name: project.name,
     description: project.description,
+    created_at: project.created_at,
     updated_at: project.updated_at,
     color: null,
     raw: project,
@@ -139,6 +181,7 @@ const folderItems = computed<ExplorerItem[]>(() =>
       id: folder.id,
       name: folder.name,
       description: null,
+      created_at: folder.created_at,
       updated_at: folder.updated_at,
       color: folder.color,
       raw: folder,
@@ -153,16 +196,188 @@ const emptyMessage = computed(() => {
 });
 
 onMounted(async () => {
+  restoreExplorerState();
+
   const storedToken = window.localStorage.getItem(ACCESS_TOKEN_KEY);
   if (storedToken) {
     accessToken.value = storedToken;
     await loadWorkspace();
+    await restoreLastLocation();
   }
 
   if (!isAuthenticated.value) {
     await initializeGoogleSignIn();
   }
 });
+
+watch([viewMode, itemSize, sortBy, sortDirection, showDescriptions, showDates, foldersFirst], () => {
+  saveExplorerState();
+});
+
+watch(searchQuery, (value) => {
+  if (isApplyingSearch) {
+    return;
+  }
+
+  searchByLocation.value = {
+    ...searchByLocation.value,
+    [currentLocationKey.value]: value,
+  };
+  saveExplorerState();
+});
+
+function restoreExplorerState() {
+  try {
+    const rawState = window.localStorage.getItem(EXPLORER_STATE_KEY);
+    if (!rawState) {
+      applySearchForCurrentLocation();
+      return;
+    }
+
+    const state = JSON.parse(rawState) as ExplorerState;
+    const preferences = state.preferences;
+
+    if (isViewMode(preferences?.viewMode)) {
+      viewMode.value = preferences.viewMode;
+    }
+    if (isItemSize(preferences?.itemSize)) {
+      itemSize.value = preferences.itemSize;
+    }
+    if (isSortBy(preferences?.sortBy)) {
+      sortBy.value = preferences.sortBy;
+    }
+    if (isSortDirection(preferences?.sortDirection)) {
+      sortDirection.value = preferences.sortDirection;
+    }
+    if (typeof preferences?.showDescriptions === "boolean") {
+      showDescriptions.value = preferences.showDescriptions;
+    }
+    if (typeof preferences?.showDates === "boolean") {
+      showDates.value = preferences.showDates;
+    }
+    if (typeof preferences?.foldersFirst === "boolean") {
+      foldersFirst.value = preferences.foldersFirst;
+    }
+
+    searchByLocation.value = state.location?.searchByLocation ?? {};
+    pendingLocation.value = {
+      projectId: state.location?.projectId ?? null,
+      folderId: state.location?.folderId ?? null,
+    };
+    applySearchForCurrentLocation();
+  } catch {
+    resetExplorerPreferences(false);
+  }
+}
+
+function saveExplorerState() {
+  const state: ExplorerState = {
+    preferences: {
+      viewMode: viewMode.value,
+      itemSize: itemSize.value,
+      sortBy: sortBy.value,
+      sortDirection: sortDirection.value,
+      showDescriptions: showDescriptions.value,
+      showDates: showDates.value,
+      foldersFirst: foldersFirst.value,
+    },
+    location: {
+      projectId: selectedProject.value?.id ?? null,
+      folderId: currentFolderId.value,
+      searchByLocation: searchByLocation.value,
+    },
+  };
+
+  window.localStorage.setItem(EXPLORER_STATE_KEY, JSON.stringify(state));
+}
+
+async function restoreLastLocation() {
+  const location = pendingLocation.value;
+  if (!location?.projectId) {
+    applySearchForCurrentLocation();
+    saveExplorerState();
+    return;
+  }
+
+  const project = projects.value.find((item) => item.id === location.projectId);
+  if (!project) {
+    pendingLocation.value = null;
+    goToProjects();
+    return;
+  }
+
+  selectedProject.value = project;
+  currentFolderId.value = null;
+  await loadSelectedProjectTree();
+
+  const folderExists = projectTree.value?.folders.some((folder) => folder.id === location.folderId);
+  currentFolderId.value = folderExists ? location.folderId : null;
+  pendingLocation.value = null;
+  applySearchForCurrentLocation();
+  saveExplorerState();
+}
+
+function applySearchForCurrentLocation() {
+  isApplyingSearch = true;
+  searchQuery.value = searchByLocation.value[currentLocationKey.value] ?? "";
+  void nextTick(() => {
+    isApplyingSearch = false;
+  });
+}
+
+function resetExplorerPreferences(clearSearch = true) {
+  viewMode.value = "grid";
+  itemSize.value = "medium";
+  sortBy.value = "updated_at";
+  sortDirection.value = "desc";
+  showDescriptions.value = true;
+  showDates.value = true;
+  foldersFirst.value = true;
+
+  if (clearSearch) {
+    searchByLocation.value = {
+      ...searchByLocation.value,
+      [currentLocationKey.value]: "",
+    };
+    searchQuery.value = "";
+  }
+
+  saveExplorerState();
+}
+
+function compareExplorerItems(first: ExplorerItem, second: ExplorerItem) {
+  if (foldersFirst.value && first.kind !== second.kind) {
+    return first.kind === "folder" ? -1 : 1;
+  }
+
+  const direction = sortDirection.value === "asc" ? 1 : -1;
+  let result = 0;
+
+  if (sortBy.value === "name") {
+    result = first.name.localeCompare(second.name, "es", { sensitivity: "base" });
+  } else {
+    result =
+      new Date(first[sortBy.value]).getTime() - new Date(second[sortBy.value]).getTime();
+  }
+
+  return result * direction;
+}
+
+function isViewMode(value: unknown): value is ViewMode {
+  return value === "grid" || value === "list";
+}
+
+function isItemSize(value: unknown): value is ItemSize {
+  return value === "small" || value === "medium" || value === "large";
+}
+
+function isSortBy(value: unknown): value is SortBy {
+  return value === "name" || value === "updated_at" || value === "created_at";
+}
+
+function isSortDirection(value: unknown): value is SortDirection {
+  return value === "asc" || value === "desc";
+}
 
 async function signInWithGoogleCredential(credential: string) {
   const profile = decodeGoogleCredential(credential);
@@ -199,6 +414,7 @@ async function signIn(user: {
     accessToken.value = session.access_token;
     window.localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
     await loadWorkspace();
+    await restoreLastLocation();
   } catch (error) {
     handleError(error);
   } finally {
@@ -390,30 +606,35 @@ async function openItem(item: ExplorerItem) {
     selectedProject.value = item.raw;
     projectTree.value = null;
     currentFolderId.value = null;
-    searchQuery.value = "";
     await loadSelectedProjectTree();
+    applySearchForCurrentLocation();
+    saveExplorerState();
     return;
   }
 
   currentFolderId.value = item.raw.id;
-  searchQuery.value = "";
+  applySearchForCurrentLocation();
+  saveExplorerState();
 }
 
 function goToProjectRoot() {
   currentFolderId.value = null;
-  searchQuery.value = "";
+  applySearchForCurrentLocation();
+  saveExplorerState();
 }
 
 function goToFolder(folderId: string) {
   currentFolderId.value = folderId;
-  searchQuery.value = "";
+  applySearchForCurrentLocation();
+  saveExplorerState();
 }
 
 function goToProjects() {
   selectedProject.value = null;
   projectTree.value = null;
   currentFolderId.value = null;
-  searchQuery.value = "";
+  applySearchForCurrentLocation();
+  saveExplorerState();
 }
 
 function closeCreateDialog() {
@@ -428,6 +649,7 @@ function signOut(clearMessage = true) {
   projectTree.value = null;
   currentFolderId.value = null;
   window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  saveExplorerState();
   if (clearMessage) {
     errorMessage.value = "";
   }
@@ -507,40 +729,25 @@ function formatDate(value: string) {
             <span>{{ createButtonLabel }}</span>
           </button>
 
-          <div class="toolbar-group">
-            <div class="density-switcher" aria-label="Tamano de lista">
-              <button
-                type="button"
-                :class="{ active: density === 'comfortable' }"
-                @click="density = 'comfortable'"
-              >
-                Normal
-              </button>
-              <button type="button" :class="{ active: density === 'compact' }" @click="density = 'compact'">
-                Compacta
-              </button>
-            </div>
-
-            <div class="view-switcher" aria-label="Vista">
-              <button
-                class="icon-button"
-                :class="{ active: viewMode === 'grid' }"
-                type="button"
-                title="Cuadricula"
-                @click="viewMode = 'grid'"
-              >
-                <Grid3X3 :size="18" aria-hidden="true" />
-              </button>
-              <button
-                class="icon-button"
-                :class="{ active: viewMode === 'list' }"
-                type="button"
-                title="Lista"
-                @click="viewMode = 'list'"
-              >
-                <List :size="18" aria-hidden="true" />
-              </button>
-            </div>
+          <div class="view-switcher" aria-label="Vista">
+            <button
+              class="icon-button"
+              :class="{ active: viewMode === 'grid' }"
+              type="button"
+              title="Cuadricula"
+              @click="viewMode = 'grid'"
+            >
+              <Grid3X3 :size="18" aria-hidden="true" />
+            </button>
+            <button
+              class="icon-button"
+              :class="{ active: viewMode === 'list' }"
+              type="button"
+              title="Lista"
+              @click="viewMode = 'list'"
+            >
+              <List :size="18" aria-hidden="true" />
+            </button>
           </div>
         </header>
 
@@ -563,6 +770,61 @@ function formatDate(value: string) {
           </label>
         </div>
 
+        <section class="filter-bar" aria-label="Filtros">
+          <label class="filter-control">
+            <span>Vista</span>
+            <select v-model="viewMode">
+              <option value="grid">Cuadricula</option>
+              <option value="list">Lista</option>
+            </select>
+          </label>
+
+          <label class="filter-control">
+            <span>Tamano</span>
+            <select v-model="itemSize">
+              <option value="small">Pequeno</option>
+              <option value="medium">Mediano</option>
+              <option value="large">Grande</option>
+            </select>
+          </label>
+
+          <label class="filter-control">
+            <span>Orden</span>
+            <select v-model="sortBy">
+              <option value="updated_at">Modificado</option>
+              <option value="created_at">Creado</option>
+              <option value="name">Nombre</option>
+            </select>
+          </label>
+
+          <label class="filter-control">
+            <span>Direccion</span>
+            <select v-model="sortDirection">
+              <option value="desc">Descendente</option>
+              <option value="asc">Ascendente</option>
+            </select>
+          </label>
+
+          <label class="filter-toggle">
+            <input v-model="showDescriptions" type="checkbox" />
+            <span>Descripcion</span>
+          </label>
+
+          <label class="filter-toggle">
+            <input v-model="showDates" type="checkbox" />
+            <span>Fechas</span>
+          </label>
+
+          <label class="filter-toggle">
+            <input v-model="foldersFirst" type="checkbox" />
+            <span>Carpetas primero</span>
+          </label>
+
+          <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
+            <RotateCcw :size="16" aria-hidden="true" />
+          </button>
+        </section>
+
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
         <section class="content-header">
@@ -578,7 +840,15 @@ function formatDate(value: string) {
             <span>{{ emptyMessage }}</span>
           </div>
 
-          <div v-else :class="['file-collection', viewMode, density]">
+          <div
+            v-else
+            :class="[
+              'file-collection',
+              viewMode,
+              itemSize,
+              { 'hide-descriptions': !showDescriptions, 'hide-dates': !showDates },
+            ]"
+          >
             <button
               v-for="item in visibleItems"
               :key="`${item.kind}-${item.id}`"
@@ -591,8 +861,10 @@ function formatDate(value: string) {
               </div>
               <div class="project-copy">
                 <h2>{{ item.name }}</h2>
-                <p>{{ item.description || (item.kind === 'folder' ? 'Carpeta' : 'Sin descripcion') }}</p>
-                <time :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
+                <p v-if="showDescriptions">
+                  {{ item.description || (item.kind === 'folder' ? 'Carpeta' : 'Sin descripcion') }}
+                </p>
+                <time v-if="showDates" :datetime="item.updated_at">{{ formatDate(item.updated_at) }}</time>
               </div>
             </button>
           </div>
