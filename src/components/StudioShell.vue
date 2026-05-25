@@ -804,56 +804,60 @@ function formatDate(value: string) {
             </div>
 
             <div class="desktop-filter-strip">
-              <label class="filter-control compact">
-                <span>Tamano</span>
-                <select v-model="itemSize">
-                  <option value="small">Pequeno</option>
-                  <option value="medium">Mediano</option>
-                  <option value="large">Grande</option>
-                </select>
-              </label>
+              <div class="filter-group">
+                <label class="filter-control compact">
+                  <span>Tamano</span>
+                  <select v-model="itemSize">
+                    <option value="small">Pequeno</option>
+                    <option value="medium">Mediano</option>
+                    <option value="large">Grande</option>
+                  </select>
+                </label>
 
-              <label class="filter-control compact">
-                <span>Orden</span>
-                <select :value="sortBy" @change="updateSortBy">
-                  <option value="updated_at">Modificado</option>
-                  <option value="created_at">Creado</option>
-                  <option value="name">Nombre</option>
-                </select>
-              </label>
+                <label class="filter-control compact">
+                  <span>Orden</span>
+                  <select :value="sortBy" @change="updateSortBy">
+                    <option value="updated_at">Modificado</option>
+                    <option value="created_at">Creado</option>
+                    <option value="name">Nombre</option>
+                  </select>
+                </label>
 
-              <label class="filter-control compact wide">
-                <span>{{ sortBy === "name" ? "Alfabetico" : "Tiempo" }}</span>
-                <select v-model="sortDirection">
-                  <template v-if="sortBy === 'name'">
-                    <option value="asc">A-Z</option>
-                    <option value="desc">Z-A</option>
-                  </template>
-                  <template v-else>
-                    <option value="desc">Recientes primero</option>
-                    <option value="asc">Antiguos primero</option>
-                  </template>
-                </select>
-              </label>
+                <label class="filter-control compact wide">
+                  <span>{{ sortBy === "name" ? "Alfabetico" : "Tiempo" }}</span>
+                  <select v-model="sortDirection">
+                    <template v-if="sortBy === 'name'">
+                      <option value="asc">A-Z</option>
+                      <option value="desc">Z-A</option>
+                    </template>
+                    <template v-else>
+                      <option value="desc">Recientes primero</option>
+                      <option value="asc">Antiguos primero</option>
+                    </template>
+                  </select>
+                </label>
+              </div>
 
-              <label class="filter-toggle" title="Mostrar descripcion">
-                <input v-model="showDescriptions" type="checkbox" />
-                <span>Descripcion</span>
-              </label>
+              <div class="filter-group">
+                <label class="filter-toggle" title="Mostrar descripcion">
+                  <input v-model="showDescriptions" type="checkbox" />
+                  <span>Descripcion</span>
+                </label>
 
-              <label class="filter-toggle" title="Mostrar fechas">
-                <input v-model="showDates" type="checkbox" />
-                <span>Fechas</span>
-              </label>
+                <label class="filter-toggle" title="Mostrar fechas">
+                  <input v-model="showDates" type="checkbox" />
+                  <span>Fechas</span>
+                </label>
 
-              <label class="filter-toggle" title="Mostrar carpetas primero">
-                <input v-model="foldersFirst" type="checkbox" />
-                <span>Carpetas primero</span>
-              </label>
+                <label class="filter-toggle" title="Mostrar carpetas primero">
+                  <input v-model="foldersFirst" type="checkbox" />
+                  <span>Carpetas primero</span>
+                </label>
 
-              <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                <RotateCcw :size="16" aria-hidden="true" />
-              </button>
+                <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
+                  <RotateCcw :size="16" aria-hidden="true" />
+                </button>
+              </div>
             </div>
 
             <div class="topbar-account" :title="currentUser?.email || undefined">
