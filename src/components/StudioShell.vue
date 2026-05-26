@@ -199,14 +199,14 @@ const currentTitle = computed(() => currentFolder.value?.name ?? selectedProject
 const searchPlaceholder = computed(() =>
   selectedProject.value ? "Buscar en esta carpeta" : "Buscar proyectos",
 );
-const createActionLabel = computed(() => "CREA");
+const createActionLabel = computed(() => (selectedProject.value ? "Nueva carpeta" : "Nuevo proyecto"));
 const createActionDescription = computed(() =>
-  selectedProject.value ? "Nueva carpeta en esta ubicacion" : "Nuevo proyecto creativo",
+  selectedProject.value ? "Crear carpeta en esta ubicacion" : "Crear proyecto en tu biblioteca",
 );
 const createOptionLabel = computed(() => (selectedProject.value ? "Carpeta" : "Proyecto"));
 const createOptionIcon = computed(() => (selectedProject.value ? icons.folderPlus : icons.project));
 const createSubmitLabel = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
-const dialogTitle = computed(() => "Crea");
+const dialogTitle = computed(() => (selectedProject.value ? "Crear carpeta" : "Crear proyecto"));
 const editDialogTitle = computed(() => (editingItem.value?.kind === "project" ? "Editar proyecto" : "Editar carpeta"));
 const hasSearchQuery = computed(() => Boolean(searchQuery.value.trim()));
 const currentLocationKey = computed(() => {
@@ -576,8 +576,8 @@ async function initializeGoogleSignIn() {
 
     if (googleButtonRef.value) {
       const buttonWidth = Math.min(
-        360,
-        Math.max(200, Math.floor(googleButtonRef.value.getBoundingClientRect().width)),
+        400,
+        Math.max(240, Math.floor(googleButtonRef.value.getBoundingClientRect().width)),
       );
       window.google.accounts.id.renderButton(googleButtonRef.value, {
         theme: "filled_black",
@@ -891,29 +891,32 @@ function formatDate(value: string) {
         <span v-for="index in 28" :key="index"></span>
       </div>
 
-      <section class="auth-panel">
+      <section class="auth-panel" aria-describedby="auth-description">
         <div class="auth-brand">
           <div class="auth-mark">
             <span class="pixelart-icon auth-mark-icon" aria-hidden="true" v-html="icons.shield"></span>
           </div>
-          <div>
+          <div class="auth-brand-copy">
             <span>Pixel Art Studio</span>
             <h1 id="auth-title">Pixel Studio</h1>
             <p>Accede con Google</p>
           </div>
         </div>
 
+        <p id="auth-description" class="auth-description">Crea y organiza tus proyectos pixel art.</p>
+
         <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
 
-        <div class="google-button-shell">
-          <div ref="googleButtonRef" class="google-button"></div>
+        <div class="google-button-shell" :class="{ 'is-loading': isLoading }" :aria-busy="isLoading">
+          <div ref="googleButtonRef" class="google-button" aria-label="Entrar con Google"></div>
           <div class="google-button-face" aria-hidden="true">
             <span class="google-mark">G</span>
-            <span>Entrar con Google</span>
+            <span class="google-button-label">{{ isLoading ? "Entrando..." : "Entrar con Google" }}</span>
+            <span v-if="isLoading" class="google-button-spinner"></span>
           </div>
         </div>
 
-        <div v-if="isLoading" class="loading-row">
+        <div v-if="isLoading" class="loading-row" aria-live="polite">
           <span class="pixelart-icon" aria-hidden="true" v-html="icons.shield"></span>
           <span>Entrando...</span>
         </div>
@@ -922,43 +925,54 @@ function formatDate(value: string) {
 
     <section v-else class="workspace-view" aria-label="Explorador de proyectos">
       <section class="explorer-main">
-        <header class="explorer-commandbar">
+        <header class="explorer-commandbar" aria-label="Controles del explorador">
           <div class="commandbar-actions">
-            <div class="view-switcher" aria-label="Vista">
-              <button
-                class="icon-button"
-                :class="{ active: viewMode === 'grid' }"
-                type="button"
-                title="Cuadricula"
-                @click="viewMode = 'grid'"
-              >
-                <span class="pixelart-icon" aria-hidden="true" v-html="icons.grid"></span>
-              </button>
-              <button
-                class="icon-button"
-                :class="{ active: viewMode === 'list' }"
-                type="button"
-                title="Lista"
-                @click="viewMode = 'list'"
-              >
-                <span class="pixelart-icon" aria-hidden="true" v-html="icons.bulletList"></span>
-              </button>
+            <div class="tool-cluster view-cluster" aria-label="Vista">
+              <span class="cluster-label">Vista</span>
+              <div class="view-switcher" role="group" aria-label="Modo de vista">
+                <button
+                  class="icon-button"
+                  :class="{ active: viewMode === 'grid' }"
+                  type="button"
+                  title="Cuadricula"
+                  aria-label="Mostrar como cuadricula"
+                  :aria-pressed="viewMode === 'grid'"
+                  @click="viewMode = 'grid'"
+                >
+                  <span class="pixelart-icon" aria-hidden="true" v-html="icons.grid"></span>
+                </button>
+                <button
+                  class="icon-button"
+                  :class="{ active: viewMode === 'list' }"
+                  type="button"
+                  title="Lista"
+                  aria-label="Mostrar como lista"
+                  :aria-pressed="viewMode === 'list'"
+                  @click="viewMode = 'list'"
+                >
+                  <span class="pixelart-icon" aria-hidden="true" v-html="icons.bulletList"></span>
+                </button>
+              </div>
             </div>
 
             <div class="desktop-filter-strip">
-              <div class="filter-group">
+              <div class="tool-cluster">
+                <span class="cluster-label">Escala</span>
                 <label class="filter-control compact">
                   <span>Tamano</span>
-                  <select v-model="itemSize">
+                  <select v-model="itemSize" aria-label="Tamano de elementos">
                     <option value="small">Pequeno</option>
                     <option value="medium">Mediano</option>
                     <option value="large">Grande</option>
                   </select>
                 </label>
+              </div>
 
+              <div class="tool-cluster sort-cluster">
+                <span class="cluster-label">Orden</span>
                 <label class="filter-control compact">
-                  <span>Orden</span>
-                  <select :value="sortBy" @change="updateSortBy">
+                  <span>Ordenar por</span>
+                  <select :value="sortBy" aria-label="Ordenar por" @change="updateSortBy">
                     <option value="updated_at">Modificado</option>
                     <option value="created_at">Creado</option>
                     <option value="name">Nombre</option>
@@ -967,7 +981,7 @@ function formatDate(value: string) {
 
                 <label class="filter-control compact wide">
                   <span>{{ sortBy === "name" ? "Alfabetico" : "Tiempo" }}</span>
-                  <select v-model="sortDirection">
+                  <select v-model="sortDirection" aria-label="Direccion de orden">
                     <template v-if="sortBy === 'name'">
                       <option value="asc">A-Z</option>
                       <option value="desc">Z-A</option>
@@ -980,26 +994,33 @@ function formatDate(value: string) {
                 </label>
               </div>
 
-              <div class="filter-group">
+              <div class="tool-cluster fields-cluster">
+                <span class="cluster-label">Campos</span>
                 <label class="filter-toggle" title="Mostrar descripcion">
-                  <input v-model="showDescriptions" type="checkbox" />
+                  <input v-model="showDescriptions" type="checkbox" aria-label="Mostrar descripcion" />
                   <span>Descripcion</span>
                 </label>
 
                 <label class="filter-toggle" title="Mostrar fechas">
-                  <input v-model="showDates" type="checkbox" />
+                  <input v-model="showDates" type="checkbox" aria-label="Mostrar fechas" />
                   <span>Fechas</span>
                 </label>
 
                 <label class="filter-toggle" title="Mostrar carpetas primero">
-                  <input v-model="foldersFirst" type="checkbox" />
+                  <input v-model="foldersFirst" type="checkbox" aria-label="Mostrar carpetas primero" />
                   <span>Carpetas primero</span>
                 </label>
-
-                <button class="filter-reset" type="button" title="Restablecer filtros" @click="resetExplorerPreferences()">
-                  <span class="pixelart-icon" aria-hidden="true" v-html="icons.reload"></span>
-                </button>
               </div>
+
+              <button
+                class="filter-reset"
+                type="button"
+                title="Restablecer filtros"
+                aria-label="Restablecer filtros"
+                @click="resetExplorerPreferences()"
+              >
+                <span class="pixelart-icon" aria-hidden="true" v-html="icons.reload"></span>
+              </button>
             </div>
 
             <div class="topbar-account" :title="currentUser?.email || undefined">
@@ -1016,7 +1037,7 @@ function formatDate(value: string) {
               <strong>{{ currentUser?.display_name || currentUser?.email }}</strong>
             </div>
 
-            <button class="icon-button logout-button" type="button" title="Salir" @click="signOut()">
+            <button class="icon-button logout-button" type="button" title="Salir" aria-label="Cerrar sesion" @click="signOut()">
               <span class="pixelart-icon" aria-hidden="true" v-html="icons.logout"></span>
             </button>
           </div>
@@ -1098,7 +1119,7 @@ function formatDate(value: string) {
 
           <label class="search-box">
             <span class="pixelart-icon" aria-hidden="true" v-html="icons.search"></span>
-            <input v-model="searchQuery" type="search" :placeholder="searchPlaceholder" />
+            <input v-model="searchQuery" type="search" :placeholder="searchPlaceholder" aria-label="Buscar" />
           </label>
         </div>
 
@@ -1109,7 +1130,7 @@ function formatDate(value: string) {
           <span>{{ visibleItems.length }} elementos</span>
         </section>
 
-        <div class="explorer-split" :class="{ 'with-preview': selectedExplorerItem }">
+        <div class="explorer-split with-preview">
           <section class="file-area" aria-live="polite">
             <div v-if="isLoading || isLoadingTree" class="empty-state">Cargando...</div>
 
@@ -1132,10 +1153,12 @@ function formatDate(value: string) {
                 :key="`${item.kind}-${item.id}`"
                 class="project-item"
                 :class="{ selected: selectedItemKey === getItemKey(item) }"
+                :aria-current="selectedItemKey === getItemKey(item) ? 'true' : undefined"
               >
                 <button
                   class="project-open"
                   type="button"
+                  :aria-label="`Seleccionar ${getItemKindLabel(item).toLowerCase()} ${item.name}. Doble click para abrir.`"
                   @click="selectItem(item)"
                   @dblclick="openItem(item)"
                   @keydown.enter.prevent="openItem(item)"
@@ -1161,6 +1184,7 @@ function formatDate(value: string) {
                   class="item-action"
                   type="button"
                   :title="item.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
+                  :aria-label="item.kind === 'project' ? `Editar proyecto ${item.name}` : `Editar carpeta ${item.name}`"
                   @click="openEditItem(item)"
                 >
                   <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
@@ -1168,7 +1192,12 @@ function formatDate(value: string) {
               </article>
 
               <article v-if="!hasSearchQuery" class="project-item create-blueprint">
-                <button class="project-open create-open" type="button" @click="isCreateDialogOpen = true">
+                <button
+                  class="project-open create-open"
+                  type="button"
+                  :aria-label="createSubmitLabel"
+                  @click="isCreateDialogOpen = true"
+                >
                   <div class="project-icon create-icon">
                     <span class="pixelart-icon item-glyph create-glyph" aria-hidden="true" v-html="icons.create"></span>
                   </div>
@@ -1199,6 +1228,7 @@ function formatDate(value: string) {
                 class="icon-button"
                 type="button"
                 :title="selectedExplorerItem.kind === 'project' ? 'Editar proyecto' : 'Editar carpeta'"
+                :aria-label="selectedExplorerItem.kind === 'project' ? `Editar proyecto ${selectedExplorerItem.name}` : `Editar carpeta ${selectedExplorerItem.name}`"
                 @click="openEditItem(selectedExplorerItem)"
               >
                 <span class="pixelart-icon" aria-hidden="true" v-html="icons.penSquare"></span>
@@ -1230,10 +1260,19 @@ function formatDate(value: string) {
                     class="preview-color"
                     :style="{ backgroundColor: selectedExplorerItem.color || defaultProjectColor }"
                   ></span>
-                  {{ selectedExplorerItem.color || defaultProjectColor }}
+                  <code>{{ selectedExplorerItem.color || defaultProjectColor }}</code>
                 </dd>
               </div>
             </dl>
+          </aside>
+
+          <aside v-else class="preview-panel preview-empty" aria-label="Detalle seleccionado">
+            <div class="preview-empty-card">
+              <span class="pixelart-icon preview-empty-icon" aria-hidden="true" v-html="icons.project"></span>
+              <span>Inspector</span>
+              <h2>Selecciona un proyecto</h2>
+              <p>Un click muestra sus detalles. Doble click abre el proyecto o carpeta.</p>
+            </div>
           </aside>
         </div>
       </section>
