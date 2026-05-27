@@ -90,11 +90,14 @@ const isSignUpRepeatPasswordVisible = ref(false);
 const isResetPasswordVisible = ref(false);
 const isResetRepeatPasswordVisible = ref(false);
 const returningFrom = ref<"signup" | "reset" | null>(null);
+const isWorkspaceLoading = ref(false);
 
 let toastTimer = 0;
 let cardReturnTimer = 0;
+let redirectTimer = 0;
 let tokenClient: GoogleTokenClient | null = null;
 const CARD_FLIP_MS = 720;
+const WORKSPACE_TRANSITION_MS = 760;
 
 const apiBaseUrl = (import.meta.env.PUBLIC_API_BASE_URL || "http://127.0.0.1:8000")
   .replace(/\/$/, "")
@@ -175,9 +178,9 @@ const redirectAfterSignIn = () => {
   const redirectPath = createSafeRedirectPath(
     new URLSearchParams(window.location.search).get("next"),
   );
-  window.setTimeout(() => {
+  redirectTimer = window.setTimeout(() => {
     window.location.assign(redirectPath);
-  }, 360);
+  }, WORKSPACE_TRANSITION_MS);
 };
 
 const readApiError = async (response: Response, fallbackMessage: string) => {
@@ -217,7 +220,8 @@ const postJson = async <ResponseBody,>(path: string, body: unknown, fallbackMess
 const completeSession = (accessToken: string) => {
   persistSession(accessToken);
   status.value = "success";
-  showToast("Signed in.", "success");
+  hideToast();
+  isWorkspaceLoading.value = true;
   redirectAfterSignIn();
 };
 
@@ -560,6 +564,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.clearTimeout(toastTimer);
   window.clearTimeout(cardReturnTimer);
+  window.clearTimeout(redirectTimer);
   window.google?.accounts?.id.cancel();
 });
 
@@ -1049,6 +1054,10 @@ const hideToast = () => {
 
     <div v-if="message" class="app-toast" :class="status" role="status">
       {{ message }}
+    </div>
+
+    <div v-if="isWorkspaceLoading" class="workspace-transition" role="status">
+      <p>Loading</p>
     </div>
   </section>
 </template>
@@ -1795,6 +1804,26 @@ const hideToast = () => {
   color: rgba(220, 250, 230, 0.96);
 }
 
+.workspace-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: rgba(255, 252, 255, 0.92);
+  pointer-events: auto;
+  animation: workspace-transition-in 220ms ease-out both;
+}
+
+.workspace-transition p {
+  margin: 0;
+  font-size: clamp(1rem, 3vw, 1.22rem);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -1804,6 +1833,16 @@ const hideToast = () => {
   to {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+}
+
+@keyframes workspace-transition-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
   }
 }
 
