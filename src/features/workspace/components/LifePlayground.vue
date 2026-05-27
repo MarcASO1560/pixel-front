@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import {
+  ACCESS_TOKEN_COOKIE_NAME,
+  ACCESS_TOKEN_STORAGE_KEY,
+  LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+} from "../../../lib/session";
+
 type Point = readonly [row: number, column: number];
 type PatternKey = "cell" | "glider" | "ship" | "pulsar" | "acorn";
 type PaintMode = "draw" | "erase";
@@ -238,6 +244,14 @@ const clearBoard = () => {
   generation.value = 0;
   updatePopulation();
   draw();
+};
+
+const signOut = () => {
+  window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
+  document.cookie = `${ACCESS_TOKEN_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+  window.dispatchEvent(new CustomEvent("pixel:auth", { detail: { accessToken: null } }));
+  window.location.assign("/login");
 };
 
 const countNeighbors = (row: number, column: number) => {
@@ -531,10 +545,20 @@ onBeforeUnmount(() => {
         <p>Sefkira Studio</p>
         <h1>Life Lab</h1>
       </div>
-      <div class="playground-status" aria-label="Board status">
-        <span>{{ population }} alive</span>
-        <span>{{ generation }} gen</span>
-        <span v-if="props.userName">{{ props.userName }}</span>
+      <div class="playground-header-actions">
+        <div class="playground-status" aria-label="Board status">
+          <span>{{ population }} alive</span>
+          <span>{{ generation }} gen</span>
+          <span v-if="props.userName">{{ props.userName }}</span>
+        </div>
+        <button class="signout-button" type="button" @click="signOut">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <path d="M16 17l5-5-5-5" />
+            <path d="M21 12H9" />
+          </svg>
+          <span>Sign out</span>
+        </button>
       </div>
     </header>
 
@@ -687,6 +711,14 @@ onBeforeUnmount(() => {
   color: rgba(255, 252, 255, 0.66);
 }
 
+.playground-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .playground-status span {
   min-height: 28px;
   display: grid;
@@ -698,6 +730,53 @@ onBeforeUnmount(() => {
   font-size: 0.78rem;
   font-weight: 620;
   line-height: 1;
+}
+
+.signout-button {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(3, 4, 7, 0.52);
+  color: rgba(255, 252, 255, 0.72);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 640;
+  letter-spacing: 0;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.signout-button:hover {
+  border-color: rgba(255, 214, 222, 0.24);
+  background:
+    linear-gradient(135deg, rgba(255, 214, 222, 0.09), rgba(235, 218, 244, 0.06)),
+    rgba(8, 9, 12, 0.68);
+  color: rgba(255, 252, 255, 0.92);
+}
+
+.signout-button:active {
+  transform: translateY(1px);
+}
+
+.signout-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .board-frame {
@@ -848,6 +927,11 @@ onBeforeUnmount(() => {
 
   .playground-status {
     justify-content: flex-start;
+  }
+
+  .playground-header-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .control-button span {
