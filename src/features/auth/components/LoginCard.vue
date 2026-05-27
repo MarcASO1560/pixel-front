@@ -8,6 +8,8 @@ import {
   LEGACY_ACCESS_TOKEN_STORAGE_KEY,
   createSafeRedirectPath,
 } from "../../../lib/session";
+import { WORKSPACE_TRANSITION_STORAGE_KEY } from "../../../lib/routeTransition";
+import WorkspaceLoadingTransition from "../../navigation/components/WorkspaceLoadingTransition.vue";
 import PulsarLogo from "./PulsarLogo.vue";
 
 type GoogleCredentialResponse = {
@@ -97,7 +99,7 @@ let cardReturnTimer = 0;
 let redirectTimer = 0;
 let tokenClient: GoogleTokenClient | null = null;
 const CARD_FLIP_MS = 720;
-const WORKSPACE_TRANSITION_MS = 760;
+const WORKSPACE_TRANSITION_MS = 560;
 
 const apiBaseUrl = (import.meta.env.PUBLIC_API_BASE_URL || "http://127.0.0.1:8000")
   .replace(/\/$/, "")
@@ -221,6 +223,7 @@ const completeSession = (accessToken: string) => {
   persistSession(accessToken);
   status.value = "success";
   hideToast();
+  window.sessionStorage.setItem(WORKSPACE_TRANSITION_STORAGE_KEY, "pending");
   isWorkspaceLoading.value = true;
   redirectAfterSignIn();
 };
@@ -1056,9 +1059,7 @@ const hideToast = () => {
       {{ message }}
     </div>
 
-    <div v-if="isWorkspaceLoading" class="workspace-transition" role="status">
-      <p>Loading</p>
-    </div>
+    <WorkspaceLoadingTransition :active="isWorkspaceLoading" />
   </section>
 </template>
 
@@ -1804,26 +1805,6 @@ const hideToast = () => {
   color: rgba(220, 250, 230, 0.96);
 }
 
-.workspace-transition {
-  position: fixed;
-  inset: 0;
-  z-index: 9;
-  display: grid;
-  place-items: center;
-  background: #000;
-  color: rgba(255, 252, 255, 0.92);
-  pointer-events: auto;
-  animation: workspace-transition-in 220ms ease-out both;
-}
-
-.workspace-transition p {
-  margin: 0;
-  font-size: clamp(1rem, 3vw, 1.22rem);
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1;
-}
-
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -1833,16 +1814,6 @@ const hideToast = () => {
   to {
     opacity: 1;
     transform: translate(-50%, 0);
-  }
-}
-
-@keyframes workspace-transition-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
   }
 }
 

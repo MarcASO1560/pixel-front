@@ -31,12 +31,22 @@ type Camera = {
 
 type Point = readonly [row: number, column: number];
 type Pattern = readonly Point[];
+type SceneVariant = "ambient" | "travelers";
 type SpawnZone = {
   minRow: number;
   maxRow: number;
   minColumn: number;
   maxColumn: number;
 };
+
+const props = withDefaults(
+  defineProps<{
+    variant?: SceneVariant;
+  }>(),
+  {
+    variant: "ambient",
+  },
+);
 
 const patternFromRle = (rle: string): Pattern => {
   const points: Point[] = [];
@@ -242,6 +252,13 @@ const SHIPS: Pattern[] = [
   HEAVYWEIGHT_SPACESHIP,
 ];
 
+const TRAVELER_MOTIFS: Pattern[] = [
+  GLIDER,
+  LIGHTWEIGHT_SPACESHIP,
+  MEDIUMWEIGHT_SPACESHIP,
+  HEAVYWEIGHT_SPACESHIP,
+];
+
 const ORBIT_PATTERNS: Pattern[] = [
   GLIDER,
   LIGHTWEIGHT_SPACESHIP,
@@ -279,6 +296,9 @@ let palettePhase = Math.random() * 360;
 const STEP_MS = 70;
 const INJECTION_MS = 5000;
 const WORLD_SCALE = 2.55;
+const TRAVELER_STEP_MS = 82;
+const TRAVELER_INJECTION_MS = 1800;
+const TRAVELER_WORLD_SCALE = 1.45;
 const CAMERA_FOCUS_PULL = 0.035;
 const CAMERA_ZOOM_EASE = 0.005;
 const CAMERA_MAX_SPEED = 24;
@@ -312,6 +332,16 @@ const randomBetween = (min: number, max: number) =>
 const randomFloat = (min: number, max: number) =>
   min + Math.random() * (max - min);
 
+const isTravelerScene = () => props.variant === "travelers";
+
+const currentStepMs = () => (isTravelerScene() ? TRAVELER_STEP_MS : STEP_MS);
+
+const currentInjectionMs = () =>
+  isTravelerScene() ? TRAVELER_INJECTION_MS : INJECTION_MS;
+
+const currentWorldScale = () =>
+  isTravelerScene() ? TRAVELER_WORLD_SCALE : WORLD_SCALE;
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
@@ -337,19 +367,112 @@ const normalizePattern = (pattern: Point[]) => {
   );
 };
 
-const transformPattern = (pattern: Pattern) => {
+const transformPatternWithOptions = (
+  pattern: Pattern,
+  turns: number,
+  mirrored: boolean,
+) => {
   let transformed = pattern.map(([row, column]) => [row, column] as Point);
-  const turns = randomBetween(0, 3);
 
   for (let turn = 0; turn < turns; turn += 1) {
     transformed = transformed.map(([row, column]) => [column, -row] as Point);
   }
 
-  if (Math.random() > 0.5) {
+  if (mirrored) {
     transformed = transformed.map(([row, column]) => [row, -column] as Point);
   }
 
   return normalizePattern(transformed);
+};
+
+const transformPattern = (pattern: Pattern) =>
+  transformPatternWithOptions(pattern, randomBetween(0, 3), Math.random() > 0.5);
+
+const patternCenter = (pattern: Pattern) => {
+  const sums = pattern.reduce(
+    (accumulator, [row, column]) => ({
+      row: accumulator.row + row,
+      column: accumulator.column + column,
+    }),
+    { row: 0, column: 0 },
+  );
+
+  return {
+    row: sums.row / pattern.length,
+    column: sums.column / pattern.length,
+  };
+};
+
+const stepPatternPoints = (pattern: Pattern) => {
+  const liveCells = new Set(pattern.map(([row, column]) => `${row},${column}`));
+  const neighborCounts = new Map<string, number>();
+
+  for (const [row, column] of pattern) {
+    for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+      for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
+        if (rowOffset === 0 && columnOffset === 0) {
+          continue;
+        }
+
+        const key = `${row + rowOffset},${column + columnOffset}`;
+        neighborCounts.set(key, (neighborCounts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  const nextPattern: Point[] = [];
+
+  for (const [key, neighbors] of neighborCounts) {
+    if (neighbors === 3 || (neighbors === 2 && liveCells.has(key))) {
+      const [row, column] = key.split(",").map(Number);
+      nextPattern.push([row, column]);
+    }
+  }
+
+  return nextPattern;
+};
+
+const directedTravelerPattern = (pattern: Pattern, angle: number) => {
+  const targetRow = Math.sin(angle);
+  const targetColumn = Math.cos(angle);
+  let bestPattern = transformPattern(pattern);
+  let bestScore = -Infinity;
+
+  for (let turns = 0; turns < 4; turns += 1) {
+    for (const mirrored of [false, true]) {
+      const candidate = transformPatternWithOptions(pattern, turns, mirrored);
+      const start = patternCenter(candidate);
+      let evolved: Pattern = candidate;
+
+      for (let step = 0; step < 4; step += 1) {
+        evolved = stepPatternPoints(evolved);
+      }
+
+      if (evolved.length === 0) {
+        continue;
+      }
+
+      const end = patternCenter(evolved);
+      const driftRow = end.row - start.row;
+      const driftColumn = end.column - start.column;
+      const driftLength = Math.hypot(driftRow, driftColumn);
+
+      if (driftLength < 0.05) {
+        continue;
+      }
+
+      const score =
+        (driftRow / driftLength) * targetRow +
+        (driftColumn / driftLength) * targetColumn;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestPattern = candidate;
+      }
+    }
+  }
+
+  return bestPattern;
 };
 
 const placePattern = (
@@ -608,7 +731,55 @@ const placeGunBattery = (board: Uint8Array, columns: number, rows: number) => {
   );
 };
 
+const placeTravelerBurst = (
+  board: Uint8Array,
+  columns: number,
+  rows: number,
+  centerRow: number,
+  centerColumn: number,
+) => {
+  const armCount = randomBetween(8, 11);
+  const ringCount = randomBetween(3, 5);
+  const maxRadius = Math.max(9, Math.floor(Math.min(columns, rows) * 0.48));
+  const angleOffset = Math.random() * Math.PI * 2;
+
+  for (let arm = 0; arm < armCount; arm += 1) {
+    const angle =
+      angleOffset +
+      (Math.PI * 2 * arm) / armCount +
+      randomFloat(-0.1, 0.1);
+
+    for (let ring = 0; ring < ringCount; ring += 1) {
+      const motif =
+        TRAVELER_MOTIFS[randomBetween(0, TRAVELER_MOTIFS.length - 1)];
+      const distance =
+        3 + ((ring + 1) / (ringCount + 0.6)) * maxRadius + randomFloat(-1.4, 1.4);
+
+      placePattern(
+        board,
+        directedTravelerPattern(motif, angle),
+        Math.round(centerRow + Math.sin(angle) * distance),
+        Math.round(centerColumn + Math.cos(angle) * distance),
+        columns,
+        rows,
+      );
+    }
+  }
+};
+
+const createTravelerSeedBoard = (columns: number, rows: number) => {
+  const board = new Uint8Array(columns * rows);
+
+  placeTravelerBurst(board, columns, rows, rows / 2, columns / 2);
+
+  return board;
+};
+
 const createSeedBoard = (columns: number, rows: number) => {
+  if (isTravelerScene()) {
+    return createTravelerSeedBoard(columns, rows);
+  }
+
   const board = new Uint8Array(columns * rows);
   const motifCount = Math.max(8, Math.floor((columns * rows) / 480));
   const fleetCount = Math.max(2, Math.floor((columns * rows) / 2400));
@@ -793,6 +964,18 @@ const injectFreshPattern = (timestamp: number) => {
     return;
   }
 
+  if (isTravelerScene()) {
+    placeTravelerBurst(
+      board,
+      columns,
+      rows,
+      rows / 2 + randomFloat(-rows * 0.035, rows * 0.035),
+      columns / 2 + randomFloat(-columns * 0.035, columns * 0.035),
+    );
+    reviveTrailsFromCells();
+    return;
+  }
+
   const [centerRow, centerColumn] = pickOffCameraSpawn();
   const sceneType = randomBetween(0, 5);
 
@@ -921,6 +1104,11 @@ const pickCameraTarget = () => {
     return;
   }
 
+  if (isTravelerScene()) {
+    aimCameraAt(rows / 2, columns / 2, 0.94);
+    return;
+  }
+
   const bucketColumns = 9;
   const bucketRows = 6;
   const scores = new Float32Array(bucketColumns * bucketRows);
@@ -973,7 +1161,11 @@ const pickCameraTarget = () => {
   const columnSpan = columns / bucketColumns;
   const targetRow = (bucketRow + randomFloat(0.26, 0.74)) * rowSpan;
   const targetColumn = (bucketColumn + randomFloat(0.24, 0.76)) * columnSpan;
-  const zoom = chosen.score > 180 ? randomFloat(0.9, 1.16) : randomFloat(1.05, 1.38);
+  const zoom = isTravelerScene()
+    ? randomFloat(0.88, 1.08)
+    : chosen.score > 180
+      ? randomFloat(0.9, 1.16)
+      : randomFloat(1.05, 1.38);
 
   aimCameraAt(targetRow, targetColumn, zoom);
 };
@@ -1128,14 +1320,22 @@ const resizeBoard = () => {
     return;
   }
 
-  const nextCellSize = rect.width < 720 ? 14 : 18;
+  const nextCellSize = isTravelerScene()
+    ? rect.width < 720
+      ? 16
+      : 20
+    : rect.width < 720
+      ? 14
+      : 18;
+  const minColumns = isTravelerScene() ? 36 : 48;
+  const minRows = isTravelerScene() ? 28 : 34;
   const nextColumns = Math.max(
-    48,
-    Math.ceil((rect.width / nextCellSize) * WORLD_SCALE),
+    minColumns,
+    Math.ceil((rect.width / nextCellSize) * currentWorldScale()),
   );
   const nextRows = Math.max(
-    34,
-    Math.ceil((rect.height / nextCellSize) * WORLD_SCALE),
+    minRows,
+    Math.ceil((rect.height / nextCellSize) * currentWorldScale()),
   );
   const nextWidth = rect.width;
   const nextHeight = rect.height;
@@ -1304,20 +1504,22 @@ const stepBoard = () => {
 const loop = (timestamp: number) => {
   if (lastTick === 0) {
     lastTick = timestamp;
-    nextInjectionAt = timestamp + INJECTION_MS;
+    nextInjectionAt = timestamp + currentInjectionMs();
     draw();
     animationFrame = window.requestAnimationFrame(loop);
     return;
   }
 
-  while (timestamp - lastTick >= STEP_MS) {
+  const stepMs = currentStepMs();
+
+  while (timestamp - lastTick >= stepMs) {
     stepBoard();
-    lastTick += STEP_MS;
+    lastTick += stepMs;
   }
 
   if (timestamp >= nextInjectionAt) {
     injectFreshPattern(timestamp);
-    nextInjectionAt = timestamp + INJECTION_MS;
+    nextInjectionAt = timestamp + currentInjectionMs();
   }
 
   updateCamera(timestamp);
