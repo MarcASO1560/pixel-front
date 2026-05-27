@@ -1,8 +1,8 @@
-# Pixel Studio Front
+# Sefkira Studio Frontend
 
-Frontend de `pixel.studio`, construido con Astro, Vue y TypeScript.
+Astro, Vue, and TypeScript frontend for Sefkira Studio.
 
-## Iniciar el servicio
+## Local Setup
 
 ```powershell
 npm.cmd install
@@ -10,18 +10,30 @@ Copy-Item .env.example .env
 npm.cmd run dev
 ```
 
-Las variables que usa el navegador deben empezar por `PUBLIC_`, porque Astro solo expone al cliente las variables con ese prefijo.
-
-Para usar el backend publicado desde local, deja:
+Local app:
 
 ```text
-PUBLIC_API_BASE_URL="https://pixel-back.vercel.app/api/v1"
+http://127.0.0.1:4321/login
 ```
 
-`PUBLIC_FRONTEND_AUTH_TOKEN` debe tener el mismo valor que `FRONTEND_AUTH_TOKEN` en Vercel.
+## Environment
 
-Aplicacion local:
+Astro only exposes browser variables prefixed with `PUBLIC_`.
 
 ```text
-http://localhost:4321
+PUBLIC_API_BASE_URL="http://127.0.0.1:8001"
+PUBLIC_FRONTEND_AUTH_TOKEN="change-this-frontend-auth-token"
+PUBLIC_GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
+PUBLIC_DEFAULT_IS_ADMIN="false"
+```
+
+For production, set the same variables in Vercel. `PUBLIC_FRONTEND_AUTH_TOKEN`
+must match `FRONTEND_AUTH_TOKEN` in the backend.
+
+## Scripts
+
+```powershell
+npm.cmd run check
+npm.cmd run build
+npm.cmd run preview
 ```

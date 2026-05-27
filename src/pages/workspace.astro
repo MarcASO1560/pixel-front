@@ -1,0 +1,72 @@
+---
+import AppLayout from "../layouts/AppLayout.astro";
+
+export const prerender = false;
+
+const user = Astro.locals.user;
+---
+
+<AppLayout title="Workspace | Sefkira Studio">
+  <main class="workspace-shell">
+    <section class="workspace-panel">
+      <p class="workspace-kicker">Sefkira Studio</p>
+      <h1>Workspace</h1>
+      <p>
+        Connected as <strong>{user?.username || user?.email}</strong>.
+      </p>
+      <p class="workspace-muted">
+        The frontend middleware has validated the API session.
+      </p>
+    </section>
+  </main>
+</AppLayout>
+
+<style>
+  .workspace-shell {
+    min-height: 100svh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(201, 240, 222, 0.08), transparent 32%),
+      radial-gradient(circle at 80% 30%, rgba(230, 210, 245, 0.08), transparent 30%),
+      #050505;
+  }
+
+  .workspace-panel {
+    width: min(100%, 520px);
+    padding: 32px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04)),
+      rgba(8, 9, 11, 0.72);
+    box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
+  }
+
+  .workspace-kicker,
+  .workspace-muted {
+    color: rgba(255, 252, 255, 0.62);
+  }
+
+  .workspace-kicker {
+    margin: 0 0 10px;
+    font-size: 0.86rem;
+    font-weight: 650;
+  }
+
+  h1 {
+    margin: 0 0 18px;
+    font-size: clamp(2rem, 7vw, 3rem);
+    line-height: 1;
+  }
+
+  p {
+    margin: 0;
+    color: rgba(255, 252, 255, 0.88);
+  }
+
+  .workspace-muted {
+    margin-top: 12px;
+  }
+</style>
