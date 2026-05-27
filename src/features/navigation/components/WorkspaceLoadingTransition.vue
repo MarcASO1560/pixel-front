@@ -2,7 +2,6 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { WORKSPACE_TRANSITION_STORAGE_KEY } from "../../../lib/routeTransition";
-import GameOfLife from "../../life-background/components/GameOfLife.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -19,6 +18,7 @@ const isRendered = ref(false);
 const isVisible = ref(false);
 const isLeaving = ref(false);
 let leaveTimer = 0;
+const WORKSPACE_ENTRY_MINIMUM_MS = 2000;
 
 const show = async (options: { instant?: boolean } = {}) => {
   window.clearTimeout(leaveTimer);
@@ -66,6 +66,9 @@ const waitForWorkspacePaint = async () => {
   await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
 };
 
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
 watch(
   () => props.active,
   (active) => {
@@ -89,8 +92,10 @@ onMounted(async () => {
   }
 
   window.sessionStorage.removeItem(WORKSPACE_TRANSITION_STORAGE_KEY);
+  const startedAt = performance.now();
   await show({ instant: true });
   await waitForWorkspacePaint();
+  await wait(Math.max(0, WORKSPACE_ENTRY_MINIMUM_MS - (performance.now() - startedAt)));
   hide();
 });
 
@@ -107,7 +112,9 @@ onBeforeUnmount(() => {
     role="status"
     aria-label="Loading workspace"
   >
-    <GameOfLife variant="travelers" />
+    <div class="pixel-loader" aria-hidden="true">
+      <span class="pixel-loader-core"></span>
+    </div>
   </div>
 </template>
 
@@ -135,21 +142,106 @@ onBeforeUnmount(() => {
   transition-timing-function: ease-in-out;
 }
 
-.workspace-loading-transition :deep(.life-stage) {
-  position: absolute;
+.pixel-loader {
+  --pixel-size: clamp(7px, 1.2vw, 12px);
+  position: relative;
   z-index: 0;
-  background: #000;
-  transform: scale(1.24) rotate(0deg);
-  animation: loading-life-spin 5.4s linear infinite;
+  display: grid;
+  place-items: center;
+  width: calc(var(--pixel-size) * 13);
+  height: calc(var(--pixel-size) * 13);
+  filter: drop-shadow(0 0 18px rgba(226, 247, 237, 0.18));
 }
 
-.workspace-loading-transition :deep(.life-board) {
-  filter: none;
+.pixel-loader::before,
+.pixel-loader::after {
+  position: absolute;
+  content: "";
+  inset: calc(var(--pixel-size) * 2);
+  border: var(--pixel-size) solid rgba(255, 252, 255, 0.035);
+  image-rendering: pixelated;
+  animation: pixel-loader-frame 1.8s steps(4, end) infinite;
 }
 
-@keyframes loading-life-spin {
+.pixel-loader::after {
+  inset: calc(var(--pixel-size) * 3);
+  border-color: rgba(213, 244, 225, 0.045);
+  animation-delay: -0.45s;
+}
+
+.pixel-loader-core {
+  --pixel-a: rgba(255, 252, 244, 0.96);
+  --pixel-b: rgba(223, 249, 232, 0.82);
+  --pixel-c: rgba(238, 218, 246, 0.72);
+  position: relative;
+  display: block;
+  width: var(--pixel-size);
+  height: var(--pixel-size);
+  background: var(--pixel-a);
+  image-rendering: pixelated;
+  box-shadow:
+    0 calc(var(--pixel-size) * -4) var(--pixel-a),
+    calc(var(--pixel-size) * 3) calc(var(--pixel-size) * -3) var(--pixel-b),
+    calc(var(--pixel-size) * 4) 0 rgba(223, 249, 232, 0.55),
+    calc(var(--pixel-size) * 3) calc(var(--pixel-size) * 3) rgba(238, 218, 246, 0.42),
+    0 calc(var(--pixel-size) * 4) rgba(255, 252, 244, 0.34),
+    calc(var(--pixel-size) * -3) calc(var(--pixel-size) * 3) rgba(238, 218, 246, 0.48),
+    calc(var(--pixel-size) * -4) 0 var(--pixel-c),
+    calc(var(--pixel-size) * -3) calc(var(--pixel-size) * -3) var(--pixel-b);
+  transform-origin: 50% 50%;
+  animation:
+    pixel-loader-spin 1.05s steps(8, end) infinite,
+    pixel-loader-pulse 1.8s ease-in-out infinite;
+}
+
+.pixel-loader-core::before {
+  position: absolute;
+  inset: calc(var(--pixel-size) * -1);
+  content: "";
+  border: var(--pixel-size) solid rgba(255, 252, 255, 0.08);
+  opacity: 0.8;
+  image-rendering: pixelated;
+  animation: pixel-loader-scan 1.05s steps(8, end) infinite;
+}
+
+@keyframes pixel-loader-spin {
   to {
-    transform: scale(1.24) rotate(360deg);
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pixel-loader-pulse {
+  0%,
+  100% {
+    filter: brightness(0.9);
+  }
+
+  50% {
+    filter: brightness(1.18);
+  }
+}
+
+@keyframes pixel-loader-scan {
+  0%,
+  100% {
+    border-color: rgba(255, 252, 255, 0.1);
+  }
+
+  50% {
+    border-color: rgba(223, 249, 232, 0.22);
+  }
+}
+
+@keyframes pixel-loader-frame {
+  0%,
+  100% {
+    opacity: 0.36;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.68;
+    transform: scale(1.04);
   }
 }
 </style>
