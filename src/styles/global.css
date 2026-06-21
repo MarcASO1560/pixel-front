@@ -9,8 +9,25 @@
   text-rendering: optimizeLegibility;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+[role="button"],
+[tabindex] {
+  touch-action: manipulation;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
 }
 
 html,
@@ -38,40 +55,8 @@ html.route-transition-pending body::before {
 }
 
 html.route-transition-pending body::after {
-  --pixel-size: clamp(7px, 1.2vw, 12px);
-  --pixel-a: rgba(255, 252, 244, 0.96);
-  --pixel-b: rgba(223, 249, 232, 0.82);
-  --pixel-c: rgba(238, 218, 246, 0.72);
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 91;
-  display: block;
-  width: var(--pixel-size);
-  height: var(--pixel-size);
-  content: "";
-  background: var(--pixel-a);
-  box-shadow:
-    0 calc(var(--pixel-size) * -4) var(--pixel-a),
-    calc(var(--pixel-size) * 3) calc(var(--pixel-size) * -3) var(--pixel-b),
-    calc(var(--pixel-size) * 4) 0 rgba(223, 249, 232, 0.55),
-    calc(var(--pixel-size) * 3) calc(var(--pixel-size) * 3) rgba(238, 218, 246, 0.42),
-    0 calc(var(--pixel-size) * 4) rgba(255, 252, 244, 0.34),
-    calc(var(--pixel-size) * -3) calc(var(--pixel-size) * 3) rgba(238, 218, 246, 0.48),
-    calc(var(--pixel-size) * -4) 0 var(--pixel-c),
-    calc(var(--pixel-size) * -3) calc(var(--pixel-size) * -3) var(--pixel-b);
-  filter: drop-shadow(0 0 18px rgba(226, 247, 237, 0.18));
-  image-rendering: pixelated;
-  pointer-events: none;
-  transform: translate(-50%, -50%) rotate(0deg);
-  transform-origin: 50% 50%;
-  animation: route-pixel-loader-spin 1.05s steps(8, end) infinite;
-}
-
-@keyframes route-pixel-loader-spin {
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
+  display: none !important;
+  content: none !important;
 }
 
 main {

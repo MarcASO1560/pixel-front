@@ -1,9 +1,8 @@
 /// <reference types="astro/client" />
 
 interface ImportMetaEnv {
+  readonly API_BASE_URL?: string;
   readonly PUBLIC_API_BASE_URL?: string;
-  readonly PUBLIC_DEFAULT_IS_ADMIN?: string;
-  readonly PUBLIC_FRONTEND_AUTH_TOKEN?: string;
   readonly PUBLIC_GOOGLE_CLIENT_ID?: string;
 }
 

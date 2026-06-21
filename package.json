@@ -8,16 +8,24 @@
     "build": "astro check && astro build",
     "check": "astro check",
     "preview": "astro preview --host 127.0.0.1",
+    "test:session-proxy": "node scripts/verify-session-proxy.mjs",
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/vercel": "^10.0.7",
+    "@astrojs/vercel": "^10.0.8",
     "@astrojs/vue": "^6.0.1",
-    "astro": "^6.3.8",
+    "@iconify-icons/mdi": "^1.2.48",
+    "@iconify/vue": "^5.0.1",
+    "@lucide/vue": "^1.17.0",
+    "astro": "^6.4.2",
     "vue": "^3.5.35"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "path-to-regexp": "^6.3.0",
+    "yaml": "^2.9.0"
   }
 }

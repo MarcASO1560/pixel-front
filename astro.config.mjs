@@ -4,9 +4,7 @@ import vue from "@astrojs/vue";
 
 export default defineConfig({
   output: "server",
-  adapter: vercel({
-    middlewareMode: "edge",
-  }),
+  adapter: vercel(),
   devToolbar: {
     enabled: false,
   },

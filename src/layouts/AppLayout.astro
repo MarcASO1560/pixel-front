@@ -15,8 +15,21 @@ const { title = "Sefkira Studio", lang = "en" } = Astro.props;
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101111" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style is:inline>
+      html.route-transition-pending body::after {
+        display: none !important;
+        content: none !important;
+      }
+    </style>
     <script is:inline define:vars={{ transitionStorageKey: WORKSPACE_TRANSITION_STORAGE_KEY }}>
       try {
+        const noGridStyle = document.createElement("style");
+        noGridStyle.textContent =
+          "html.route-transition-pending body::after{display:none!important;content:none!important}";
+        document.head.appendChild(noGridStyle);
+
         if (sessionStorage.getItem(transitionStorageKey) === "pending") {
           document.documentElement.classList.add("route-transition-pending");
         }

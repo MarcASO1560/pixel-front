@@ -1,0 +1,35 @@
+---
+import LoginPage from "../../features/auth/pages/LoginPage.astro";
+import LifeBackground from "../../features/life-background/components/LifeBackground.astro";
+import ProjectShareGate from "../../features/workspace/components/ProjectShareGate.vue";
+import AppLayout from "../../layouts/AppLayout.astro";
+
+export const prerender = false;
+
+const token = Astro.params.token || "";
+const sharePath = `/share/${encodeURIComponent(token)}`;
+const isAuthenticated = Boolean(Astro.locals.user);
+---
+
+<AppLayout title="Shared project | Sefkira Studio">
+  {
+    isAuthenticated ? (
+      <main class="share-page" aria-label="Join shared project">
+        <LifeBackground />
+        <ProjectShareGate client:load token={token} />
+      </main>
+    ) : (
+      <LoginPage redirectPath={sharePath} />
+    )
+  }
+</AppLayout>
+
+<style>
+  .share-page {
+    position: relative;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: hidden;
+    background: #050505;
+  }
+</style>

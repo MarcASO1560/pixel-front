@@ -1,9 +1,15 @@
 ---
 import LifeBackground from "../../life-background/components/LifeBackground.astro";
 import LoginCard from "../components/LoginCard.vue";
+
+interface Props {
+  redirectPath?: string;
+}
+
+const { redirectPath = "" } = Astro.props;
 ---
 
 <main class="auth-page" aria-label="Sefkira Studio sign in">
   <LifeBackground />
-  <LoginCard client:load />
+  <LoginCard client:load redirectPath={redirectPath} />
 </main>

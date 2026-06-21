@@ -1,0 +1,3278 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from "vue";
+
+import {
+  API_V1_URL,
+  type PixelAvatarData,
+  type ProjectAccessRole,
+  type ProjectAccessUserPublic,
+  type ProjectPublic,
+  type ProjectShareLinkPublic,
+  type UserPublic,
+  type WorkspaceBootstrap,
+} from "../../../lib/api";
+import { WORKSPACE_TRANSITION_STORAGE_KEY } from "../../../lib/routeTransition";
+import StudioTopbarCommandBar from "../../navigation/components/StudioTopbarCommandBar.vue";
+import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
+import { PIXEL_ART_PALETTE } from "../../pixel-art/lib/palette";
+import LifeOscillatorPreview from "./LifeOscillatorPreview.vue";
+import ProjectEditorDialog from "./ProjectEditorDialog.vue";
+import UserProfileDialog from "./UserProfileDialog.vue";
+
+type ExplorerProject = {
+  id: string;
+  name: string;
+  color: string;
+  accessRole: ProjectAccessRole;
+  accessCount: number;
+  projectPixelArt: PixelAvatarData | null;
+};
+
+type ShareLinkRole = Extract<ProjectAccessRole, "viewer" | "editor">;
+
+const props = defineProps<{
+  userName?: string;
+  userUsername?: string | null;
+  userAvatarUrl?: string;
+  userEmail?: string;
+  userPixelAvatar?: PixelAvatarData | null;
+}>();
+
+const PROJECT_PIXEL_SIZE = 16;
+const DEFAULT_PROJECT_COLOR = "#f7f1e7";
+const DELETE_LOADING_MIN_MS = 520;
+const LOAD_MESSAGE_TIMEOUT_MS = 4200;
+const WORKSPACE_SYNC_INTERVAL_MS = 30000;
+const PROJECT_ACCESS_SYNC_INTERVAL_MS = 15000;
+const REALTIME_REFRESH_DELAY_MS = 180;
+const REQUEST_TIMEOUT_MS = 18000;
+const STALE_SYNC_MS = REQUEST_TIMEOUT_MS + 5000;
+
+const projects = ref<ExplorerProject[]>([]);
+const selectedProjectId = ref<string | null>(null);
+const searchQuery = ref("");
+const isLoading = ref(true);
+const isSyncingWorkspace = ref(false);
+const workspaceSyncStartedAt = ref<number | null>(null);
+const loadMessage = ref("");
+const loadMessageTimeoutId = ref<number | null>(null);
+const workspaceSyncIntervalId = ref<number | null>(null);
+const projectAccessSyncIntervalId = ref<number | null>(null);
+const realtimeEventSource = ref<EventSource | null>(null);
+const workspaceRefreshTimeoutId = ref<number | null>(null);
+const accessRefreshTimeoutId = ref<number | null>(null);
+const activeMenuProjectId = ref<string | null>(null);
+const isProfileDialogOpen = ref(false);
+const profileUserName = ref(props.userName || "");
+const profileUsername = ref(props.userUsername || "");
+const profileAvatarUrl = ref(props.userAvatarUrl || "");
+const profileEmail = ref(props.userEmail || "");
+const profilePixelAvatar = ref<PixelAvatarData | null>(props.userPixelAvatar || null);
+
+const isCreateOpen = ref(false);
+const isCreating = ref(false);
+const projectPendingLeave = ref<ExplorerProject | null>(null);
+const projectPendingDelete = ref<ExplorerProject | null>(null);
+const isDeletingProject = ref(false);
+const projectPendingShare = ref<ExplorerProject | null>(null);
+const projectShareLink = ref<ProjectShareLinkPublic | null>(null);
+const shareRole = ref<ShareLinkRole>("editor");
+const shareMessage = ref("");
+const isSharingProject = ref(false);
+const projectPendingInfo = ref<ExplorerProject | null>(null);
+const projectAccessUsers = ref<ProjectAccessUserPublic[]>([]);
+const accessMessage = ref("");
+const isLoadingProjectAccess = ref(false);
+const isSyncingProjectAccess = ref(false);
+const projectAccessSyncStartedAt = ref<number | null>(null);
+const accessUpdatingUserId = ref<string | null>(null);
+const accessRemovingUserId = ref<string | null>(null);
+const accessUserPendingRemove = ref<ProjectAccessUserPublic | null>(null);
+const leavingProjectId = ref<string | null>(null);
+const editingProjectId = ref<string | null>(null);
+const createName = ref("");
+const projectAvatarPixels = ref<Array<string | null>>([]);
+const showProjectUnsavedConfirm = ref(false);
+const initialProjectName = ref("");
+const initialProjectPixelsKey = ref("");
+const editingProjectHasRemoteChanges = ref(false);
+const isEditingProject = computed(() => Boolean(editingProjectId.value));
+
+const projectRoleOptions: Array<{
+  value: ProjectAccessRole;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "viewer",
+    label: "View only",
+    description: "Can open the project without editing it.",
+  },
+  {
+    value: "editor",
+    label: "Can edit",
+    description: "Can update project content.",
+  },
+  {
+    value: "owner",
+    label: "Owner",
+    description: "Can manage sharing and access.",
+  },
+];
+
+const shareRoleOptions: Array<{
+  value: ShareLinkRole;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "viewer",
+    label: "View only",
+    description: "People can open the project, but they cannot edit it.",
+  },
+  {
+    value: "editor",
+    label: "Can edit",
+    description: "People can open the project and save changes.",
+  },
+];
+
+const currentUserAvatarUrl = computed(() => profileAvatarUrl.value.trim());
+const currentUserEmail = computed(() => profileEmail.value.trim());
+
+const projectPixelPalette = computed(() => PIXEL_ART_PALETTE);
+
+const projectPixelArtPreview = computed<PixelAvatarData>(() => ({
+  version: 1,
+  size: PROJECT_PIXEL_SIZE,
+  palette: projectPixelPalette.value,
+  pixels: [...projectAvatarPixels.value],
+}));
+
+const shareProjectUrl = computed(() => {
+  if (!projectShareLink.value) {
+    return "";
+  }
+
+  const sharePath = `/share/${encodeURIComponent(projectShareLink.value.token)}`;
+  if (typeof window === "undefined") {
+    return sharePath;
+  }
+
+  return new URL(sharePath, window.location.origin).toString();
+});
+
+const shareRoleLabel = computed(
+  () => shareRoleOptions.find((option) => option.value === shareRole.value)?.label || "Can edit",
+);
+
+const projectAccessCountLabel = computed(() => {
+  const count = projectAccessUsers.value.length;
+  if (isLoadingProjectAccess.value) {
+    return "Loading access...";
+  }
+
+  return count === 1 ? "1 person has access" : `${count} people have access`;
+});
+
+const accessUserName = (user: ProjectAccessUserPublic) =>
+  user.username ? `@${user.username}` : user.email.split("@")[0] || "User";
+
+const accessRoleLabel = (roleOrUser: ProjectAccessRole | ProjectAccessUserPublic) => {
+  const role = typeof roleOrUser === "string" ? roleOrUser : roleOrUser.role;
+  if (role === "owner") return "Owner";
+  if (role === "viewer") return "Viewer";
+  return "Editor";
+};
+
+const canManageProjectAccess = computed(
+  () => projectPendingInfo.value?.accessRole === "owner" && !projectPendingInfo.value.id.startsWith("local-"),
+);
+
+const canLeaveProject = (project: ExplorerProject) => {
+  if (project.id.startsWith("local-")) {
+    return false;
+  }
+
+  return project.accessCount > 1;
+};
+
+const canDeleteProject = (project: ExplorerProject) => {
+  if (project.id.startsWith("local-")) {
+    return project.accessRole === "owner";
+  }
+
+  return project.accessRole === "owner" && project.accessCount <= 1;
+};
+
+const isCurrentAccessUser = (user: ProjectAccessUserPublic) =>
+  user.email === currentUserEmail.value;
+
+const accessUserInitials = (user: ProjectAccessUserPublic) => {
+  const label = user.username || user.email;
+  const [firstPart = ""] = label.split("@");
+  const initials = firstPart
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+
+  return initials || "U";
+};
+
+const visibleProjects = computed(() => {
+  const normalizedSearch = searchQuery.value.trim().toLowerCase();
+
+  return projects.value.filter((project) => {
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return project.name.toLowerCase().includes(normalizedSearch);
+  });
+});
+
+const emptyTitle = computed(() => {
+  if (searchQuery.value.trim()) {
+    return "No matches found";
+  }
+
+  return "No projects yet";
+});
+
+const emptyCopy = computed(() => {
+  if (searchQuery.value.trim()) {
+    return "Try another project name.";
+  }
+
+  return "Create your first project.";
+});
+
+const readSetting = <Value,>(
+  settings: Record<string, unknown> | undefined,
+  key: string,
+  fallback: Value,
+) => {
+  const value = settings?.[key];
+  return value === undefined ? fallback : (value as Value);
+};
+
+const createEmptyProjectPixels = () =>
+  Array<string | null>(PROJECT_PIXEL_SIZE * PROJECT_PIXEL_SIZE).fill(null);
+
+const pixelsKey = (pixels: Array<string | null>) => pixels.map((pixel) => pixel || "").join("|");
+
+const hasProjectPixels = (pixels: Array<string | null> | undefined) =>
+  Boolean(pixels?.some((pixel) => pixel));
+
+const hasProjectPixelArt = (pixelArt: PixelAvatarData | null | undefined) =>
+  hasProjectPixels(pixelArt?.pixels);
+
+const buildProjectPixelArt = () =>
+  hasProjectPixels(projectAvatarPixels.value) ? projectPixelArtPreview.value : null;
+
+const mapProject = (
+  project: ProjectPublic,
+  overrides: Partial<ExplorerProject> = {},
+): ExplorerProject => {
+  const settings = project.settings || {};
+
+  return {
+    id: project.id,
+    name: project.name,
+    color: readSetting<string>(settings, "color", DEFAULT_PROJECT_COLOR),
+    accessRole: project.access_role || "owner",
+    accessCount: project.access_count || 1,
+    projectPixelArt: readSetting<PixelAvatarData | null>(settings, "project_pixel_art", null),
+    ...overrides,
+  };
+};
+
+const buildLocalProject = (): ExplorerProject => {
+  return {
+    id: `local-${crypto.randomUUID()}`,
+    name: createName.value.trim() || "New project",
+    color: DEFAULT_PROJECT_COLOR,
+    accessRole: "owner",
+    accessCount: 1,
+    projectPixelArt: buildProjectPixelArt(),
+  };
+};
+
+const requestJson = async <ResponseBody,>(
+  path: string,
+  init: RequestInit = {},
+) => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_V1_URL}${path}`, {
+      ...init,
+      credentials: "same-origin",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The connection took too long to respond.");
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    let message = `API request failed: ${response.status}`;
+
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) {
+        message = payload.detail;
+      }
+    } catch {
+      // Keep the generic status message when the API returns an empty body.
+    }
+
+    throw new Error(message);
+  }
+
+  if (response.status === 204) {
+    return undefined as ResponseBody;
+  }
+
+  return (await response.json()) as ResponseBody;
+};
+
+const resetStaleWorkspaceSync = () => {
+  if (
+    isSyncingWorkspace.value &&
+    workspaceSyncStartedAt.value &&
+    Date.now() - workspaceSyncStartedAt.value > STALE_SYNC_MS
+  ) {
+    isSyncingWorkspace.value = false;
+    workspaceSyncStartedAt.value = null;
+    isLoading.value = false;
+  }
+};
+
+const resetStaleProjectAccessSync = () => {
+  if (
+    isSyncingProjectAccess.value &&
+    projectAccessSyncStartedAt.value &&
+    Date.now() - projectAccessSyncStartedAt.value > STALE_SYNC_MS
+  ) {
+    isSyncingProjectAccess.value = false;
+    projectAccessSyncStartedAt.value = null;
+    isLoadingProjectAccess.value = false;
+  }
+};
+
+const applyWorkspaceProjects = (nextProjects: ExplorerProject[]) => {
+  projects.value = nextProjects;
+
+  if (!nextProjects.some((project) => project.id === selectedProjectId.value)) {
+    selectedProjectId.value = nextProjects[0]?.id || null;
+  }
+
+  if (activeMenuProjectId.value && !nextProjects.some((project) => project.id === activeMenuProjectId.value)) {
+    activeMenuProjectId.value = null;
+  }
+
+  const syncPendingProject = (project: ExplorerProject | null) =>
+    project ? nextProjects.find((nextProject) => nextProject.id === project.id) || null : null;
+
+  if (projectPendingInfo.value) {
+    const syncedProject = syncPendingProject(projectPendingInfo.value);
+    if (syncedProject) {
+      projectPendingInfo.value = syncedProject;
+    } else {
+      const projectName = projectPendingInfo.value.name;
+      closeProjectInfoDialog();
+      showLoadMessage(`You no longer have access to "${projectName}".`);
+    }
+  }
+
+  projectPendingShare.value = syncPendingProject(projectPendingShare.value);
+  projectPendingLeave.value = syncPendingProject(projectPendingLeave.value);
+  projectPendingDelete.value = syncPendingProject(projectPendingDelete.value);
+
+  if (editingProjectId.value) {
+    const syncedProject = nextProjects.find((project) => project.id === editingProjectId.value);
+    if (!syncedProject) {
+      closeProjectDialogNow();
+      showLoadMessage("This project is no longer available.");
+    } else if (isCreateOpen.value && !hasProjectUnsavedChanges.value) {
+      createName.value = syncedProject.name;
+      projectAvatarPixels.value = syncedProject.projectPixelArt?.pixels
+        ? [...syncedProject.projectPixelArt.pixels]
+        : createEmptyProjectPixels();
+      rememberProjectDialogState();
+    }
+  }
+};
+
+const refreshWorkspace = async ({
+  showLoading = false,
+  resetMessage = false,
+  showError = false,
+} = {}) => {
+  resetStaleWorkspaceSync();
+  if (isSyncingWorkspace.value) {
+    return;
+  }
+
+  isSyncingWorkspace.value = true;
+  workspaceSyncStartedAt.value = Date.now();
+  if (showLoading) {
+    isLoading.value = true;
+  }
+  if (resetMessage) {
+    clearLoadMessage();
+  }
+
+  try {
+    const workspace = await requestJson<WorkspaceBootstrap>("/workspace/");
+    applyWorkspaceProjects(workspace.projects.map((project) => mapProject(project)));
+  } catch {
+    if (showError) {
+      showLoadMessage("Remote projects could not be loaded. You can still create a local draft.");
+    }
+  } finally {
+    if (showLoading) {
+      isLoading.value = false;
+    }
+    isSyncingWorkspace.value = false;
+    workspaceSyncStartedAt.value = null;
+  }
+};
+
+const loadWorkspace = async () => {
+  await refreshWorkspace({
+    showLoading: true,
+    resetMessage: true,
+    showError: true,
+  });
+};
+
+const acceptProjectShareFromUrl = async () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  const shareToken = url.searchParams.get("share");
+  if (!shareToken) {
+    return;
+  }
+
+  try {
+    const sharedProject = await requestJson<ProjectPublic>(
+      `/projects/share-links/${encodeURIComponent(shareToken)}/accept`,
+      { method: "POST" },
+    );
+    const explorerProject = mapProject(sharedProject);
+    projects.value = [
+      explorerProject,
+      ...projects.value.filter((project) => project.id !== explorerProject.id),
+    ];
+    selectedProjectId.value = explorerProject.id;
+    showLoadMessage(`"${explorerProject.name}" has been added to your studio.`);
+  } catch {
+    showLoadMessage("This share link is not available anymore.");
+  } finally {
+    url.searchParams.delete("share");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+};
+
+const initializeWorkspace = async () => {
+  await loadWorkspace();
+  await acceptProjectShareFromUrl();
+};
+
+const rememberProjectDialogState = () => {
+  initialProjectName.value = createName.value.trim();
+  initialProjectPixelsKey.value = pixelsKey(projectAvatarPixels.value);
+  showProjectUnsavedConfirm.value = false;
+  editingProjectHasRemoteChanges.value = false;
+};
+
+const hasProjectUnsavedChanges = computed(
+  () =>
+    createName.value.trim() !== initialProjectName.value ||
+    pixelsKey(projectAvatarPixels.value) !== initialProjectPixelsKey.value,
+);
+
+const resetCreateForm = () => {
+  createName.value = "New project";
+  projectAvatarPixels.value = createEmptyProjectPixels();
+  rememberProjectDialogState();
+};
+
+const buildProjectSettings = (project: ExplorerProject) => ({
+  color: project.color,
+  project_pixel_art: project.projectPixelArt,
+});
+
+const openCreateDialog = () => {
+  resetCreateForm();
+  editingProjectId.value = null;
+  isCreateOpen.value = true;
+};
+
+const openEditDialog = (project: ExplorerProject) => {
+  createName.value = project.name;
+  projectAvatarPixels.value = project.projectPixelArt?.pixels
+    ? [...project.projectPixelArt.pixels]
+    : createEmptyProjectPixels();
+  rememberProjectDialogState();
+  editingProjectId.value = project.id;
+  activeMenuProjectId.value = null;
+  isCreateOpen.value = true;
+};
+
+const closeProjectDialogNow = () => {
+  isCreateOpen.value = false;
+  editingProjectId.value = null;
+  showProjectUnsavedConfirm.value = false;
+  editingProjectHasRemoteChanges.value = false;
+};
+
+const closeCreateDialog = () => {
+  if (isCreating.value) {
+    return;
+  }
+
+  if (hasProjectUnsavedChanges.value) {
+    showProjectUnsavedConfirm.value = true;
+    return;
+  }
+
+  closeProjectDialogNow();
+};
+
+const discardProjectChanges = () => {
+  closeProjectDialogNow();
+};
+
+const createRemoteProject = async (localProject: ExplorerProject) => {
+  const createdProject = await requestJson<ProjectPublic>("/projects/", {
+    method: "POST",
+    body: JSON.stringify({
+      name: localProject.name,
+      description: null,
+      settings: buildProjectSettings(localProject),
+      thumbnail_url: null,
+    }),
+  });
+
+  return mapProject(createdProject, {
+    projectPixelArt: localProject.projectPixelArt,
+  });
+};
+
+const buildProjectFromForm = (project: ExplorerProject): ExplorerProject => ({
+  ...project,
+  name: createName.value.trim() || project.name,
+  projectPixelArt: buildProjectPixelArt(),
+});
+
+const updateRemoteProject = async (
+  originalProject: ExplorerProject,
+  nextProject: ExplorerProject,
+) => {
+  const updatedProject = await requestJson<ProjectPublic>(`/projects/${originalProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: nextProject.name,
+      description: null,
+      settings: buildProjectSettings(nextProject),
+      thumbnail_url: null,
+    }),
+  });
+
+  return mapProject(updatedProject, {
+    projectPixelArt: nextProject.projectPixelArt,
+  });
+};
+
+const createProject = async () => {
+  if (!createName.value.trim()) {
+    return;
+  }
+
+  isCreating.value = true;
+  const localProject = buildLocalProject();
+
+  try {
+    const remoteProject = await createRemoteProject(localProject);
+    projects.value = [remoteProject, ...projects.value];
+    selectedProjectId.value = remoteProject.id;
+  } catch {
+    projects.value = [localProject, ...projects.value];
+    selectedProjectId.value = localProject.id;
+    showLoadMessage("Project created locally for this session. The remote connection did not respond.");
+  } finally {
+    isCreating.value = false;
+    closeProjectDialogNow();
+  }
+};
+
+const updateProject = async () => {
+  if (!createName.value.trim() || !editingProjectId.value) {
+    return;
+  }
+
+  const existingProject = projects.value.find((project) => project.id === editingProjectId.value);
+
+  if (!existingProject) {
+    return;
+  }
+
+  isCreating.value = true;
+  const localProject = buildProjectFromForm(existingProject);
+
+  try {
+    const nextProject = existingProject.id.startsWith("local-")
+      ? localProject
+      : await updateRemoteProject(existingProject, localProject);
+    projects.value = projects.value.map((project) =>
+      project.id === existingProject.id ? nextProject : project,
+    );
+    selectedProjectId.value = nextProject.id;
+  } catch {
+    projects.value = projects.value.map((project) =>
+      project.id === existingProject.id ? localProject : project,
+    );
+    selectedProjectId.value = existingProject.id;
+    showLoadMessage("Project updated locally for this session. The remote connection did not respond.");
+  } finally {
+    isCreating.value = false;
+    closeProjectDialogNow();
+  }
+};
+
+const saveProject = () => {
+  if (editingProjectHasRemoteChanges.value) {
+    showLoadMessage("This project changed in another session. Reopen it before saving.");
+    return;
+  }
+
+  if (isEditingProject.value) {
+    void updateProject();
+    return;
+  }
+
+  void createProject();
+};
+
+const saveProjectUnsavedChanges = () => {
+  if (!createName.value.trim()) {
+    createName.value = "New project";
+  }
+
+  saveProject();
+};
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+
+const clearLoadMessageTimeout = () => {
+  if (loadMessageTimeoutId.value === null) {
+    return;
+  }
+
+  window.clearTimeout(loadMessageTimeoutId.value);
+  loadMessageTimeoutId.value = null;
+};
+
+const clearLoadMessage = () => {
+  clearLoadMessageTimeout();
+  loadMessage.value = "";
+};
+
+const showLoadMessage = (message: string, autoDismiss = true) => {
+  clearLoadMessageTimeout();
+  loadMessage.value = message;
+
+  if (!message || !autoDismiss) {
+    return;
+  }
+
+  loadMessageTimeoutId.value = window.setTimeout(() => {
+    loadMessage.value = "";
+    loadMessageTimeoutId.value = null;
+  }, LOAD_MESSAGE_TIMEOUT_MS);
+};
+
+const requestLeaveProject = (project: ExplorerProject) => {
+  activeMenuProjectId.value = null;
+  projectPendingLeave.value = project;
+};
+
+const closeLeaveDialog = () => {
+  if (leavingProjectId.value) {
+    return;
+  }
+
+  projectPendingLeave.value = null;
+};
+
+const requestDeleteProject = (project: ExplorerProject) => {
+  activeMenuProjectId.value = null;
+  projectPendingDelete.value = project;
+};
+
+const closeShareDialog = () => {
+  if (isSharingProject.value) {
+    return;
+  }
+
+  projectPendingShare.value = null;
+  projectShareLink.value = null;
+  shareRole.value = "editor";
+  shareMessage.value = "";
+};
+
+const normalizeShareRole = (role: ProjectAccessRole): ShareLinkRole =>
+  role === "viewer" ? "viewer" : "editor";
+
+const saveShareLink = async (project: ExplorerProject, role: ShareLinkRole) =>
+  requestJson<ProjectShareLinkPublic>(`/projects/${project.id}/share-link`, {
+    method: "POST",
+    body: JSON.stringify({ role }),
+  });
+
+const openShareDialog = async (project: ExplorerProject) => {
+  activeMenuProjectId.value = null;
+  projectPendingShare.value = project;
+  projectShareLink.value = null;
+  shareRole.value = "editor";
+  shareMessage.value = "";
+  isSharingProject.value = true;
+
+  try {
+    const existingShareLink = await requestJson<ProjectShareLinkPublic | null>(
+      `/projects/${project.id}/share-link`,
+    );
+    projectShareLink.value =
+      existingShareLink || (await saveShareLink(project, shareRole.value));
+    shareRole.value = normalizeShareRole(projectShareLink.value.role);
+  } catch (error) {
+    shareMessage.value =
+      error instanceof Error ? error.message : "Share link could not be created.";
+  } finally {
+    isSharingProject.value = false;
+  }
+};
+
+const updateShareRole = async (role: ShareLinkRole) => {
+  if (!projectPendingShare.value || shareRole.value === role) {
+    return;
+  }
+
+  const previousRole = shareRole.value;
+  shareRole.value = role;
+  shareMessage.value = "";
+  isSharingProject.value = true;
+
+  try {
+    projectShareLink.value = await saveShareLink(projectPendingShare.value, role);
+  } catch (error) {
+    shareRole.value = previousRole;
+    shareMessage.value =
+      error instanceof Error ? error.message : "Share permission could not be updated.";
+  } finally {
+    isSharingProject.value = false;
+  }
+};
+
+const copyShareLink = async () => {
+  const shareUrl = shareProjectUrl.value;
+  if (!shareUrl) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(shareUrl);
+    shareMessage.value = "Link copied.";
+  } catch (error) {
+    shareMessage.value = error instanceof Error ? error.message : "Link could not be copied.";
+  }
+};
+
+const buildLocalProjectAccess = (): ProjectAccessUserPublic => ({
+  id: "local-current-user",
+  username: profileUsername.value || null,
+  email: currentUserEmail.value || "You",
+  avatar_url: currentUserAvatarUrl.value || null,
+  avatar_pixel_art: profilePixelAvatar.value,
+  role: "owner",
+  is_owner: true,
+  joined_at: null,
+});
+
+const closeProjectInfoDialog = () => {
+  projectPendingInfo.value = null;
+  projectAccessUsers.value = [];
+  accessMessage.value = "";
+  isLoadingProjectAccess.value = false;
+  isSyncingProjectAccess.value = false;
+  accessUpdatingUserId.value = null;
+  accessRemovingUserId.value = null;
+  accessUserPendingRemove.value = null;
+};
+
+const applyProjectAccessSnapshot = (
+  projectId: string,
+  accessUsers: ProjectAccessUserPublic[],
+) => {
+  if (projectPendingInfo.value?.id === projectId) {
+    projectAccessUsers.value = accessUsers;
+  }
+
+  updateStoredProjectAccessCount(projectId, accessUsers.length);
+
+  const currentUser = accessUsers.find((user) => isCurrentAccessUser(user));
+  if (currentUser) {
+    updateStoredProjectRole(projectId, currentUser.role);
+  }
+};
+
+const syncOpenProjectAccess = async ({
+  showLoading = false,
+  showMissingMessage = true,
+} = {}) => {
+  const project = projectPendingInfo.value;
+  resetStaleProjectAccessSync();
+  if (
+    !project ||
+    project.id.startsWith("local-") ||
+    isSyncingProjectAccess.value ||
+    accessUpdatingUserId.value ||
+    accessRemovingUserId.value
+  ) {
+    return;
+  }
+
+  isSyncingProjectAccess.value = true;
+  projectAccessSyncStartedAt.value = Date.now();
+  if (showLoading) {
+    isLoadingProjectAccess.value = true;
+  }
+
+  try {
+    const accessUsers = await requestJson<ProjectAccessUserPublic[]>(
+      `/projects/${project.id}/access`,
+    );
+    applyProjectAccessSnapshot(project.id, accessUsers);
+  } catch (error) {
+    if (showLoading) {
+      accessMessage.value =
+        error instanceof Error ? error.message : "Project access could not be loaded.";
+    } else if (showMissingMessage) {
+      closeProjectInfoDialog();
+      projects.value = projects.value.filter((currentProject) => currentProject.id !== project.id);
+      showLoadMessage(`You no longer have access to "${project.name}".`);
+    }
+  } finally {
+    if (showLoading) {
+      isLoadingProjectAccess.value = false;
+    }
+    isSyncingProjectAccess.value = false;
+    projectAccessSyncStartedAt.value = null;
+  }
+};
+
+const openProjectInfoDialog = async (project: ExplorerProject) => {
+  activeMenuProjectId.value = null;
+  projectPendingInfo.value = project;
+  projectAccessUsers.value = [];
+  accessMessage.value = "";
+
+  if (project.id.startsWith("local-")) {
+    projectAccessUsers.value = [buildLocalProjectAccess()];
+    return;
+  }
+
+  await syncOpenProjectAccess({ showLoading: true, showMissingMessage: false });
+};
+
+const updateStoredProjectRole = (projectId: string, role: ProjectAccessRole) => {
+  projects.value = projects.value.map((project) =>
+    project.id === projectId ? { ...project, accessRole: role } : project,
+  );
+
+  if (projectPendingInfo.value?.id === projectId) {
+    projectPendingInfo.value = { ...projectPendingInfo.value, accessRole: role };
+  }
+};
+
+const updateStoredProjectAccessCount = (projectId: string, accessCount: number) => {
+  projects.value = projects.value.map((project) =>
+    project.id === projectId ? { ...project, accessCount } : project,
+  );
+
+  if (projectPendingInfo.value?.id === projectId) {
+    projectPendingInfo.value = { ...projectPendingInfo.value, accessCount };
+  }
+};
+
+const updateAccessUserRole = async (user: ProjectAccessUserPublic, role: ProjectAccessRole) => {
+  if (
+    !projectPendingInfo.value ||
+    user.role === role ||
+    accessUpdatingUserId.value
+  ) {
+    return;
+  }
+
+  accessUpdatingUserId.value = user.id;
+  accessMessage.value = "";
+
+  try {
+    const updatedUser = await requestJson<ProjectAccessUserPublic>(
+      `/projects/${projectPendingInfo.value.id}/members/${user.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      },
+    );
+    projectAccessUsers.value = projectAccessUsers.value.map((accessUser) =>
+      accessUser.id === updatedUser.id ? updatedUser : accessUser,
+    );
+
+    if (isCurrentAccessUser(updatedUser)) {
+      updateStoredProjectRole(projectPendingInfo.value.id, updatedUser.role);
+    }
+  } catch (error) {
+    accessMessage.value =
+      error instanceof Error ? error.message : "Project access could not be updated.";
+  } finally {
+    accessUpdatingUserId.value = null;
+    void syncOpenProjectAccess({ showMissingMessage: false });
+  }
+};
+
+const requestRemoveAccessUser = (user: ProjectAccessUserPublic) => {
+  if (!projectPendingInfo.value || user.is_owner || isCurrentAccessUser(user)) {
+    return;
+  }
+
+  accessUserPendingRemove.value = user;
+};
+
+const closeRemoveAccessUserDialog = () => {
+  if (accessRemovingUserId.value) {
+    return;
+  }
+
+  accessUserPendingRemove.value = null;
+};
+
+const removeAccessUser = async (user: ProjectAccessUserPublic) => {
+  if (!projectPendingInfo.value || user.is_owner || isCurrentAccessUser(user)) {
+    return false;
+  }
+
+  accessRemovingUserId.value = user.id;
+  accessMessage.value = "";
+
+  try {
+    await requestJson<void>(`/projects/${projectPendingInfo.value.id}/members/${user.id}`, {
+      method: "DELETE",
+    });
+    projectAccessUsers.value = projectAccessUsers.value.filter(
+      (accessUser) => accessUser.id !== user.id,
+    );
+    updateStoredProjectAccessCount(projectPendingInfo.value.id, projectAccessUsers.value.length);
+    return true;
+  } catch (error) {
+    accessMessage.value =
+      error instanceof Error ? error.message : "Project access could not be removed.";
+    return false;
+  } finally {
+    accessRemovingUserId.value = null;
+    void syncOpenProjectAccess({ showMissingMessage: false });
+  }
+};
+
+const confirmRemoveAccessUser = async () => {
+  if (!accessUserPendingRemove.value || accessRemovingUserId.value) {
+    return;
+  }
+
+  const didRemove = await removeAccessUser(accessUserPendingRemove.value);
+  if (didRemove) {
+    accessUserPendingRemove.value = null;
+  }
+};
+
+const leaveProject = async (project: ExplorerProject) => {
+  if (!canLeaveProject(project) || leavingProjectId.value) {
+    return false;
+  }
+
+  leavingProjectId.value = project.id;
+  clearLoadMessage();
+
+  try {
+    await requestJson<void>(`/projects/${project.id}/members/me`, {
+      method: "DELETE",
+    });
+    projects.value = projects.value.filter((currentProject) => currentProject.id !== project.id);
+    if (selectedProjectId.value === project.id) {
+      selectedProjectId.value = visibleProjects.value[0]?.id || null;
+    }
+    activeMenuProjectId.value = null;
+    if (projectPendingInfo.value?.id === project.id) {
+      closeProjectInfoDialog();
+    }
+    showLoadMessage(`You left "${project.name}".`);
+    return true;
+  } catch (error) {
+    showLoadMessage(error instanceof Error ? error.message : "You could not leave this project.");
+    return false;
+  } finally {
+    leavingProjectId.value = null;
+  }
+};
+
+const confirmLeaveProject = async () => {
+  if (!projectPendingLeave.value || leavingProjectId.value) {
+    return;
+  }
+
+  const didLeave = await leaveProject(projectPendingLeave.value);
+  if (didLeave) {
+    projectPendingLeave.value = null;
+  }
+};
+
+const closeDeleteDialog = () => {
+  if (isDeletingProject.value) {
+    return;
+  }
+
+  projectPendingDelete.value = null;
+};
+
+const deleteProject = async (project: ExplorerProject) => {
+  activeMenuProjectId.value = null;
+
+  if (!project.id.startsWith("local-")) {
+    try {
+      await requestJson<ProjectPublic>(`/projects/${project.id}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      showLoadMessage(error instanceof Error ? error.message : "Project could not be deleted.");
+      return false;
+    }
+  }
+
+  projects.value = projects.value.filter((currentProject) => currentProject.id !== project.id);
+
+  if (selectedProjectId.value === project.id) {
+    selectedProjectId.value = visibleProjects.value[0]?.id || null;
+  }
+
+  return true;
+};
+
+const confirmDeleteProject = async () => {
+  if (!projectPendingDelete.value || isDeletingProject.value) {
+    return;
+  }
+
+  const project = projectPendingDelete.value;
+  const startedAt = Date.now();
+  isDeletingProject.value = true;
+
+  try {
+    const wasDeleted = await deleteProject(project);
+    await wait(Math.max(0, DELETE_LOADING_MIN_MS - (Date.now() - startedAt)));
+    if (wasDeleted) {
+      projectPendingDelete.value = null;
+    }
+  } finally {
+    isDeletingProject.value = false;
+  }
+};
+
+const updateProfile = (user: UserPublic) => {
+  profileUsername.value = user.username || "";
+  profileUserName.value = user.username || user.email;
+  profileAvatarUrl.value = user.avatar_url || "";
+  profileEmail.value = user.email;
+  profilePixelAvatar.value = user.avatar_pixel_art || null;
+  isProfileDialogOpen.value = false;
+};
+
+const openProject = (project: ExplorerProject) => {
+  if (project.id.startsWith("local-")) {
+    showLoadMessage("This project is only available in this session.");
+    return;
+  }
+
+  selectedProjectId.value = project.id;
+  activeMenuProjectId.value = null;
+
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.removeItem(WORKSPACE_TRANSITION_STORAGE_KEY);
+  document.documentElement.classList.remove("route-transition-pending");
+  window.location.assign(`/studio/${encodeURIComponent(project.id)}`);
+};
+
+const toggleProjectActions = (project: ExplorerProject) => {
+  activeMenuProjectId.value = activeMenuProjectId.value === project.id ? null : project.id;
+};
+
+const handleProjectCardClick = (project: ExplorerProject) => {
+  if (activeMenuProjectId.value === project.id) {
+    activeMenuProjectId.value = null;
+    return;
+  }
+
+  openProject(project);
+};
+
+const syncSharedState = () => {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return;
+  }
+
+  resetStaleWorkspaceSync();
+  resetStaleProjectAccessSync();
+  if (
+    realtimeEventSource.value &&
+    realtimeEventSource.value.readyState === EventSource.CLOSED
+  ) {
+    connectRealtimeEvents();
+  }
+  void refreshWorkspace();
+  void syncOpenProjectAccess({ showMissingMessage: false });
+};
+
+const scheduleWorkspaceRefresh = () => {
+  if (workspaceRefreshTimeoutId.value !== null) {
+    window.clearTimeout(workspaceRefreshTimeoutId.value);
+  }
+
+  workspaceRefreshTimeoutId.value = window.setTimeout(() => {
+    workspaceRefreshTimeoutId.value = null;
+    void refreshWorkspace();
+  }, REALTIME_REFRESH_DELAY_MS);
+};
+
+const scheduleProjectAccessRefresh = (projectId?: string) => {
+  if (!projectPendingInfo.value || (projectId && projectPendingInfo.value.id !== projectId)) {
+    return;
+  }
+
+  if (accessRefreshTimeoutId.value !== null) {
+    window.clearTimeout(accessRefreshTimeoutId.value);
+  }
+
+  accessRefreshTimeoutId.value = window.setTimeout(() => {
+    accessRefreshTimeoutId.value = null;
+    void syncOpenProjectAccess({ showMissingMessage: false });
+  }, REALTIME_REFRESH_DELAY_MS);
+};
+
+const readRealtimePayload = (event: Event) => {
+  try {
+    return JSON.parse((event as MessageEvent<string>).data) as {
+      project_id?: string;
+      actor_id?: string;
+    };
+  } catch {
+    return {};
+  }
+};
+
+const handleRealtimeWorkspaceEvent = () => {
+  scheduleWorkspaceRefresh();
+};
+
+const handleRealtimeProjectEvent = (event: Event) => {
+  const payload = readRealtimePayload(event);
+  scheduleWorkspaceRefresh();
+
+  if (payload.project_id) {
+    scheduleProjectAccessRefresh(payload.project_id);
+  }
+
+  if (
+    payload.project_id &&
+    editingProjectId.value === payload.project_id &&
+    isCreateOpen.value &&
+    hasProjectUnsavedChanges.value
+  ) {
+    editingProjectHasRemoteChanges.value = true;
+    showLoadMessage("This project changed in another session. Reopen it before saving.");
+  }
+};
+
+const connectRealtimeEvents = () => {
+  if (typeof window === "undefined" || !("EventSource" in window)) {
+    return;
+  }
+
+  realtimeEventSource.value?.close();
+  const source = new EventSource(`${API_V1_URL}/events/stream`, {
+    withCredentials: true,
+  });
+  realtimeEventSource.value = source;
+
+  source.addEventListener("workspace.updated", handleRealtimeWorkspaceEvent);
+  source.addEventListener("project.updated", handleRealtimeProjectEvent);
+  source.addEventListener("project.deleted", handleRealtimeProjectEvent);
+  source.addEventListener("project.access.updated", handleRealtimeProjectEvent);
+  source.addEventListener("project.share.updated", handleRealtimeProjectEvent);
+};
+
+const disconnectRealtimeEvents = () => {
+  realtimeEventSource.value?.close();
+  realtimeEventSource.value = null;
+
+  if (workspaceRefreshTimeoutId.value !== null) {
+    window.clearTimeout(workspaceRefreshTimeoutId.value);
+    workspaceRefreshTimeoutId.value = null;
+  }
+
+  if (accessRefreshTimeoutId.value !== null) {
+    window.clearTimeout(accessRefreshTimeoutId.value);
+    accessRefreshTimeoutId.value = null;
+  }
+};
+
+onMounted(() => {
+  void initializeWorkspace();
+  connectRealtimeEvents();
+  workspaceSyncIntervalId.value = window.setInterval(
+    () => void refreshWorkspace(),
+    WORKSPACE_SYNC_INTERVAL_MS,
+  );
+  projectAccessSyncIntervalId.value = window.setInterval(
+    () => void syncOpenProjectAccess({ showMissingMessage: false }),
+    PROJECT_ACCESS_SYNC_INTERVAL_MS,
+  );
+  window.addEventListener("focus", syncSharedState);
+  document.addEventListener("visibilitychange", syncSharedState);
+});
+
+onUnmounted(() => {
+  clearLoadMessageTimeout();
+  disconnectRealtimeEvents();
+  if (workspaceSyncIntervalId.value !== null) {
+    window.clearInterval(workspaceSyncIntervalId.value);
+  }
+  if (projectAccessSyncIntervalId.value !== null) {
+    window.clearInterval(projectAccessSyncIntervalId.value);
+  }
+  window.removeEventListener("focus", syncSharedState);
+  document.removeEventListener("visibilitychange", syncSharedState);
+});
+</script>
+
+<template>
+  <section class="workspace-explorer" @click="activeMenuProjectId = null">
+    <StudioTopbar
+      mode="projects"
+      center-max-width="min(660px, 42vw)"
+      user-interactive
+      :user-name="profileUserName"
+      :user-username="profileUsername"
+      :user-avatar-url="currentUserAvatarUrl"
+      :user-email="currentUserEmail"
+      :user-pixel-avatar="profilePixelAvatar"
+      :user-label="currentUserEmail"
+      @user-click="isProfileDialogOpen = true"
+    >
+      <template #center>
+        <StudioTopbarCommandBar
+          v-model="searchQuery"
+          placeholder="Search projects"
+          search-aria-label="Search projects"
+          button-label="New"
+          @new-click="openCreateDialog"
+        />
+      </template>
+    </StudioTopbar>
+
+    <div class="workspace-layout">
+      <main class="studio-main">
+        <p v-if="loadMessage" class="load-note">{{ loadMessage }}</p>
+
+        <div
+          v-if="isLoading"
+          class="workspace-loader"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="sr-only">Loading projects</span>
+          <span class="workspace-loader__bar" aria-hidden="true"></span>
+        </div>
+
+        <div v-else-if="visibleProjects.length === 0" class="empty-state">
+          <div class="empty-state__art" aria-hidden="true">
+            <LifeOscillatorPreview />
+          </div>
+          <h2>{{ emptyTitle }}</h2>
+          <p>{{ emptyCopy }}</p>
+          <div class="empty-state__actions">
+            <button type="button" class="primary-action" @click="openCreateDialog">
+              Create project
+            </button>
+            <button type="button" class="secondary-action">
+              Import folder
+            </button>
+          </div>
+        </div>
+
+        <div v-else class="project-surface">
+          <article
+            v-for="project in visibleProjects"
+            :key="project.id"
+            class="project-card"
+            role="button"
+            tabindex="0"
+            :aria-label="`Open ${project.name}`"
+            :class="{
+              'is-selected': selectedProjectId === project.id,
+              'is-menu-open': activeMenuProjectId === project.id,
+            }"
+            :style="{ '--project-color': project.color }"
+            @click="handleProjectCardClick(project)"
+            @keydown.enter.self.prevent="handleProjectCardClick(project)"
+            @keydown.space.self.prevent="handleProjectCardClick(project)"
+          >
+            <div class="project-card__inner">
+              <div
+                class="project-card__face project-card__front"
+                :aria-hidden="activeMenuProjectId === project.id"
+                :inert="activeMenuProjectId === project.id"
+              >
+                <div class="project-card__body">
+                  <h2>{{ project.name }}</h2>
+
+                  <div class="card-menu">
+                    <button
+                      type="button"
+                      :class="{ 'is-open': activeMenuProjectId === project.id }"
+                      :aria-expanded="activeMenuProjectId === project.id"
+                      aria-label="Project actions"
+                      @click.stop="toggleProjectActions(project)"
+                    >
+                      <span class="card-menu__dots" aria-hidden="true">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  class="project-cover"
+                  :class="{ 'has-pixel-art': hasProjectPixelArt(project.projectPixelArt) }"
+                >
+                  <div
+                    v-if="hasProjectPixelArt(project.projectPixelArt)"
+                    class="project-cover__pixel-art"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="(pixel, index) in project.projectPixelArt?.pixels || []"
+                      :key="`project-pixel-${project.id}-${index}`"
+                      :style="{ backgroundColor: pixel || 'transparent' }"
+                    ></span>
+                  </div>
+                  <span v-else class="project-cover__shine" aria-hidden="true"></span>
+                </div>
+              </div>
+
+              <div
+                class="project-card__face project-card__back"
+                :aria-hidden="activeMenuProjectId !== project.id"
+                :inert="activeMenuProjectId !== project.id"
+                @click.stop
+              >
+                <header class="project-card__back-header">
+                  <p>Project actions</p>
+                  <button
+                    type="button"
+                    class="project-card__back-close"
+                    aria-label="Back to project card"
+                    @click="activeMenuProjectId = null"
+                  >
+                    <span aria-hidden="true"></span>
+                  </button>
+                </header>
+
+                <div class="project-card__back-content">
+                  <button
+                    v-if="project.accessRole !== 'viewer'"
+                    type="button"
+                    class="card-menu__item"
+                    @click="openEditDialog(project)"
+                  >
+                    <svg
+                      class="card-menu__icon card-menu__icon--edit"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="M4 20h4.5L19 9.5 14.5 5 4 15.5V20Z" />
+                      <path d="M13 6.5 17.5 11" />
+                    </svg>
+                    <span>Edit project</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="card-menu__item"
+                    @click="openProjectInfoDialog(project)"
+                  >
+                    <svg
+                      class="card-menu__icon card-menu__icon--info"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <circle cx="12" cy="12" r="8" />
+                      <path d="M12 11v5" />
+                      <path d="M12 8h.01" />
+                    </svg>
+                    <span>Project info</span>
+                  </button>
+                  <button
+                    v-if="canLeaveProject(project)"
+                    type="button"
+                    class="card-menu__item is-danger"
+                    :disabled="leavingProjectId === project.id"
+                    @click="requestLeaveProject(project)"
+                  >
+                    <svg
+                      class="card-menu__icon card-menu__icon--leave"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19H10" />
+                      <path d="M14 8l4 4-4 4" />
+                      <path d="M18 12H9" />
+                    </svg>
+                    <span>{{ leavingProjectId === project.id ? "Leaving..." : "Leave project" }}</span>
+                  </button>
+                  <button
+                    v-if="project.accessRole === 'owner' && !project.id.startsWith('local-')"
+                    type="button"
+                    class="card-menu__item"
+                    @click="openShareDialog(project)"
+                  >
+                    <svg
+                      class="card-menu__icon card-menu__icon--share"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="M8.5 12.5 15.5 16.5" />
+                      <path d="M15.5 7.5 8.5 11.5" />
+                      <circle cx="6" cy="12" r="2.5" />
+                      <circle cx="18" cy="6" r="2.5" />
+                      <circle cx="18" cy="18" r="2.5" />
+                    </svg>
+                    <span>Share project</span>
+                  </button>
+                  <button
+                    v-if="canDeleteProject(project)"
+                    type="button"
+                    class="card-menu__item is-danger"
+                    @click="requestDeleteProject(project)"
+                  >
+                    <svg
+                      class="card-menu__icon card-menu__icon--delete"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="M4 7h16" />
+                      <path d="M9 7V4h6v3" />
+                      <path d="M7 7l1 13h8l1-13" />
+                      <path d="M10.5 11v5" />
+                      <path d="M13.5 11v5" />
+                    </svg>
+                    <span>Delete project</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </main>
+    </div>
+
+    <ProjectEditorDialog
+      v-model:project-name="createName"
+      v-model:pixels="projectAvatarPixels"
+      :open="isCreateOpen"
+      :palette="projectPixelPalette"
+      :saving="isCreating"
+      :editing="isEditingProject"
+      :show-unsaved-confirm="showProjectUnsavedConfirm"
+      @close="closeCreateDialog"
+      @save="saveProject"
+      @discard-unsaved="discardProjectChanges"
+      @save-unsaved="saveProjectUnsavedChanges"
+    />
+
+    <div
+      v-if="projectPendingInfo"
+      class="modal-layer access-dialog-layer"
+      role="presentation"
+    >
+      <section
+        class="access-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-access-title"
+        @click.stop
+      >
+        <header>
+          <div>
+            <p>Project info</p>
+            <h2 id="project-access-title">Access</h2>
+          </div>
+          <button
+            type="button"
+            class="project-modal__close"
+            aria-label="Close"
+            @click="closeProjectInfoDialog"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </header>
+
+        <div class="access-dialog__body">
+          <div class="access-dialog__summary">
+            <h3>{{ projectPendingInfo.name }}</h3>
+            <p>{{ projectAccessCountLabel }}</p>
+          </div>
+
+          <p v-if="accessMessage" class="access-dialog__message">{{ accessMessage }}</p>
+
+          <div v-if="isLoadingProjectAccess" class="access-dialog__loading">
+            <span class="button-spinner" aria-hidden="true"></span>
+            <span>Loading people...</span>
+          </div>
+
+          <ul v-else-if="projectAccessUsers.length" class="access-list">
+            <li v-for="user in projectAccessUsers" :key="user.id">
+              <div class="access-user-avatar" aria-hidden="true">
+                <div
+                  v-if="user.avatar_pixel_art?.pixels?.length"
+                  class="access-user-avatar__pixels"
+                >
+                  <span
+                    v-for="(pixel, index) in user.avatar_pixel_art.pixels"
+                    :key="`access-user-pixel-${user.id}-${index}`"
+                    :style="{ backgroundColor: pixel || 'transparent' }"
+                  ></span>
+                </div>
+                <img
+                  v-else-if="user.avatar_url"
+                  :src="user.avatar_url"
+                  alt=""
+                  loading="lazy"
+                />
+                <span v-else>{{ accessUserInitials(user) }}</span>
+              </div>
+
+              <div class="access-user-copy">
+                <strong>{{ accessUserName(user) }}</strong>
+                <span>{{ user.email }}</span>
+              </div>
+
+              <div class="access-user-controls">
+                <span v-if="!canManageProjectAccess" class="access-role">
+                  {{ accessRoleLabel(user) }}
+                </span>
+                <div
+                  v-else
+                  class="access-role-options"
+                  role="group"
+                  :aria-label="`Project role for ${accessUserName(user)}`"
+                >
+                  <button
+                    v-for="option in projectRoleOptions"
+                    :key="`member-role-${user.id}-${option.value}`"
+                    type="button"
+                    class="access-role-option"
+                    :class="{ 'is-active': user.role === option.value }"
+                    :aria-pressed="user.role === option.value"
+                    :disabled="
+                      user.role === option.value ||
+                      accessUpdatingUserId === user.id ||
+                      accessRemovingUserId === user.id
+                    "
+                    @click="updateAccessUserRole(user, option.value)"
+                  >
+                    {{ accessRoleLabel(option.value) }}
+                  </button>
+                </div>
+                <button
+                  v-if="canManageProjectAccess && !user.is_owner && !isCurrentAccessUser(user)"
+                  type="button"
+                  class="access-remove-button"
+                  :aria-label="`Remove ${accessUserName(user)} from project`"
+                  :disabled="accessUpdatingUserId === user.id || accessRemovingUserId === user.id"
+                  @click="requestRemoveAccessUser(user)"
+                >
+                  {{ accessRemovingUserId === user.id ? "Removing..." : "Remove" }}
+                </button>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <footer>
+          <button type="button" class="primary-action" @click="closeProjectInfoDialog">
+            Done
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      v-if="accessUserPendingRemove"
+      class="modal-layer remove-access-confirm-layer"
+      role="presentation"
+    >
+      <section
+        class="remove-access-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="remove-access-title"
+        @click.stop
+      >
+        <header>
+          <div>
+            <p>Project access</p>
+            <h2 id="remove-access-title">Remove access?</h2>
+          </div>
+          <button
+            type="button"
+            class="project-modal__close"
+            aria-label="Close"
+            :disabled="accessRemovingUserId === accessUserPendingRemove.id"
+            @click="closeRemoveAccessUserDialog"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </header>
+
+        <div class="remove-access-confirm-dialog__body">
+          <p>
+            <strong>{{ accessUserName(accessUserPendingRemove) }}</strong>
+            will lose access to
+            <strong>{{ projectPendingInfo?.name || "this project" }}</strong>.
+            They will need a new share link to join again.
+          </p>
+        </div>
+
+        <footer>
+          <button
+            type="button"
+            class="secondary-action"
+            :disabled="accessRemovingUserId === accessUserPendingRemove.id"
+            @click="closeRemoveAccessUserDialog"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="danger-action"
+            :disabled="accessRemovingUserId === accessUserPendingRemove.id"
+            @click="confirmRemoveAccessUser"
+          >
+            <span
+              v-if="accessRemovingUserId === accessUserPendingRemove.id"
+              class="button-spinner"
+              aria-hidden="true"
+            ></span>
+            <span>
+              {{ accessRemovingUserId === accessUserPendingRemove.id ? "Removing..." : "Remove access" }}
+            </span>
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      v-if="projectPendingShare"
+      class="modal-layer share-dialog-layer"
+      role="presentation"
+    >
+      <section
+        class="share-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-project-title"
+        @click.stop
+      >
+        <header>
+          <div>
+            <p>Project sharing</p>
+            <h2 id="share-project-title">Share project</h2>
+          </div>
+          <button
+            type="button"
+            class="project-modal__close"
+            aria-label="Close"
+            :disabled="isSharingProject"
+            @click="closeShareDialog"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </header>
+
+        <div class="share-dialog__body">
+          <fieldset class="share-role-fieldset">
+            <legend>Permission</legend>
+            <div
+              class="share-role-options"
+              role="group"
+              aria-label="Share link permission"
+            >
+              <button
+                v-for="option in shareRoleOptions"
+                :key="`share-role-${option.value}`"
+                type="button"
+                :class="{
+                  'is-active': shareRole === option.value,
+                }"
+                :aria-label="`${option.label}. ${option.description}`"
+                :aria-pressed="shareRole === option.value"
+                :disabled="isSharingProject"
+                @click="updateShareRole(option.value)"
+              >
+                <span>{{ option.label }}</span>
+              </button>
+            </div>
+          </fieldset>
+
+          <label>
+            <span class="share-dialog__label">Link</span>
+            <div class="share-dialog__link-row">
+              <div
+                v-if="isSharingProject"
+                class="share-link-skeleton"
+                role="status"
+                aria-label="Updating project share link"
+              ></div>
+              <input
+                v-else
+                :value="shareProjectUrl"
+                type="text"
+                readonly
+                aria-label="Project share link"
+                :placeholder="`Creating ${shareRoleLabel.toLowerCase()} link...`"
+              />
+              <button
+                type="button"
+                class="secondary-action share-copy-button"
+                :disabled="isSharingProject || !projectShareLink"
+                @click="copyShareLink"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="8" y="8" width="10" height="10" rx="2" />
+                  <path d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+                <span>Copy</span>
+              </button>
+            </div>
+          </label>
+
+          <p v-if="shareMessage" class="share-dialog__message">{{ shareMessage }}</p>
+
+          <footer>
+            <button
+              type="button"
+              class="primary-action"
+              :disabled="isSharingProject"
+              @click="closeShareDialog"
+            >
+              Done
+            </button>
+          </footer>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="projectPendingLeave"
+      class="modal-layer leave-confirm-layer"
+      role="presentation"
+    >
+      <section
+        class="leave-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="leave-project-title"
+        @click.stop
+      >
+        <header>
+          <div>
+            <p>Project access</p>
+            <h2 id="leave-project-title">Leave this project?</h2>
+          </div>
+          <button
+            type="button"
+            class="project-modal__close"
+            aria-label="Close"
+            :disabled="leavingProjectId === projectPendingLeave.id"
+            @click="closeLeaveDialog"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </header>
+
+        <div class="leave-confirm-dialog__body">
+          <p>
+            You will lose access to <strong>{{ projectPendingLeave.name }}</strong>.
+            Someone with access will need to share it with you again.
+          </p>
+        </div>
+
+        <footer>
+          <button
+            type="button"
+            class="secondary-action"
+            :disabled="leavingProjectId === projectPendingLeave.id"
+            @click="closeLeaveDialog"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="danger-action"
+            :disabled="leavingProjectId === projectPendingLeave.id"
+            @click="confirmLeaveProject"
+          >
+            <span
+              v-if="leavingProjectId === projectPendingLeave.id"
+              class="button-spinner"
+              aria-hidden="true"
+            ></span>
+            <span>{{ leavingProjectId === projectPendingLeave.id ? "Leaving..." : "Leave project" }}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      v-if="projectPendingDelete"
+      class="modal-layer delete-confirm-layer"
+      role="presentation"
+    >
+      <section
+        class="delete-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-project-title"
+        @click.stop
+      >
+        <header>
+          <div>
+            <p>Project deletion</p>
+            <h2 id="delete-project-title">Delete this project?</h2>
+          </div>
+          <button
+            type="button"
+            class="project-modal__close"
+            aria-label="Close"
+            :disabled="isDeletingProject"
+            @click="closeDeleteDialog"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </header>
+
+        <div class="delete-confirm-dialog__body">
+          <p>
+            This will permanently delete <strong>{{ projectPendingDelete.name }}</strong>.
+            This action cannot be undone.
+          </p>
+        </div>
+
+        <footer>
+          <button
+            type="button"
+            class="secondary-action"
+            :disabled="isDeletingProject"
+            @click="closeDeleteDialog"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="danger-action"
+            :disabled="isDeletingProject"
+            @click="confirmDeleteProject"
+          >
+            <span v-if="isDeletingProject" class="button-spinner" aria-hidden="true"></span>
+            <span>{{ isDeletingProject ? "Deleting..." : "Delete project" }}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <UserProfileDialog
+      :open="isProfileDialogOpen"
+      :user-name="profileUserName"
+      :user-username="profileUsername"
+      :user-email="profileEmail"
+      :user-avatar-url="profileAvatarUrl"
+      :user-pixel-avatar="profilePixelAvatar"
+      @close="isProfileDialogOpen = false"
+      @saved="updateProfile"
+    />
+  </section>
+</template>
+
+<style scoped>
+  .workspace-explorer {
+    --surface: rgba(12, 13, 13, 0.88);
+    --surface-soft: rgba(255, 252, 244, 0.055);
+    --surface-hover: rgba(255, 252, 244, 0.09);
+    --line: rgba(255, 252, 244, 0.14);
+    --line-strong: rgba(255, 252, 244, 0.22);
+    --text: #f7f1e7;
+    --muted: rgba(247, 241, 231, 0.62);
+    --quiet: rgba(247, 241, 231, 0.42);
+    --mint: #f7f1e7;
+    --amber: #e8ca7a;
+    --coral: #e18464;
+    display: flex;
+    position: relative;
+    z-index: 5;
+    flex-direction: column;
+    min-height: 100vh;
+    max-height: 100dvh;
+    color: var(--text);
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    color: inherit;
+  }
+
+  .card-menu > button,
+  .project-modal__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .primary-action,
+  .secondary-action,
+  .danger-action {
+    min-height: 40px;
+    padding: 0 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition:
+      transform 180ms ease,
+      border-color 180ms ease,
+      background 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  .primary-action {
+    color: #07100b;
+    background: var(--mint);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 12px 34px rgba(94, 168, 113, 0.17);
+  }
+
+  .primary-action:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 40px rgba(94, 168, 113, 0.24);
+  }
+
+  .primary-action:disabled {
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+    opacity: 0.62;
+    transform: none;
+  }
+
+  .secondary-action {
+    background: rgba(255, 252, 244, 0.045);
+    border: 1px solid var(--line-strong);
+  }
+
+  .secondary-action:hover {
+    background: var(--surface-hover);
+    border-color: rgba(255, 252, 244, 0.32);
+  }
+
+  .danger-action {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    color: #180806;
+    background: #ffb09f;
+    border: 1px solid rgba(255, 176, 159, 0.2);
+    box-shadow: 0 12px 34px rgba(255, 126, 103, 0.14);
+  }
+
+  .danger-action:hover:not(:disabled) {
+    background: #ffd2c8;
+    box-shadow: 0 16px 40px rgba(255, 126, 103, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .danger-action:disabled,
+  .secondary-action:disabled,
+  .project-modal__close:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+    transform: none;
+  }
+
+  .button-spinner {
+    width: 15px;
+    height: 15px;
+    border: 2px solid rgba(24, 8, 6, 0.28);
+    border-top-color: rgba(24, 8, 6, 0.9);
+    border-radius: 999px;
+    animation: button-spin 700ms linear infinite;
+  }
+
+  @keyframes button-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .workspace-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+  }
+
+  .studio-main {
+    min-width: 0;
+    min-height: 0;
+    padding: 24px;
+    overflow: auto;
+  }
+
+  .load-note {
+    max-width: 760px;
+    padding: 11px 13px;
+    margin: 0 0 16px;
+    color: rgba(255, 252, 244, 0.74);
+    background: rgba(232, 202, 122, 0.08);
+    border: 1px solid rgba(232, 202, 122, 0.18);
+    border-radius: 8px;
+  }
+
+  .project-surface {
+    gap: 18px;
+  }
+
+  .project-surface {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    justify-content: center;
+    width: min(100%, calc((196px * 5) + (16px * 4)));
+    margin: 0 auto;
+    gap: 16px;
+  }
+
+  .workspace-loader {
+    display: grid;
+    place-items: center;
+    min-height: min(460px, calc(100dvh - 210px));
+    padding: 36px 18px;
+  }
+
+  .workspace-loader__bar {
+    position: relative;
+    display: block;
+    width: min(280px, 42vw);
+    height: 2px;
+    overflow: hidden;
+    background: rgba(255, 252, 244, 0.12);
+    border-radius: 999px;
+  }
+
+  .workspace-loader__bar::after {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 42%;
+    content: "";
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(247, 241, 231, 0.86),
+      transparent
+    );
+    border-radius: inherit;
+    transform: translateX(-100%);
+    animation: workspace-loader-bar 1200ms ease-in-out infinite;
+  }
+
+  @keyframes workspace-loader-bar {
+    to {
+      transform: translateX(240%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .workspace-loader__bar::after {
+      width: 100%;
+      background: rgba(247, 241, 231, 0.42);
+      animation: none;
+      transform: none;
+    }
+  }
+
+  .empty-state {
+    display: grid;
+    place-items: center;
+    min-height: min(620px, calc(100dvh - 210px));
+    padding: 36px 18px;
+    text-align: center;
+  }
+
+  .empty-state__art {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: min(260px, 70vw);
+    height: 150px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .empty-state h2 {
+    margin: 0;
+    font-size: clamp(1.35rem, 2vw, 2rem);
+  }
+
+  .empty-state p {
+    max-width: 560px;
+    margin: 12px auto 0;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .empty-state__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 24px;
+  }
+
+  .project-card {
+    position: relative;
+    flex: 0 0 196px;
+    min-width: 0;
+    perspective: 1100px;
+    cursor: pointer;
+  }
+
+  .project-card__inner {
+    position: relative;
+    display: grid;
+    transform-style: preserve-3d;
+    transition: transform 720ms cubic-bezier(0.2, 0.82, 0.22, 1);
+    will-change: transform;
+  }
+
+  .project-card:hover .project-card__inner {
+    transform: translateY(-2px);
+  }
+
+  .project-card.is-menu-open .project-card__inner {
+    transform: rotateY(-180deg);
+  }
+
+  .project-card.is-menu-open:hover .project-card__inner {
+    transform: translateY(-2px) rotateY(-180deg);
+  }
+
+  .project-card__face {
+    grid-area: 1 / 1;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    background:
+      linear-gradient(180deg, rgba(255, 252, 244, 0.05), rgba(255, 252, 244, 0.025)),
+      rgba(7, 7, 7, 0.72);
+    border: 1px solid rgba(255, 252, 244, 0.2);
+    border-radius: 7px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+    backface-visibility: hidden;
+    transform-style: preserve-3d;
+    -webkit-backface-visibility: hidden;
+    transition:
+      border-color 180ms ease,
+      background 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  .project-card:hover .project-card__face,
+  .project-card.is-selected .project-card__face {
+    background:
+      linear-gradient(180deg, rgba(255, 252, 244, 0.075), rgba(255, 252, 244, 0.035)),
+      rgba(7, 7, 7, 0.78);
+    border-color: color-mix(in srgb, var(--project-color) 42%, rgba(255, 252, 244, 0.34));
+  }
+
+  .project-card.is-selected .project-card__face {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--project-color) 42%, transparent),
+      0 14px 34px rgba(0, 0, 0, 0.3);
+  }
+
+  .project-card__front {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .project-card__back {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 12px;
+    height: 100%;
+    padding: 12px;
+    background:
+      radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--project-color) 22%, transparent), transparent 42%),
+      linear-gradient(180deg, rgba(255, 252, 244, 0.08), rgba(255, 252, 244, 0.035)),
+      rgba(8, 8, 8, 0.86);
+    transform: rotateY(180deg);
+  }
+
+  .project-cover {
+    position: relative;
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.13), transparent 42%),
+      radial-gradient(circle at 78% 28%, color-mix(in srgb, var(--project-color) 58%, transparent), transparent 35%),
+      color-mix(in srgb, var(--project-color) 28%, #101211);
+  }
+
+  .project-cover.has-pixel-art {
+    background: transparent;
+  }
+
+  .project-cover__shine {
+    position: absolute;
+    inset: 12px;
+    border: 1px solid rgba(255, 252, 244, 0.13);
+    border-radius: 7px;
+    background:
+      linear-gradient(135deg, rgba(255, 252, 244, 0.09) 25%, transparent 25%) 0 0 / 18px 18px;
+  }
+
+  .project-cover__pixel-art {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    grid-template-rows: repeat(16, 1fr);
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .project-cover__pixel-art span {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .project-card__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 12px 13px;
+    background:
+      radial-gradient(circle at 92% 14%, rgba(255, 252, 244, 0.07), transparent 34%),
+      rgba(8, 8, 8, 0.2);
+  }
+
+  .project-card h2 {
+    margin: 0;
+    overflow: hidden;
+    font-size: 0.95rem;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-menu {
+    position: relative;
+    z-index: 3;
+  }
+
+  .card-menu > button {
+    width: 24px;
+    height: 24px;
+    color: rgba(255, 252, 244, 0.78);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease,
+      background 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .card-menu > button:hover,
+  .card-menu > button:focus-visible,
+  .card-menu > button.is-open {
+    color: #fff;
+    border-color: rgba(255, 252, 244, 0.16);
+    background: rgba(255, 252, 244, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 252, 244, 0.1),
+      0 8px 18px rgba(0, 0, 0, 0.14);
+    backdrop-filter: blur(10px);
+  }
+
+  .card-menu > button:hover {
+    transform: translateY(-1px);
+  }
+
+  .card-menu > button:focus-visible {
+    outline: 2px solid rgba(255, 252, 244, 0.28);
+    outline-offset: 2px;
+  }
+
+  .card-menu__dots {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .card-menu__dots span {
+    width: 2.5px;
+    height: 2.5px;
+    background: currentColor;
+    border-radius: 999px;
+  }
+
+  .project-card__back-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .project-card__back-header p {
+    margin: 0;
+    color: rgba(255, 252, 244, 0.56);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .project-card__back-close {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    color: rgba(255, 252, 244, 0.64);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    transition:
+      color 160ms ease,
+      background 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .project-card__back-close:hover,
+  .project-card__back-close:focus-visible {
+    color: #fff;
+    border-color: rgba(255, 252, 244, 0.16);
+    background: rgba(255, 252, 244, 0.08);
+  }
+
+  .project-card__back-close:focus-visible {
+    outline: 2px solid rgba(255, 252, 244, 0.24);
+    outline-offset: 2px;
+  }
+
+  .project-card__back-close span,
+  .project-card__back-close span::after {
+    display: block;
+    width: 12px;
+    height: 1.5px;
+    content: "";
+    background: currentColor;
+    border-radius: 999px;
+  }
+
+  .project-card__back-close span {
+    transform: rotate(45deg);
+  }
+
+  .project-card__back-close span::after {
+    transform: rotate(90deg);
+  }
+
+  .project-card__back-content {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+    min-height: 0;
+    padding: 6px 4px;
+  }
+
+  .card-menu__item {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 10px;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-align: center;
+    background: rgba(255, 252, 244, 0.055);
+    border: 1px solid rgba(255, 252, 244, 0.12);
+    border-radius: 7px;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255, 252, 244, 0.08);
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      color 160ms ease,
+      background 160ms ease,
+      transform 160ms ease;
+  }
+
+  .card-menu__item:hover {
+    border-color: rgba(255, 252, 244, 0.22);
+    background: rgba(255, 252, 244, 0.09);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 252, 244, 0.1),
+      0 10px 22px rgba(0, 0, 0, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .card-menu__item:disabled {
+    cursor: wait;
+    opacity: 0.62;
+    transform: none;
+  }
+
+  .card-menu__item.is-danger {
+    color: #ffb09f;
+  }
+
+  .card-menu__item.is-danger:hover {
+    color: #ffd2c8;
+    border-color: rgba(255, 176, 159, 0.26);
+    background: rgba(255, 126, 103, 0.13);
+  }
+
+  .card-menu__icon {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: currentColor;
+  }
+
+  .card-menu__icon--delete,
+  .card-menu__icon--edit,
+  .card-menu__icon--info,
+  .card-menu__icon--leave,
+  .card-menu__icon--share {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .modal-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(2, 2, 2, 0.64);
+    backdrop-filter: blur(10px);
+  }
+
+  .leave-confirm-layer,
+  .delete-confirm-layer,
+  .remove-access-confirm-layer {
+    z-index: 80;
+  }
+
+  .remove-access-confirm-layer {
+    z-index: 90;
+  }
+
+  .access-dialog-layer,
+  .share-dialog-layer {
+    z-index: 80;
+  }
+
+  .access-dialog,
+  .share-dialog,
+  .leave-confirm-dialog,
+  .remove-access-confirm-dialog,
+  .delete-confirm-dialog {
+    width: min(420px, 100%);
+    overflow: hidden;
+    color: var(--text);
+    border: 1px solid rgba(255, 252, 244, 0.24);
+    border-radius: 8px;
+    background:
+      radial-gradient(circle at 92% 14%, rgba(255, 126, 103, 0.12), transparent 38%),
+      #101111;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  }
+
+  .share-dialog {
+    width: min(460px, 100%);
+  }
+
+  .access-dialog {
+    width: min(540px, 100%);
+    background: rgba(16, 17, 17, 0.98);
+    border-color: rgba(255, 252, 244, 0.18);
+  }
+
+  .access-dialog header,
+  .share-dialog header,
+  .leave-confirm-dialog header,
+  .remove-access-confirm-dialog header,
+  .delete-confirm-dialog header {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 20px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .access-dialog header p,
+  .share-dialog header p,
+  .leave-confirm-dialog header p,
+  .remove-access-confirm-dialog header p,
+  .delete-confirm-dialog header p {
+    margin: 0 0 8px;
+    color: rgba(255, 176, 159, 0.76);
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .access-dialog h2,
+  .share-dialog h2,
+  .leave-confirm-dialog h2,
+  .remove-access-confirm-dialog h2,
+  .delete-confirm-dialog h2 {
+    margin: 0;
+    font-size: 1.2rem;
+    line-height: 1.18;
+    letter-spacing: 0;
+  }
+
+  .access-dialog__body,
+  .share-dialog__body,
+  .leave-confirm-dialog__body,
+  .remove-access-confirm-dialog__body,
+  .delete-confirm-dialog__body {
+    padding: 18px 20px 6px;
+  }
+
+  .access-dialog__body {
+    display: grid;
+    gap: 16px;
+    padding: 18px 20px 14px;
+  }
+
+  .access-dialog__summary {
+    display: grid;
+    gap: 6px;
+    padding: 14px 16px;
+    background: rgba(255, 252, 244, 0.035);
+    border: 1px solid rgba(255, 252, 244, 0.08);
+    border-radius: 8px;
+  }
+
+  .access-dialog__body h3 {
+    max-width: 100%;
+    margin: 0 0 6px;
+    overflow: hidden;
+    font-size: 1rem;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .access-dialog__body p {
+    margin: 0;
+    color: rgba(247, 241, 231, 0.64);
+    line-height: 1.45;
+  }
+
+  .access-dialog__message {
+    color: #ffb09f;
+  }
+
+  .access-dialog__loading {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    color: rgba(247, 241, 231, 0.68);
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+
+  .access-list {
+    display: grid;
+    gap: 10px;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+
+  .access-list li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    min-height: 0;
+    padding: 12px;
+    background: rgba(255, 252, 244, 0.025);
+    border: 1px solid rgba(255, 252, 244, 0.08);
+    border-radius: 8px;
+  }
+
+  .access-user-avatar {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    overflow: hidden;
+    color: #171614;
+    font-size: 0.72rem;
+    font-weight: 900;
+    background: #f7f1e7;
+    border: 1px solid rgba(255, 252, 244, 0.22);
+    border-radius: 999px;
+  }
+
+  .access-user-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .access-user-avatar__pixels {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    grid-template-rows: repeat(16, 1fr);
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .access-user-avatar__pixels span {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .access-user-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .access-user-copy strong,
+  .access-user-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .access-user-copy strong {
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.2;
+  }
+
+  .access-user-copy span {
+    color: rgba(247, 241, 231, 0.48);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .access-role {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 26px;
+    padding: 0 9px;
+    color: rgba(247, 241, 231, 0.78);
+    font-size: 0.72rem;
+    font-weight: 800;
+    background: rgba(255, 252, 244, 0.075);
+    border: 1px solid rgba(255, 252, 244, 0.12);
+    border-radius: 999px;
+  }
+
+  .access-user-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .access-user-controls .access-role {
+    justify-self: start;
+  }
+
+  .access-role-options {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 3px;
+    padding: 3px;
+    background: rgba(255, 252, 244, 0.045);
+    border: 1px solid rgba(255, 252, 244, 0.12);
+    border-radius: 999px;
+  }
+
+  .access-role-option {
+    min-height: 28px;
+    padding: 0 10px;
+    color: rgba(247, 241, 231, 0.66);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 750;
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    outline: 0;
+    transition:
+      color 160ms ease,
+      background 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .access-role-option:hover:not(:disabled) {
+    color: var(--text);
+    background: rgba(255, 252, 244, 0.08);
+  }
+
+  .access-role-option:focus-visible {
+    box-shadow: 0 0 0 3px rgba(247, 241, 231, 0.16);
+  }
+
+  .access-role-option.is-active {
+    color: #151411;
+    background: #f7f1e7;
+  }
+
+  .access-role-option:disabled {
+    cursor: default;
+    opacity: 0.52;
+  }
+
+  .access-role-option.is-active:disabled {
+    opacity: 1;
+  }
+
+  .access-role-option:disabled:not(.is-active) {
+    cursor: wait;
+  }
+
+  .access-remove-button {
+    min-height: 30px;
+    padding: 0 8px;
+    color: #ffb09f;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 760;
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .access-remove-button:hover:not(:disabled) {
+    background: rgba(255, 126, 103, 0.1);
+  }
+
+  .access-remove-button:focus-visible {
+    outline: 2px solid rgba(255, 176, 159, 0.34);
+    outline-offset: 2px;
+  }
+
+  .access-remove-button:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
+
+  @media (max-width: 560px) {
+    .access-dialog__body {
+      padding: 16px 18px 12px;
+    }
+
+    .access-list li {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .access-user-controls {
+      grid-column: 2;
+      justify-content: flex-start;
+    }
+  }
+
+  .share-dialog__body {
+    display: grid;
+    gap: 16px;
+    padding: 20px 20px 18px;
+  }
+
+  .share-dialog__body label {
+    display: grid;
+    gap: 9px;
+  }
+
+  .share-dialog__label {
+    color: rgba(247, 241, 231, 0.58);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .share-role-fieldset {
+    display: grid;
+    gap: 8px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+  }
+
+  .share-role-fieldset legend {
+    padding: 0;
+    color: rgba(247, 241, 231, 0.58);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .share-role-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+    background: rgba(255, 252, 244, 0.055);
+    border: 1px solid rgba(255, 252, 244, 0.14);
+    border-radius: 8px;
+  }
+
+  .share-role-options button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 38px;
+    padding: 8px 12px;
+    color: rgba(247, 241, 231, 0.62);
+    text-align: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .share-role-options button:hover:not(:disabled) {
+    color: rgba(247, 241, 231, 0.86);
+    background: rgba(255, 252, 244, 0.055);
+  }
+
+  .share-role-options button:focus-visible {
+    outline: 2px solid rgba(247, 241, 231, 0.38);
+    outline-offset: 2px;
+  }
+
+  .share-role-options button.is-active {
+    color: var(--text);
+    background: rgba(247, 241, 231, 0.14);
+    border-color: rgba(247, 241, 231, 0.28);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  }
+
+  .share-role-options button:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+
+  .share-role-options span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.82rem;
+    font-weight: 800;
+    line-height: 1.15;
+  }
+
+  .share-dialog__link-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .share-dialog__body input {
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    color: var(--text);
+    background: rgba(255, 252, 244, 0.045);
+    border: 1px solid rgba(255, 252, 244, 0.18);
+    border-radius: 8px;
+    outline: 0;
+  }
+
+  .share-copy-button {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    min-width: 86px;
+  }
+
+  .share-copy-button svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .share-link-skeleton {
+    position: relative;
+    height: 44px;
+    overflow: hidden;
+    background: rgba(255, 252, 244, 0.055);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+  }
+
+  .share-link-skeleton::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(247, 241, 231, 0.12),
+      transparent
+    );
+    animation: share-skeleton-pass 1200ms ease-in-out infinite;
+    transform: translateX(-100%);
+  }
+
+  @keyframes share-skeleton-pass {
+    to {
+      transform: translateX(100%);
+    }
+  }
+
+  .share-dialog__body input:focus {
+    border-color: rgba(247, 241, 231, 0.72);
+    box-shadow: 0 0 0 3px rgba(247, 241, 231, 0.1);
+  }
+
+  .share-dialog__message {
+    margin: 0;
+    color: rgba(247, 241, 231, 0.68);
+    font-size: 0.86rem;
+  }
+
+  .leave-confirm-dialog__body p,
+  .remove-access-confirm-dialog__body p,
+  .delete-confirm-dialog__body p {
+    margin: 0;
+    color: rgba(247, 241, 231, 0.68);
+    line-height: 1.5;
+  }
+
+  .leave-confirm-dialog__body strong,
+  .remove-access-confirm-dialog__body strong,
+  .delete-confirm-dialog__body strong {
+    color: var(--text);
+  }
+
+  .leave-confirm-dialog footer,
+  .remove-access-confirm-dialog footer,
+  .delete-confirm-dialog footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 20px;
+  }
+
+  .access-dialog footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    padding: 0 20px 20px;
+  }
+
+  .share-dialog footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .project-modal__close {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+  }
+
+  .project-modal__close:hover {
+    border-color: var(--line);
+    background: rgba(255, 252, 244, 0.08);
+  }
+
+  .project-modal__close span {
+    position: relative;
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+
+  .project-modal__close span::before,
+  .project-modal__close span::after {
+    position: absolute;
+    top: 7px;
+    left: 0;
+    width: 16px;
+    height: 2px;
+    content: "";
+    background: var(--muted);
+    border-radius: 999px;
+  }
+
+  .project-modal__close span::before {
+    transform: rotate(45deg);
+  }
+
+  .project-modal__close span::after {
+    transform: rotate(-45deg);
+  }
+
+  @media (max-width: 1120px) {
+    .workspace-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 820px) {
+    .workspace-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .studio-main {
+      padding: 18px 14px 26px;
+    }
+
+  }
+
+  @media (max-width: 520px) {
+    .studio-main {
+      padding: 12px 12px 24px;
+    }
+
+    .project-surface {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      justify-content: center;
+      width: min(100%, 430px);
+      max-width: 100%;
+      gap: 10px;
+    }
+
+    .project-card {
+      width: 100%;
+      justify-self: stretch;
+    }
+
+    .project-cover__shine {
+      inset: 10px;
+      background-size: 16px 16px;
+    }
+
+    .project-cover__pixel-art {
+      width: 100%;
+      height: 100%;
+    }
+
+    .project-card__body {
+      padding: 10px 11px;
+    }
+
+    .project-card h2 {
+      font-size: 0.86rem;
+    }
+
+    .empty-state__actions {
+      flex-direction: column;
+    }
+
+    .empty-state__actions button {
+      width: 100%;
+    }
+
+    @media (max-width: 380px) {
+      .studio-main {
+        padding: 10px 10px 22px;
+      }
+
+      .project-surface {
+        gap: 8px;
+      }
+
+      .project-card h2 {
+        font-size: 0.8rem;
+      }
+
+      .card-menu > button {
+        width: 22px;
+        height: 22px;
+      }
+
+      .project-card__back {
+        gap: 8px;
+        padding: 9px;
+      }
+
+      .project-card__back-content {
+        gap: 6px;
+      }
+
+      .card-menu__item {
+        gap: 6px;
+        min-height: 31px;
+        padding: 6px 7px;
+        font-size: 0.72rem;
+      }
+
+      .card-menu__icon {
+        width: 13px;
+        height: 13px;
+      }
+    }
+
+    .modal-layer {
+      display: block;
+      padding: 0;
+    }
+
+    .access-dialog-layer,
+    .share-dialog-layer,
+    .leave-confirm-layer,
+    .remove-access-confirm-layer,
+    .delete-confirm-layer {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+
+    .access-dialog,
+    .share-dialog,
+    .leave-confirm-dialog,
+    .remove-access-confirm-dialog,
+    .delete-confirm-dialog {
+      width: min(420px, 100%);
+    }
+
+    .share-dialog__link-row {
+      grid-template-columns: 1fr;
+    }
+
+  }
+</style>

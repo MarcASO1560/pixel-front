@@ -1,0 +1,55 @@
+---
+import AppLayout from "../../../../layouts/AppLayout.astro";
+import WorkspaceLoadingTransition from "../../../../features/navigation/components/WorkspaceLoadingTransition.vue";
+import ResourceEditorShell from "../../../../features/workspace/components/ResourceEditorShell.vue";
+
+export const prerender = false;
+
+const { projectId = "", resourceKind = "", resourceId = "" } = Astro.params;
+const user = Astro.locals.user;
+const userName = user?.username || user?.email || "";
+const userUsername = user?.username || "";
+const userAvatarUrl = user?.avatar_url || "";
+const userEmail = user?.email || "";
+const userPixelAvatar = user?.avatar_pixel_art || null;
+---
+
+<AppLayout title="Editor | Sefkira Studio">
+  <main class="studio-shell">
+    <div class="studio-background-shade" aria-hidden="true"></div>
+    <ResourceEditorShell
+      client:load
+      projectId={projectId}
+      resourceKind={resourceKind}
+      resourceId={resourceId}
+      userName={userName}
+      userUsername={userUsername}
+      userAvatarUrl={userAvatarUrl}
+      userEmail={userEmail}
+      userPixelAvatar={userPixelAvatar}
+    />
+  </main>
+  <WorkspaceLoadingTransition phase="entry" client:load />
+</AppLayout>
+
+<style>
+  .studio-shell {
+    position: relative;
+    min-height: 0;
+    height: 100vh;
+    max-height: 100dvh;
+    overflow: hidden;
+    background: #010101;
+    isolation: isolate;
+  }
+
+  .studio-background-shade {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    background:
+      linear-gradient(180deg, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.86)),
+      radial-gradient(circle at 50% 38%, rgba(16, 17, 17, 0.2), rgba(0, 0, 0, 0.82) 72%);
+    pointer-events: none;
+  }
+</style>

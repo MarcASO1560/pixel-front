@@ -2,14 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
-  ACCESS_TOKEN_COOKIE_NAME,
-  ACCESS_TOKEN_MAX_AGE_SECONDS,
-  ACCESS_TOKEN_STORAGE_KEY,
-  LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+  clearStoredAccessTokens,
   createSafeRedirectPath,
 } from "../../../lib/session";
 import { WORKSPACE_TRANSITION_STORAGE_KEY } from "../../../lib/routeTransition";
-import WorkspaceLoadingTransition from "../../navigation/components/WorkspaceLoadingTransition.vue";
 import PulsarLogo from "./PulsarLogo.vue";
 
 type GoogleCredentialResponse = {
@@ -25,26 +21,27 @@ type GoogleTokenClient = {
   requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
 };
 
-type GoogleUserProfile = {
-  email?: string;
-  email_verified?: boolean | string;
-  name?: string;
-  picture?: string;
-};
-
-type AuthTokenResponse = {
-  access_token: string;
-  token_type: string;
+type AuthSessionResponse = {
+  status: string;
+  token_type?: string;
 };
 
 type PasswordResetRequestResponse = {
   status: string;
-  email_sent?: boolean;
 };
 
 type ApiErrorPayload = {
   detail?: string | Array<{ msg?: string }>;
 };
+
+const props = withDefaults(
+  defineProps<{
+    redirectPath?: string;
+  }>(),
+  {
+    redirectPath: "",
+  },
+);
 
 declare global {
   interface Window {
@@ -92,21 +89,15 @@ const isSignUpRepeatPasswordVisible = ref(false);
 const isResetPasswordVisible = ref(false);
 const isResetRepeatPasswordVisible = ref(false);
 const returningFrom = ref<"signup" | "reset" | null>(null);
-const isWorkspaceLoading = ref(false);
 
 let toastTimer = 0;
 let cardReturnTimer = 0;
 let redirectTimer = 0;
 let tokenClient: GoogleTokenClient | null = null;
 const CARD_FLIP_MS = 720;
-const WORKSPACE_TRANSITION_MS = 560;
+const WORKSPACE_TRANSITION_MS = 80;
 
-const apiBaseUrl = (import.meta.env.PUBLIC_API_BASE_URL || "http://127.0.0.1:8000")
-  .replace(/\/$/, "")
-  .replace(/\/api\/v1$/, "");
 const googleClientId = import.meta.env.PUBLIC_GOOGLE_CLIENT_ID || "";
-const frontendAuthToken = import.meta.env.PUBLIC_FRONTEND_AUTH_TOKEN || "";
-const defaultIsAdmin = import.meta.env.PUBLIC_DEFAULT_IS_ADMIN === "true";
 const isGoogleConfigured = computed(() => googleClientId.trim().length > 0);
 const canUseEmail = computed(
   () => email.value.trim().length > 0 && password.value.length > 0,
@@ -152,33 +143,25 @@ const loadGoogleIdentityScript = () =>
     document.head.appendChild(script);
   });
 
-const persistSessionCookie = (accessToken: string) => {
-  const secureCookie = window.location.protocol === "https:" ? "Secure" : "";
-  document.cookie = [
-    `${ACCESS_TOKEN_COOKIE_NAME}=${encodeURIComponent(accessToken)}`,
-    "Path=/",
-    `Max-Age=${ACCESS_TOKEN_MAX_AGE_SECONDS}`,
-    "SameSite=Lax",
-    secureCookie,
-  ]
-    .filter(Boolean)
-    .join("; ");
-};
-
-const persistSession = (accessToken: string) => {
-  window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
-  window.localStorage.setItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY, accessToken);
-  persistSessionCookie(accessToken);
+const persistSession = () => {
+  clearStoredAccessTokens();
   window.dispatchEvent(
     new CustomEvent("pixel:auth", {
-      detail: { accessToken },
+      detail: { authenticated: true },
     }),
   );
 };
 
+const readHashRedirectPath = () => {
+  const hashValue = window.location.hash.replace(/^#/, "");
+  return new URLSearchParams(hashValue).get("next");
+};
+
 const redirectAfterSignIn = () => {
   const redirectPath = createSafeRedirectPath(
-    new URLSearchParams(window.location.search).get("next"),
+    props.redirectPath ||
+      new URLSearchParams(window.location.search).get("next") ||
+      readHashRedirectPath(),
   );
   redirectTimer = window.setTimeout(() => {
     window.location.assign(redirectPath);
@@ -203,8 +186,9 @@ const readApiError = async (response: Response, fallbackMessage: string) => {
 };
 
 const postJson = async <ResponseBody,>(path: string, body: unknown, fallbackMessage: string) => {
-  const apiResponse = await fetch(`${apiBaseUrl}${path}`, {
+  const apiResponse = await fetch(path, {
     method: "POST",
+    credentials: "same-origin",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -219,32 +203,13 @@ const postJson = async <ResponseBody,>(path: string, body: unknown, fallbackMess
   return (await apiResponse.json()) as ResponseBody;
 };
 
-const completeSession = (accessToken: string) => {
-  persistSession(accessToken);
+const completeSession = () => {
+  persistSession();
   status.value = "success";
   hideToast();
   window.sessionStorage.setItem(WORKSPACE_TRANSITION_STORAGE_KEY, "pending");
-  isWorkspaceLoading.value = true;
+  document.documentElement.classList.add("route-transition-pending");
   redirectAfterSignIn();
-};
-
-const readGoogleProfile = async (accessToken: string) => {
-  const profileResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!profileResponse.ok) {
-    throw new Error("Could not read your Google profile.");
-  }
-
-  const profile = (await profileResponse.json()) as GoogleUserProfile;
-  if (!profile.email || profile.email_verified === false || profile.email_verified === "false") {
-    throw new Error("Could not verify your Google email.");
-  }
-
-  return profile;
 };
 
 const handleGoogleToken = async (response: GoogleTokenResponse) => {
@@ -253,28 +218,18 @@ const handleGoogleToken = async (response: GoogleTokenResponse) => {
     return;
   }
 
-  if (!frontendAuthToken.trim()) {
-    showToast("Auth token is not configured.", "error");
-    return;
-  }
-
   status.value = "loading";
   hideToast();
 
   try {
-    const profile = await readGoogleProfile(response.access_token);
-    const session = await postJson<AuthTokenResponse>(
-      "/api/v1/auth/session",
+    await postJson<AuthSessionResponse>(
+      "/api/v1/auth/google",
       {
-        auth_token: frontendAuthToken,
-        email: profile.email,
-        display_name: profile.name || profile.email,
-        avatar_url: profile.picture,
-        is_admin: defaultIsAdmin,
+        access_token: response.access_token,
       },
-      "Could not create the session.",
+      "Could not verify your Google account.",
     );
-    completeSession(session.access_token);
+    completeSession();
   } catch (error) {
     status.value = "error";
     showToast(error instanceof Error ? error.message : "Could not connect.", "error");
@@ -322,7 +277,7 @@ const signInWithEmail = async () => {
   hideToast();
 
   try {
-    const session = await postJson<AuthTokenResponse>(
+    await postJson<AuthSessionResponse>(
       "/api/v1/auth/login",
       {
         email: email.value.trim(),
@@ -330,7 +285,7 @@ const signInWithEmail = async () => {
       },
       "Could not sign in.",
     );
-    completeSession(session.access_token);
+    completeSession();
   } catch (error) {
     status.value = "error";
     showToast(error instanceof Error ? error.message : "Could not sign in.", "error");
@@ -416,7 +371,7 @@ const createAccount = async () => {
   hideToast();
 
   try {
-    const session = await postJson<AuthTokenResponse>(
+    await postJson<AuthSessionResponse>(
       "/api/v1/auth/register",
       {
         username: signUpUsername.value.trim(),
@@ -426,7 +381,7 @@ const createAccount = async () => {
       },
       "Could not create the account.",
     );
-    completeSession(session.access_token);
+    completeSession();
   } catch (error) {
     status.value = "error";
     showToast(
@@ -479,7 +434,7 @@ const requestPasswordReset = async () => {
   hideToast();
 
   try {
-    const resetRequest = await postJson<PasswordResetRequestResponse>(
+    await postJson<PasswordResetRequestResponse>(
       "/api/v1/auth/password-reset/request",
       {
         email: resetEmail.value.trim(),
@@ -487,12 +442,7 @@ const requestPasswordReset = async () => {
       "Could not request the reset link.",
     );
     status.value = "ready";
-    showToast(
-      resetRequest.email_sent
-        ? "Check your email for the reset link."
-        : "If the account exists, reset instructions were sent.",
-      "success",
-    );
+    showToast("If the account exists, reset instructions were sent.", "success");
   } catch (error) {
     status.value = "error";
     showToast(
@@ -522,7 +472,7 @@ const confirmPasswordReset = async () => {
   hideToast();
 
   try {
-    const session = await postJson<AuthTokenResponse>(
+    await postJson<AuthSessionResponse>(
       "/api/v1/auth/password-reset/confirm",
       {
         token: resetToken.value,
@@ -534,7 +484,7 @@ const confirmPasswordReset = async () => {
     resetToken.value = "";
     resetPassword.value = "";
     resetRepeatPassword.value = "";
-    completeSession(session.access_token);
+    completeSession();
   } catch (error) {
     status.value = "error";
     showToast(
@@ -627,7 +577,7 @@ const hideToast = () => {
 
             <div class="welcome-copy">
               <p class="welcome-title">Welcome</p>
-              <p class="welcome-subtitle">Sign in to your workspace</p>
+              <p class="welcome-subtitle">Sign in to your studio</p>
             </div>
 
             <form class="email-form" @submit.prevent="signInWithEmail">
@@ -756,7 +706,7 @@ const hideToast = () => {
 
             <div class="welcome-copy">
               <p class="welcome-title">Create account</p>
-              <p class="welcome-subtitle">Start building your workspace</p>
+              <p class="welcome-subtitle">Start building your studio</p>
             </div>
 
             <form class="email-form" @submit.prevent="createAccount">
@@ -1058,8 +1008,6 @@ const hideToast = () => {
     <div v-if="message" class="app-toast" :class="status" role="status">
       {{ message }}
     </div>
-
-    <WorkspaceLoadingTransition :active="isWorkspaceLoading" />
   </section>
 </template>
 

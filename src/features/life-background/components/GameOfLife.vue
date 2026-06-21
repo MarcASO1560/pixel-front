@@ -294,7 +294,7 @@ let nextInjectionAt = 0;
 let palettePhase = Math.random() * 360;
 
 const STEP_MS = 70;
-const INJECTION_MS = 5000;
+const INJECTION_MS = 2000;
 const WORLD_SCALE = 2.55;
 const TRAVELER_STEP_MS = 82;
 const TRAVELER_INJECTION_MS = 1800;
