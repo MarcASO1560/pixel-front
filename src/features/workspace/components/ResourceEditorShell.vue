@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef } from "vue";
-import { Link2, Link2Off, Pencil, Scaling, SlidersHorizontal, X } from "@lucide/vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef, watch } from "vue";
+import { Eraser, Link2, Link2Off, PaintBucket, Palette, Pencil, Pipette, Plus, Scaling, SlidersHorizontal, X } from "@lucide/vue";
 import { Icon, type IconifyIcon } from "@iconify/vue";
 import fileImageIcon from "@iconify-icons/mdi/file-image";
 import filmstripIcon from "@iconify-icons/mdi/filmstrip";
@@ -30,6 +30,7 @@ type EditorMeta = {
 
 type PixelColor = string | null;
 type ImagePaintTool = "pencil" | "erase";
+type ImageTool = ImagePaintTool | "fill" | "picker";
 type ImagePixelSnapshot = PixelColor[];
 type ImageAnchorArrowDirection = "down" | "left" | "right" | "up";
 type ImageInspectorPanel = "preferences" | "resize";
@@ -70,6 +71,7 @@ type ImageResourceData = {
   width: number;
   height: number;
   anchor: ImageResizeAnchor;
+  palette?: string[];
   pixels: PixelColor[];
 };
 
@@ -122,6 +124,13 @@ const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
+const IMAGE_COLOR_PICKER_SIZE = 292;
+const IMAGE_COLOR_PICKER_CENTER = IMAGE_COLOR_PICKER_SIZE / 2;
+const IMAGE_COLOR_PICKER_RADIUS = 136;
+const IMAGE_COLOR_PICKER_RING_WIDTH = 28;
+const IMAGE_COLOR_TRIANGLE_TOP = { x: 146, y: 28 };
+const IMAGE_COLOR_TRIANGLE_LEFT = { x: 48, y: 212 };
+const IMAGE_COLOR_TRIANGLE_RIGHT = { x: 244, y: 212 };
 const DEFAULT_CUSTOM_IMAGE_BACKGROUND = "#101111";
 const DEFAULT_CUSTOM_IMAGE_GRID_COLOR = "#f7f1e7";
 const DEFAULT_CUSTOM_IMAGE_SUBDIVISION_COLOR = "#ff4d4d";
@@ -159,7 +168,9 @@ const imagePixels = shallowRef<PixelColor[]>(
   Array(DEFAULT_IMAGE_WIDTH * DEFAULT_IMAGE_HEIGHT).fill(null),
 );
 const selectedImageColor = ref(DEFAULT_PENCIL_COLOR);
-const activeImageTool = ref<ImagePaintTool>("pencil");
+const selectedImageColorDraft = ref(DEFAULT_PENCIL_COLOR.toUpperCase());
+const imageColorPalette = ref<string[]>([]);
+const activeImageTool = ref<ImageTool>("pencil");
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
@@ -174,6 +185,9 @@ const imageGridGap = ref<ImageGridGap>(1);
 const imageGridLineOpacity = ref(0.18);
 const imageGridLineOpacityDraft = ref("0.18");
 const imageZoom = ref(1);
+const selectedImageHue = ref(0);
+const selectedImageSaturation = ref(0);
+const selectedImageValue = ref(1);
 const imagePanX = ref(0);
 const imagePanY = ref(0);
 const imageViewportWidth = ref(0);
@@ -186,6 +200,8 @@ const imageStageRef = ref<HTMLElement | null>(null);
 const imageArtboardRef = ref<HTMLElement | null>(null);
 const imageCanvasRef = ref<HTMLCanvasElement | null>(null);
 const imagePreviewCanvasRef = ref<HTMLCanvasElement | null>(null);
+const imageColorTriangleCanvasRef = ref<HTMLCanvasElement | null>(null);
+const imageColorPickerRef = ref<HTMLElement | null>(null);
 const imagePreviewViewport = ref<ImagePreviewViewport>({
   height: 100,
   left: 0,
@@ -231,6 +247,150 @@ const getRgbFromHexColor = (color: string) => {
     green: Number.parseInt(hex.slice(2, 4), 16),
     red: Number.parseInt(hex.slice(0, 2), 16),
   };
+};
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+const colorComponentToHex = (value: number) =>
+  Math.round(Math.min(255, Math.max(0, value))).toString(16).padStart(2, "0");
+const normalizeHexColorInput = (value: string) => {
+  const hex = value.replace(/[^0-9a-f]/gi, "").slice(0, 6).toUpperCase();
+
+  return `#${hex}`;
+};
+const isCompleteHexColor = (value: string) => /^#[0-9A-F]{6}$/.test(value);
+const normalizeImagePalette = (palette: unknown) => {
+  if (!Array.isArray(palette)) {
+    return [];
+  }
+
+  const colors: string[] = [];
+  for (const color of palette) {
+    if (typeof color !== "string") {
+      continue;
+    }
+
+    const normalized = normalizeHexColorInput(color);
+    if (isCompleteHexColor(normalized) && !colors.includes(normalized)) {
+      colors.push(normalized);
+    }
+  }
+
+  return colors;
+};
+const hsvToHexColor = (hue: number, saturation: number, value: number) => {
+  const chroma = value * saturation;
+  const huePrime = ((hue % 360) + 360) % 360 / 60;
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+  const match = value - chroma;
+  const [red, green, blue] =
+    huePrime < 1
+      ? [chroma, x, 0]
+      : huePrime < 2
+        ? [x, chroma, 0]
+        : huePrime < 3
+          ? [0, chroma, x]
+          : huePrime < 4
+            ? [0, x, chroma]
+            : huePrime < 5
+              ? [x, 0, chroma]
+              : [chroma, 0, x];
+
+  return `#${colorComponentToHex((red + match) * 255)}${colorComponentToHex(
+    (green + match) * 255,
+  )}${colorComponentToHex((blue + match) * 255)}`;
+};
+const hexColorToHsv = (color: string) => {
+  const { blue, green, red } = getRgbFromHexColor(color);
+  const normalizedRed = red / 255;
+  const normalizedGreen = green / 255;
+  const normalizedBlue = blue / 255;
+  const max = Math.max(normalizedRed, normalizedGreen, normalizedBlue);
+  const min = Math.min(normalizedRed, normalizedGreen, normalizedBlue);
+  const delta = max - min;
+  let hue = selectedImageHue.value;
+
+  if (delta > 0) {
+    if (max === normalizedRed) {
+      hue = 60 * (((normalizedGreen - normalizedBlue) / delta) % 6);
+    } else if (max === normalizedGreen) {
+      hue = 60 * ((normalizedBlue - normalizedRed) / delta + 2);
+    } else {
+      hue = 60 * ((normalizedRed - normalizedGreen) / delta + 4);
+    }
+  }
+
+  return {
+    hue: (hue + 360) % 360,
+    saturation: max === 0 ? 0 : delta / max,
+    value: max,
+  };
+};
+const syncSelectedImageHsvFromColor = (color: string) => {
+  const hsv = hexColorToHsv(color);
+  selectedImageHue.value = hsv.hue;
+  selectedImageSaturation.value = hsv.saturation;
+  selectedImageValue.value = hsv.value;
+};
+const setSelectedImageColor = (color: string, options: { syncHsv?: boolean } = {}) => {
+  selectedImageColor.value = color;
+  selectedImageColorDraft.value = color.toUpperCase();
+
+  if (options.syncHsv !== false) {
+    syncSelectedImageHsvFromColor(color);
+  }
+};
+const applySelectedImageHsv = () => {
+  setSelectedImageColor(
+    hsvToHexColor(
+      selectedImageHue.value,
+      selectedImageSaturation.value,
+      selectedImageValue.value,
+    ),
+    { syncHsv: false },
+  );
+};
+const updateSelectedImageColorFromInput = (event: Event) => {
+  const input = event.currentTarget as HTMLInputElement;
+  const normalized = normalizeHexColorInput(input.value);
+  selectedImageColorDraft.value = normalized;
+  input.value = normalized;
+
+  if (isCompleteHexColor(normalized)) {
+    setSelectedImageColor(normalized);
+  }
+};
+const commitSelectedImageColorInput = () => {
+  if (isCompleteHexColor(selectedImageColorDraft.value)) {
+    setSelectedImageColor(selectedImageColorDraft.value);
+    return;
+  }
+
+  selectedImageColorDraft.value = selectedImageColor.value.toUpperCase();
+};
+const addImagePaletteColor = (color = selectedImageColor.value, options: { autosave?: boolean } = {}) => {
+  const normalized = normalizeHexColorInput(color);
+  if (!isCompleteHexColor(normalized) || imageColorPalette.value.includes(normalized)) {
+    return false;
+  }
+
+  imageColorPalette.value = [...imageColorPalette.value, normalized];
+  if (options.autosave !== false) {
+    scheduleImageAutosave();
+  }
+  return true;
+};
+const selectImagePaletteColor = (color: string) => {
+  setSelectedImageColor(color);
+};
+const removeImagePaletteColor = (color: string) => {
+  const normalized = normalizeHexColorInput(color);
+  const nextPalette = imageColorPalette.value.filter((paletteColor) => paletteColor !== normalized);
+
+  if (nextPalette.length === imageColorPalette.value.length) {
+    return;
+  }
+
+  imageColorPalette.value = nextPalette;
+  scheduleImageAutosave();
 };
 const getImageGridLineBackground = (color: string) => {
   const { blue, green, red } = getRgbFromHexColor(color);
@@ -278,6 +438,13 @@ const activeImageInspectorLabel = computed(() => {
 const imageArtboardBaseSize = computed(() => {
   const viewportWidth = imageViewportWidth.value || 1024;
   const viewportHeight = imageViewportHeight.value || 768;
+  if (viewportWidth <= 520) {
+    const availableWidth = Math.max(180, viewportWidth - 28);
+    const availableHeight = Math.max(220, viewportHeight - 420);
+
+    return Math.min(availableWidth, availableHeight, 310);
+  }
+
   const viewportMin = Math.min(viewportWidth, viewportHeight);
   const aspectRatio = imageGridWidth.value / imageGridHeight.value;
 
@@ -382,6 +549,8 @@ const imageCanvasGridStyle = computed(() => ({
   "--image-artboard-half-height": `${imageArtboardHeight.value / 2}px`,
   "--image-artboard-half-width": `${imageArtboardWidth.value / 2}px`,
   "--image-artboard-width": `${imageArtboardWidth.value}px`,
+  "--image-artboard-center-x": "50%",
+  "--image-artboard-center-y": imageViewportWidth.value <= 520 ? "46%" : "50%",
   "--image-pan-x": `${imagePanX.value}px`,
   "--image-pan-y": `${imagePanY.value}px`,
   "--image-zoom": `${imageZoom.value}`,
@@ -392,13 +561,57 @@ const imagePreviewGridStyle = computed(() => ({
   aspectRatio: `${imageGridWidth.value} / ${imageGridHeight.value}`,
   gridTemplateColumns: `repeat(${imageGridWidth.value}, 1fr)`,
   gridTemplateRows: `repeat(${imageGridHeight.value}, 1fr)`,
+  height:
+    imageGridWidth.value >= imageGridHeight.value
+      ? `${(imageGridHeight.value / imageGridWidth.value) * 100}%`
+      : "100%",
   "--image-preview-empty-pixel": customImageBackground.value,
+  width:
+    imageGridWidth.value >= imageGridHeight.value
+      ? "100%"
+      : `${(imageGridWidth.value / imageGridHeight.value) * 100}%`,
 }));
 const imagePreviewViewportStyle = computed(() => ({
   height: `${imagePreviewViewport.value.height}%`,
   left: `${imagePreviewViewport.value.left}%`,
   top: `${imagePreviewViewport.value.top}%`,
   width: `${imagePreviewViewport.value.width}%`,
+}));
+const selectedImageHueColor = computed(() =>
+  hsvToHexColor(selectedImageHue.value, 1, 1),
+);
+const imageColorHueHandleStyle = computed(() => {
+  const angleDegrees = selectedImageHue.value - 180;
+  const angle = (angleDegrees * Math.PI) / 180;
+  const radius = IMAGE_COLOR_PICKER_RADIUS - IMAGE_COLOR_PICKER_RING_WIDTH * 0.14;
+
+  return {
+    left: `${IMAGE_COLOR_PICKER_CENTER + Math.cos(angle) * radius}px`,
+    top: `${IMAGE_COLOR_PICKER_CENTER + Math.sin(angle) * radius}px`,
+    transform: `translate(-50%, -50%) rotate(${angleDegrees}deg)`,
+  };
+});
+const imageColorTriangleHandleStyle = computed(() => {
+  const hueWeight = selectedImageSaturation.value * selectedImageValue.value;
+  const whiteWeight = (1 - selectedImageSaturation.value) * selectedImageValue.value;
+  const blackWeight = 1 - selectedImageValue.value;
+  const x =
+    IMAGE_COLOR_TRIANGLE_TOP.x * blackWeight +
+    IMAGE_COLOR_TRIANGLE_LEFT.x * whiteWeight +
+    IMAGE_COLOR_TRIANGLE_RIGHT.x * hueWeight;
+  const y =
+    IMAGE_COLOR_TRIANGLE_TOP.y * blackWeight +
+    IMAGE_COLOR_TRIANGLE_LEFT.y * whiteWeight +
+    IMAGE_COLOR_TRIANGLE_RIGHT.y * hueWeight;
+
+  return {
+    left: `${x - IMAGE_COLOR_TRIANGLE_LEFT.x}px`,
+    top: `${y - IMAGE_COLOR_TRIANGLE_TOP.y}px`,
+  };
+});
+const imageColorPickerStyle = computed(() => ({
+  "--selected-image-color": selectedImageColor.value,
+  "--selected-image-hue-color": selectedImageHueColor.value,
 }));
 
 const renderImageCanvas = () => {
@@ -465,6 +678,76 @@ const renderImagePreviewCanvas = () => {
     context.fillStyle = color;
     context.fillRect(column, row, 1, 1);
   }
+};
+
+const getImageColorTriangleWeights = (x: number, y: number) => {
+  const denominator =
+    (IMAGE_COLOR_TRIANGLE_LEFT.y - IMAGE_COLOR_TRIANGLE_RIGHT.y) *
+      (IMAGE_COLOR_TRIANGLE_TOP.x - IMAGE_COLOR_TRIANGLE_RIGHT.x) +
+    (IMAGE_COLOR_TRIANGLE_RIGHT.x - IMAGE_COLOR_TRIANGLE_LEFT.x) *
+      (IMAGE_COLOR_TRIANGLE_TOP.y - IMAGE_COLOR_TRIANGLE_RIGHT.y);
+  const black =
+    ((IMAGE_COLOR_TRIANGLE_LEFT.y - IMAGE_COLOR_TRIANGLE_RIGHT.y) *
+      (x - IMAGE_COLOR_TRIANGLE_RIGHT.x) +
+      (IMAGE_COLOR_TRIANGLE_RIGHT.x - IMAGE_COLOR_TRIANGLE_LEFT.x) *
+        (y - IMAGE_COLOR_TRIANGLE_RIGHT.y)) /
+    denominator;
+  const white =
+    ((IMAGE_COLOR_TRIANGLE_RIGHT.y - IMAGE_COLOR_TRIANGLE_TOP.y) *
+      (x - IMAGE_COLOR_TRIANGLE_RIGHT.x) +
+      (IMAGE_COLOR_TRIANGLE_TOP.x - IMAGE_COLOR_TRIANGLE_RIGHT.x) *
+        (y - IMAGE_COLOR_TRIANGLE_RIGHT.y)) /
+    denominator;
+  const hue = 1 - black - white;
+
+  return { black, hue, white };
+};
+
+const renderImageColorTriangleCanvas = () => {
+  const canvas = imageColorTriangleCanvasRef.value;
+  if (!canvas) {
+    return;
+  }
+
+  const cssWidth = IMAGE_COLOR_TRIANGLE_RIGHT.x - IMAGE_COLOR_TRIANGLE_LEFT.x;
+  const cssHeight = IMAGE_COLOR_TRIANGLE_LEFT.y - IMAGE_COLOR_TRIANGLE_TOP.y;
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.round(cssWidth * pixelRatio);
+  const height = Math.round(cssHeight * pixelRatio);
+  canvas.width = width;
+  canvas.height = height;
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+
+  const imageData = context.createImageData(width, height);
+  const hueRgb = getRgbFromHexColor(selectedImageHueColor.value);
+
+  for (let row = 0; row < height; row += 1) {
+    for (let column = 0; column < width; column += 1) {
+      const weights = getImageColorTriangleWeights(
+        IMAGE_COLOR_TRIANGLE_LEFT.x + (column + 0.5) / pixelRatio,
+        IMAGE_COLOR_TRIANGLE_TOP.y + (row + 0.5) / pixelRatio,
+      );
+      const dataIndex = (row * width + column) * 4;
+      const black = Math.max(0, weights.black);
+      const white = Math.max(0, weights.white);
+      const hue = Math.max(0, weights.hue);
+      const total = black + white + hue || 1;
+      const normalizedWhite = white / total;
+      const normalizedHue = hue / total;
+
+      imageData.data[dataIndex] = Math.round(255 * normalizedWhite + hueRgb.red * normalizedHue);
+      imageData.data[dataIndex + 1] = Math.round(255 * normalizedWhite + hueRgb.green * normalizedHue);
+      imageData.data[dataIndex + 2] = Math.round(255 * normalizedWhite + hueRgb.blue * normalizedHue);
+      imageData.data[dataIndex + 3] = 255;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
 };
 
 let imageCanvasRenderFrame: number | null = null;
@@ -551,13 +834,21 @@ const readImagePixelsFromData = (data: Record<string, unknown>) => {
     typeof pixelArtData === "object" &&
     "pixels" in pixelArtData
   ) {
-    const imageData = pixelArtData as { height?: unknown; pixels?: unknown; size?: unknown; width?: unknown };
+    const imageData = pixelArtData as {
+      anchor?: unknown;
+      height?: unknown;
+      palette?: unknown;
+      pixels?: unknown;
+      size?: unknown;
+      width?: unknown;
+    };
     const width = normalizeImageDimension(imageData.width ?? imageData.size, DEFAULT_IMAGE_WIDTH);
     const height = normalizeImageDimension(imageData.height ?? imageData.size, DEFAULT_IMAGE_HEIGHT);
 
     return {
       anchor: normalizeImageResizeAnchor(imageData.anchor),
       height,
+      palette: normalizeImagePalette(imageData.palette),
       pixels: normalizeImagePixels(imageData.pixels, width, height),
       width,
     };
@@ -569,6 +860,7 @@ const readImagePixelsFromData = (data: Record<string, unknown>) => {
   return {
     anchor: normalizeImageResizeAnchor(data.anchor),
     height,
+    palette: normalizeImagePalette(data.palette),
     pixels: normalizeImagePixels(data.pixels, width, height),
     width,
   };
@@ -579,6 +871,7 @@ const buildImageResourceData = (): ImageResourceData => ({
   width: imageGridWidth.value,
   height: imageGridHeight.value,
   anchor: imageResizeAnchor.value,
+  palette: [...imageColorPalette.value],
   pixels: [...imagePixels.value],
 });
 
@@ -717,8 +1010,16 @@ const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
   return pixelIndex;
 };
 
-const getImagePointerTool = (event: PointerEvent): ImagePaintTool =>
-  event.button === 2 || (event.buttons & 2) === 2 ? "erase" : activeImageTool.value;
+const isImageErasePointer = (event: PointerEvent) =>
+  event.button === 2 || (event.buttons & 2) === 2;
+
+const getImagePointerTool = (event: PointerEvent): ImagePaintTool => {
+  if (!isImageErasePointer(event)) {
+    return activeImageTool.value === "erase" ? "erase" : "pencil";
+  }
+
+  return activeImageTool.value === "erase" ? "pencil" : "erase";
+};
 
 const focusAndCaptureImagePointer = (event: PointerEvent) => {
   const canvas = event.currentTarget as HTMLElement;
@@ -858,6 +1159,9 @@ const paintImagePixels = (indexes: number[], forcedTool?: ImagePaintTool) => {
 
   const tool = forcedTool || activeImageTool.value;
   const nextColor = tool === "erase" ? null : selectedImageColor.value;
+  const didAddPaletteColor = nextColor
+    ? addImagePaletteColor(nextColor, { autosave: false })
+    : false;
   let didChange = false;
 
   for (const index of indexes) {
@@ -874,6 +1178,9 @@ const paintImagePixels = (indexes: number[], forcedTool?: ImagePaintTool) => {
   }
 
   if (!didChange) {
+    if (didAddPaletteColor) {
+      scheduleImageAutosave();
+    }
     return;
   }
 
@@ -881,6 +1188,124 @@ const paintImagePixels = (indexes: number[], forcedTool?: ImagePaintTool) => {
   scheduleImageCanvasRender();
   scheduleImageAutosave();
 };
+
+const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) => {
+  if (!isImageEditor.value || startIndex < 0 || startIndex >= imagePixelCount.value) {
+    return;
+  }
+
+  const targetColor = imagePixels.value[startIndex] || null;
+  const didAddPaletteColor = replacementColor
+    ? addImagePaletteColor(replacementColor, { autosave: false })
+    : false;
+
+  if (targetColor === replacementColor) {
+    if (didAddPaletteColor) {
+      scheduleImageAutosave();
+    }
+    return;
+  }
+
+  const nextPixels = [...imagePixels.value];
+  const pending = [startIndex];
+  const visited = new Set<number>();
+
+  while (pending.length > 0) {
+    const index = pending.pop();
+
+    if (index === undefined || visited.has(index) || nextPixels[index] !== targetColor) {
+      continue;
+    }
+
+    visited.add(index);
+    nextPixels[index] = replacementColor;
+
+    const row = Math.floor(index / imageGridWidth.value);
+    const column = index % imageGridWidth.value;
+
+    if (row > 0) pending.push(index - imageGridWidth.value);
+    if (row < imageGridHeight.value - 1) pending.push(index + imageGridWidth.value);
+    if (column > 0) pending.push(index - 1);
+    if (column < imageGridWidth.value - 1) pending.push(index + 1);
+  }
+
+  const didChange = updateImagePixels(nextPixels);
+  if (replacementColor && didChange) {
+    addImagePaletteColor(replacementColor, { autosave: false });
+  }
+};
+
+const pickImageColorFrom = (pixelIndex: number) => {
+  const color = imagePixels.value[pixelIndex];
+
+  if (!color) {
+    return;
+  }
+
+  setSelectedImageColor(color);
+};
+
+const updateImageHueFromPointer = (event: PointerEvent) => {
+  if (event.type === "pointermove" && event.buttons === 0) {
+    return;
+  }
+
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const x = event.clientX - rect.left - rect.width / 2;
+  const y = event.clientY - rect.top - rect.height / 2;
+  selectedImageHue.value = (Math.atan2(y, x) * 180) / Math.PI + 180;
+  selectedImageHue.value = (selectedImageHue.value + 360) % 360;
+  applySelectedImageHsv();
+};
+
+const getImageTriangleWeightsFromPointer = (event: PointerEvent) => {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const scaleX = rect.width / (IMAGE_COLOR_TRIANGLE_RIGHT.x - IMAGE_COLOR_TRIANGLE_LEFT.x);
+  const scaleY = rect.height / (IMAGE_COLOR_TRIANGLE_LEFT.y - IMAGE_COLOR_TRIANGLE_TOP.y);
+  const x = IMAGE_COLOR_TRIANGLE_LEFT.x + (event.clientX - rect.left) / scaleX;
+  const y = IMAGE_COLOR_TRIANGLE_TOP.y + (event.clientY - rect.top) / scaleY;
+  const weights = getImageColorTriangleWeights(x, y);
+  const clampedBlack = Math.max(0, weights.black);
+  const clampedWhite = Math.max(0, weights.white);
+  const clampedHue = Math.max(0, weights.hue);
+  const total = clampedBlack + clampedWhite + clampedHue || 1;
+
+  return {
+    black: clampedBlack / total,
+    hue: clampedHue / total,
+    white: clampedWhite / total,
+  };
+};
+
+const updateImageColorTriangleFromPointer = (event: PointerEvent) => {
+  if (event.type === "pointermove" && event.buttons === 0) {
+    return;
+  }
+
+  const weights = getImageTriangleWeightsFromPointer(event);
+  const value = 1 - weights.black;
+  selectedImageValue.value = clamp01(value);
+  selectedImageSaturation.value = value <= 0 ? 0 : clamp01(weights.hue / value);
+  applySelectedImageHsv();
+};
+
+const startImageHueSelection = (event: PointerEvent) => {
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateImageHueFromPointer(event);
+};
+
+const startImageColorTriangleSelection = (event: PointerEvent) => {
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateImageColorTriangleFromPointer(event);
+};
+
+watch(
+  selectedImageHue,
+  () => {
+    void nextTick(renderImageColorTriangleCanvas);
+  },
+  { immediate: true },
+);
 
 const startPaintingImageFromPointer = (event: PointerEvent) => {
   if (isImagePanButton(event)) {
@@ -894,9 +1319,23 @@ const startPaintingImageFromPointer = (event: PointerEvent) => {
     return;
   }
 
+  const pointerTool = getImagePointerTool(event);
+
+  if (activeImageTool.value === "picker") {
+    focusAndCaptureImagePointer(event);
+    pickImageColorFrom(pixelIndex);
+    return;
+  }
+
+  if (activeImageTool.value === "fill") {
+    focusAndCaptureImagePointer(event);
+    fillImagePixelsFrom(pixelIndex, isImageErasePointer(event) ? null : selectedImageColor.value);
+    return;
+  }
+
   isPaintingImage.value = true;
   focusAndCaptureImagePointer(event);
-  paintImagePixels([pixelIndex], getImagePointerTool(event));
+  paintImagePixels([pixelIndex], pointerTool);
   lastPaintedImagePixelIndex = pixelIndex;
 };
 
@@ -907,6 +1346,8 @@ const continuePaintingImageFromPointer = (event: PointerEvent) => {
   }
 
   const pixelIndex = updateHoveredImagePixelFromPointer(event);
+
+  const pointerTool = getImagePointerTool(event);
 
   if (!isPaintingImage.value) {
     return;
@@ -919,7 +1360,7 @@ const continuePaintingImageFromPointer = (event: PointerEvent) => {
 
   paintImagePixels(
     imageLineBetweenPixels(lastPaintedImagePixelIndex ?? pixelIndex, pixelIndex),
-    getImagePointerTool(event),
+    pointerTool,
   );
   lastPaintedImagePixelIndex = pixelIndex;
 };
@@ -1267,10 +1708,11 @@ const loadEditor = async () => {
     syncImageDimensionDrafts();
     imageResizeAnchor.value = imageData.anchor;
     imagePixels.value = imageData.pixels;
+    imageColorPalette.value = imageData.palette;
     imageResizeCenterColumnRemainder = 0;
     imageResizeCenterRowRemainder = 0;
     activeImageTool.value = "pencil";
-    selectedImageColor.value = DEFAULT_PENCIL_COLOR;
+    setSelectedImageColor(DEFAULT_PENCIL_COLOR);
   }
   project.value =
     workspace?.projects.find((workspaceProject) => workspaceProject.id === props.projectId) || null;
@@ -1284,6 +1726,7 @@ const loadEditor = async () => {
   void nextTick(() => {
     scheduleImageCanvasRender();
     scheduleImagePreviewViewportUpdate();
+    renderImageColorTriangleCanvas();
   });
 };
 
@@ -1293,6 +1736,7 @@ onMounted(() => {
   window.addEventListener("resize", updateImageViewportSize);
   updateImageViewportSize();
   void loadEditor();
+  void nextTick(renderImageColorTriangleCanvas);
 });
 
 onUnmounted(() => {
@@ -1369,7 +1813,8 @@ onUnmounted(() => {
         <div v-if="isImageEditor" class="image-editor-toolbar" aria-label="Image tools">
           <button
             type="button"
-            class="image-editor-tool is-active"
+            class="image-editor-tool"
+            :class="{ 'is-active': activeImageTool === 'pencil' }"
             aria-label="Pencil"
             :aria-pressed="activeImageTool === 'pencil'"
             title="Pencil"
@@ -1377,6 +1822,125 @@ onUnmounted(() => {
           >
             <Pencil :size="19" :stroke-width="2.2" aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            class="image-editor-tool"
+            :class="{ 'is-active': activeImageTool === 'fill' }"
+            aria-label="Fill"
+            :aria-pressed="activeImageTool === 'fill'"
+            title="Fill"
+            @click="activeImageTool = 'fill'"
+          >
+            <PaintBucket :size="19" :stroke-width="2.2" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="image-editor-tool"
+            :class="{ 'is-active': activeImageTool === 'erase' }"
+            aria-label="Eraser"
+            :aria-pressed="activeImageTool === 'erase'"
+            title="Eraser"
+            @click="activeImageTool = 'erase'"
+          >
+            <Eraser :size="19" :stroke-width="2.2" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="image-editor-tool"
+            :class="{ 'is-active': activeImageTool === 'picker' }"
+            aria-label="Color picker"
+            :aria-pressed="activeImageTool === 'picker'"
+            title="Color picker"
+            @click="activeImageTool = 'picker'"
+          >
+            <Pipette :size="19" :stroke-width="2.2" aria-hidden="true" />
+          </button>
+        </div>
+        <section
+          v-if="isImageEditor"
+          ref="imageColorPickerRef"
+          class="image-editor-color-panel"
+          :style="imageColorPickerStyle"
+          aria-label="Drawing color picker"
+        >
+          <div class="image-editor-color-picker-stage">
+              <div
+                class="image-editor-color-wheel"
+                aria-label="Hue"
+                @pointerdown.prevent="startImageHueSelection"
+                @pointermove.prevent="updateImageHueFromPointer"
+              >
+                <span
+                  class="image-editor-color-hue-handle"
+                  :style="imageColorHueHandleStyle"
+                  aria-hidden="true"
+                ></span>
+              </div>
+              <div
+                class="image-editor-color-triangle"
+                aria-label="Saturation and brightness"
+                @pointerdown.prevent="startImageColorTriangleSelection"
+                @pointermove.prevent="updateImageColorTriangleFromPointer"
+              >
+                <canvas ref="imageColorTriangleCanvasRef" aria-hidden="true"></canvas>
+                <svg viewBox="0 0 196 184" aria-hidden="true" focusable="false">
+                  <polygon
+                    points="98 0 0 184 196 184"
+                    fill="transparent"
+                  />
+                </svg>
+                <span
+                  class="image-editor-color-triangle-handle"
+                  :style="imageColorTriangleHandleStyle"
+                  aria-hidden="true"
+                ></span>
+              </div>
+          </div>
+          <div class="image-editor-color-value" aria-label="Selected color">
+            <span aria-hidden="true"></span>
+            <input
+              :value="selectedImageColorDraft"
+              aria-label="Selected color hex value"
+              inputmode="text"
+              maxlength="7"
+              spellcheck="false"
+              @blur="commitSelectedImageColorInput"
+              @input="updateSelectedImageColorFromInput"
+            />
+            <button
+              type="button"
+              class="image-editor-color-add"
+              aria-label="Add selected color to palette"
+              title="Add color to palette"
+              @click="addImagePaletteColor()"
+            >
+              <Plus :size="15" :stroke-width="2.4" aria-hidden="true" />
+            </button>
+          </div>
+        </section>
+        <div
+          v-if="isImageEditor && imageColorPalette.length"
+          class="image-editor-color-palette"
+          aria-label="Drawing color palette"
+        >
+          <span class="image-editor-color-palette__title">
+            <Palette :size="13" :stroke-width="2.3" aria-hidden="true" />
+            Palette
+          </span>
+          <div class="image-editor-color-palette__swatches">
+            <button
+              v-for="color in imageColorPalette"
+              :key="color"
+              type="button"
+              class="image-editor-color-swatch"
+              :class="{ 'is-active': selectedImageColor.toUpperCase() === color }"
+              :style="{ '--palette-color': color }"
+              :aria-label="`Use ${color}`"
+              :title="`${color} - right click to remove`"
+              @click="selectImagePaletteColor(color)"
+              @contextmenu.prevent="removeImagePaletteColor(color)"
+            ></button>
+          </div>
         </div>
         <aside v-if="isImageEditor" class="image-editor-preview" aria-label="Image preview">
           <div
@@ -1873,9 +2437,9 @@ onUnmounted(() => {
     top: 18px;
     left: 22px;
     z-index: 3;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, 40px);
     gap: 8px;
-    align-items: center;
   }
 
   .image-editor-tool {
@@ -1911,14 +2475,302 @@ onUnmounted(() => {
     transform: translateY(-1px);
   }
 
+  .image-editor-color-panel {
+    position: absolute;
+    bottom: 28px;
+    left: 22px;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: 292px;
+    padding: 0;
+    box-sizing: border-box;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    transform: scale(0.82);
+    transform-origin: bottom left;
+  }
+
+  .image-editor-color-picker-stage {
+    position: relative;
+    width: 292px;
+    height: 292px;
+  }
+
+  .image-editor-color-wheel {
+    position: absolute;
+    inset: 0;
+    width: 292px;
+    height: 292px;
+    border-radius: 50%;
+    cursor: crosshair;
+    background: conic-gradient(
+      from -90deg,
+      #f00,
+      #ff0,
+      #0f0,
+      #0ff,
+      #00f,
+      #f0f,
+      #f00
+    );
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.6),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  }
+
+  .image-editor-color-wheel::after {
+    position: absolute;
+    inset: 28px;
+    content: "";
+    background: rgba(16, 17, 17, 0.96);
+    border-radius: 50%;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.6),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    pointer-events: none;
+  }
+
+  .image-editor-color-hue-handle,
+  .image-editor-color-triangle-handle {
+    position: absolute;
+    z-index: 3;
+    width: 12px;
+    height: 12px;
+    box-sizing: border-box;
+    border: 2px solid #f7f1e7;
+    border-radius: 999px;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.72),
+      0 2px 8px rgba(0, 0, 0, 0.42);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+
+  .image-editor-color-hue-handle {
+    width: 28px;
+    height: 8px;
+    background: #f7f1e7;
+    border: 1px solid rgba(16, 17, 17, 0.72);
+    border-radius: 999px;
+    box-shadow:
+      0 0 0 1px rgba(247, 241, 231, 0.78),
+      0 2px 8px rgba(0, 0, 0, 0.44);
+  }
+
+  .image-editor-color-triangle {
+    position: absolute;
+    top: 28px;
+    left: 48px;
+    z-index: 2;
+    width: 196px;
+    height: 184px;
+    cursor: crosshair;
+    overflow: visible;
+    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.34));
+    pointer-events: none;
+  }
+
+  .image-editor-color-triangle::after {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    content: "";
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.22), transparent 34%),
+      radial-gradient(circle at 50% 62%, transparent 0 48%, rgba(0, 0, 0, 0.2) 78%);
+    clip-path: polygon(50% 0, 0 100%, 100% 100%);
+    mix-blend-mode: soft-light;
+    pointer-events: none;
+  }
+
+  .image-editor-color-triangle canvas,
+  .image-editor-color-triangle svg {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .image-editor-color-triangle svg {
+    z-index: 2;
+  }
+
+  .image-editor-color-triangle polygon {
+    pointer-events: fill;
+  }
+
+  .image-editor-color-triangle canvas {
+    clip-path: polygon(50% 0, 0 100%, 100% 100%);
+    image-rendering: auto;
+  }
+
+  .image-editor-color-triangle-handle {
+    width: 13px;
+    height: 13px;
+  }
+
+  .image-editor-color-value {
+    display: grid;
+    grid-template-columns: 32px 118px 34px;
+    gap: 9px;
+    align-items: center;
+    width: max-content;
+    margin-top: 14px;
+    transform: scale(1.16);
+    transform-origin: top center;
+  }
+
+  .image-editor-color-value span {
+    width: 32px;
+    height: 32px;
+    background: var(--selected-image-color, #ffffff);
+    border: 1px solid rgba(247, 241, 231, 0.58);
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.38);
+  }
+
+  .image-editor-color-value input {
+    min-width: 0;
+    width: 100%;
+    height: 34px;
+    padding: 0 8px;
+    background: rgba(5, 5, 5, 0.42);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    outline: none;
+    color: rgba(247, 241, 231, 0.76);
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 0.82rem;
+    font-weight: 760;
+    line-height: 1;
+    text-transform: uppercase;
+    transition:
+      background 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .image-editor-color-value input:hover,
+  .image-editor-color-value input:focus-visible {
+    background: rgba(5, 5, 5, 0.64);
+    border-color: rgba(247, 241, 231, 0.36);
+    color: rgba(247, 241, 231, 0.96);
+  }
+
+  .image-editor-color-add {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    color: rgba(247, 241, 231, 0.82);
+    background: rgba(5, 5, 5, 0.42);
+    border: 1px solid rgba(247, 241, 231, 0.22);
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      background 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease,
+      transform 160ms ease;
+  }
+
+  .image-editor-color-add:hover,
+  .image-editor-color-add:focus-visible {
+    color: rgba(247, 241, 231, 0.98);
+    background: rgba(5, 5, 5, 0.66);
+    border-color: rgba(247, 241, 231, 0.42);
+    outline: none;
+    transform: translateY(-1px);
+  }
+
+  .image-editor-color-palette {
+    position: absolute;
+    right: 22px;
+    bottom: 22px;
+    z-index: 3;
+    display: grid;
+    gap: 10px;
+    width: 260px;
+    max-width: min(260px, calc(100vw - 360px));
+    padding: 12px;
+    background: rgba(12, 13, 13, 0.82);
+    border: 1px solid rgba(247, 241, 231, 0.14);
+    border-radius: 8px;
+    box-shadow:
+      0 18px 40px rgba(0, 0, 0, 0.34),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(12px);
+  }
+
+  .image-editor-color-palette__title {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    color: rgba(247, 241, 231, 0.72);
+    font-size: 0.72rem;
+    font-weight: 760;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .image-editor-color-palette__swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    justify-content: flex-start;
+    width: 210px;
+    justify-self: center;
+  }
+
+  .image-editor-color-swatch {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: var(--palette-color, #ffffff);
+    border: 1px solid rgba(247, 241, 231, 0.28);
+    border-radius: 6px;
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.3),
+      0 4px 12px rgba(0, 0, 0, 0.24);
+    cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .image-editor-color-swatch:hover,
+  .image-editor-color-swatch:focus-visible {
+    border-color: rgba(247, 241, 231, 0.72);
+    outline: none;
+    transform: translateY(-1px);
+  }
+
+  .image-editor-color-swatch.is-active {
+    border-color: rgba(247, 241, 231, 0.92);
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.38),
+      0 0 0 2px rgba(247, 241, 231, 0.18),
+      0 4px 12px rgba(0, 0, 0, 0.26);
+  }
+
   .image-editor-preview {
     position: absolute;
     top: 18px;
     right: 22px;
     z-index: 3;
     width: clamp(138px, 13vw, 204px);
+    aspect-ratio: 1;
     display: grid;
+    align-items: start;
     box-sizing: border-box;
+    justify-items: end;
     pointer-events: none;
   }
 
@@ -1940,7 +2792,6 @@ onUnmounted(() => {
     display: block;
     width: 100%;
     height: 100%;
-    aspect-ratio: inherit;
     image-rendering: pixelated;
   }
 
@@ -2637,8 +3488,8 @@ onUnmounted(() => {
 
   .image-editor-artboard {
     position: absolute;
-    top: calc(50% - var(--image-artboard-half-height, 0px) + var(--image-pan-y, 0px));
-    left: calc(50% - var(--image-artboard-half-width, 0px) + var(--image-pan-x, 0px));
+    top: calc(var(--image-artboard-center-y, 50%) - var(--image-artboard-half-height, 0px) + var(--image-pan-y, 0px));
+    left: calc(var(--image-artboard-center-x, 50%) - var(--image-artboard-half-width, 0px) + var(--image-pan-x, 0px));
     z-index: 2;
     display: grid;
     box-sizing: border-box;
@@ -2773,6 +3624,160 @@ onUnmounted(() => {
 
     .resource-editor-title__kind {
       display: none;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .resource-editor {
+      min-height: 100dvh;
+    }
+
+    .resource-editor :deep(.studio-topbar) {
+      gap: 11px 10px;
+      padding: 12px 10px 10px;
+    }
+
+    .resource-editor :deep(.studio-topbar__brand-name) {
+      max-width: 142px;
+    }
+
+    .resource-editor-title {
+      justify-self: center;
+      width: min(100%, 270px);
+      height: 36px;
+      border-radius: 7px;
+    }
+
+    .resource-editor-stage {
+      min-height: 0;
+    }
+
+    .resource-editor-canvas {
+      place-items: start center;
+      overflow: hidden;
+      padding: 128px 12px 226px;
+      box-sizing: border-box;
+    }
+
+    .image-editor-toolbar {
+      top: 18px;
+      left: 20px;
+      grid-template-columns: repeat(2, 38px);
+    }
+
+    .image-editor-tool,
+    .image-editor-inspector-button {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+    }
+
+    .image-editor-color-panel {
+      bottom: 16px;
+      left: 20px;
+      width: 292px;
+      padding: 0;
+      transform: scale(0.5);
+      transform-origin: bottom left;
+    }
+
+    .image-editor-preview {
+      top: 18px;
+      right: 20px;
+      width: clamp(82px, 24vw, 100px);
+    }
+
+    .image-editor-color-palette {
+      bottom: 16px;
+      right: 20px;
+      width: 124px;
+      max-width: 124px;
+      padding: 9px;
+    }
+
+    .image-editor-color-palette__swatches {
+      width: 86px;
+    }
+
+    .image-editor-preview__grid {
+      border-radius: 4px;
+      box-shadow:
+        0 10px 24px rgba(0, 0, 0, 0.34),
+        0 0 0 1px rgba(0, 0, 0, 0.54);
+    }
+
+    .image-editor-preview__grid .image-editor-preview__viewport {
+      min-width: 6px;
+      min-height: 6px;
+      border-width: 2px;
+      border-radius: 2px;
+    }
+
+    .image-editor-side-inspector {
+      top: auto;
+      right: 20px;
+      bottom: 142px;
+      width: 38px;
+      transform: none;
+    }
+
+    .image-editor-inspector-rail {
+      gap: 7px;
+      width: 38px;
+    }
+
+    .image-editor-inspector-panel {
+      right: 0;
+      bottom: calc(100% + 8px);
+      top: auto;
+      width: min(284px, calc(100vw - 72px));
+      max-height: calc(100dvh - 220px);
+      padding: 12px;
+      border-radius: 8px;
+      transform: none;
+    }
+
+    .image-editor-artboard {
+      border-radius: 6px;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .resource-editor :deep(.studio-topbar__brand-name) {
+      max-width: 118px;
+    }
+
+    .image-editor-toolbar {
+      left: 14px;
+    }
+
+    .resource-editor-canvas {
+      padding-right: 10px;
+      padding-left: 10px;
+    }
+
+    .image-editor-color-panel {
+      left: 14px;
+      transform: scale(0.46);
+    }
+
+    .image-editor-preview {
+      right: 14px;
+      width: 82px;
+    }
+
+    .image-editor-color-palette {
+      right: 14px;
+      width: 98px;
+      max-width: 98px;
+    }
+
+    .image-editor-color-palette__swatches {
+      width: 55px;
+    }
+
+    .image-editor-side-inspector {
+      right: 14px;
     }
   }
 </style>
