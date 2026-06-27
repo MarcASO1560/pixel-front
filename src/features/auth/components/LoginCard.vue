@@ -12,13 +12,12 @@ type GoogleCredentialResponse = {
   credential?: string;
 };
 
-type GoogleTokenResponse = {
-  access_token?: string;
-  error?: string;
-};
-
-type GoogleTokenClient = {
-  requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+type GooglePromptMomentNotification = {
+  getNotDisplayedReason?: () => string;
+  getSkippedReason?: () => string;
+  isDismissedMoment?: () => boolean;
+  isNotDisplayed?: () => boolean;
+  isSkippedMoment?: () => boolean;
 };
 
 type AuthSessionResponse = {
@@ -54,15 +53,26 @@ declare global {
             callback: (response: GoogleCredentialResponse) => void;
             auto_select?: boolean;
             ux_mode?: "popup" | "redirect";
+            use_fedcm_for_button?: boolean;
+            button_auto_select?: boolean;
           }) => void;
-        };
-        oauth2: {
-          initTokenClient: (config: {
-            client_id: string;
-            scope: string;
-            callback: (response: GoogleTokenResponse) => void;
-            error_callback?: () => void;
-          }) => GoogleTokenClient;
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              click_listener?: () => void;
+              locale?: string;
+              logo_alignment?: "left" | "center";
+              shape?: "rectangular" | "pill" | "circle" | "square";
+              size?: "large" | "medium" | "small";
+              text?: "signin_with" | "signup_with" | "continue_with" | "signin";
+              theme?: "outline" | "filled_blue" | "filled_black";
+              type?: "standard" | "icon";
+              width?: number;
+            },
+          ) => void;
+          prompt: (
+            momentListener?: (notification: GooglePromptMomentNotification) => void,
+          ) => void;
         };
       };
     };
@@ -89,11 +99,12 @@ const isSignUpRepeatPasswordVisible = ref(false);
 const isResetPasswordVisible = ref(false);
 const isResetRepeatPasswordVisible = ref(false);
 const returningFrom = ref<"signup" | "reset" | null>(null);
+const googleButtonHost = ref<HTMLElement | null>(null);
 
 let toastTimer = 0;
 let cardReturnTimer = 0;
 let redirectTimer = 0;
-let tokenClient: GoogleTokenClient | null = null;
+let googlePromptTimer = 0;
 const CARD_FLIP_MS = 720;
 const WORKSPACE_TRANSITION_MS = 80;
 
@@ -212,8 +223,10 @@ const completeSession = () => {
   redirectAfterSignIn();
 };
 
-const handleGoogleToken = async (response: GoogleTokenResponse) => {
-  if (!response.access_token || response.error) {
+const handleGoogleCredential = async (response: GoogleCredentialResponse) => {
+  window.clearTimeout(googlePromptTimer);
+
+  if (!response.credential) {
     showToast("Could not connect.", "error");
     return;
   }
@@ -225,7 +238,7 @@ const handleGoogleToken = async (response: GoogleTokenResponse) => {
     await postJson<AuthSessionResponse>(
       "/api/v1/auth/google",
       {
-        access_token: response.access_token,
+        credential: response.credential,
       },
       "Could not verify your Google account.",
     );
@@ -236,30 +249,48 @@ const handleGoogleToken = async (response: GoogleTokenResponse) => {
   }
 };
 
-const initializeGoogleOauth = () => {
-  if (!window.google?.accounts?.oauth2 || !isGoogleConfigured.value) {
+const initializeGoogleIdentity = () => {
+  if (!window.google?.accounts?.id || !isGoogleConfigured.value) {
     return;
   }
 
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
+  window.google.accounts.id.initialize({
     client_id: googleClientId,
-    scope: "openid email profile",
-    callback: handleGoogleToken,
-    error_callback: () => showToast("Could not connect.", "error"),
+    callback: handleGoogleCredential,
+    auto_select: false,
+    ux_mode: "popup",
+    use_fedcm_for_button: true,
+    button_auto_select: false,
   });
+
+  const buttonHost = googleButtonHost.value;
+  if (buttonHost) {
+    buttonHost.replaceChildren();
+    window.google.accounts.id.renderButton(buttonHost, {
+      click_listener: startGoogleButtonFeedback,
+      logo_alignment: "left",
+      shape: "rectangular",
+      size: "large",
+      text: "continue_with",
+      theme: "outline",
+      type: "standard",
+      width: Math.min(Math.max(Math.round(buttonHost.clientWidth || 320), 240), 360),
+    });
+  }
+
   status.value = "ready";
   hideToast();
 };
 
-const signInWithGoogle = () => {
-  if (!tokenClient) {
-    showToast("Google is not ready.", "error");
-    return;
-  }
-
+const startGoogleButtonFeedback = () => {
   status.value = "loading";
   hideToast();
-  tokenClient.requestAccessToken({ prompt: "select_account" });
+  googlePromptTimer = window.setTimeout(() => {
+    if (status.value === "loading") {
+      status.value = "ready";
+      showToast("Google could not open. Check the authorized JavaScript origin.", "error");
+    }
+  }, 4200);
 };
 
 const signInWithEmail = async () => {
@@ -507,7 +538,7 @@ onMounted(async () => {
 
   try {
     await loadGoogleIdentityScript();
-    initializeGoogleOauth();
+    initializeGoogleIdentity();
   } catch {
     status.value = "error";
     showToast("Could not load Google.", "error");
@@ -518,6 +549,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(toastTimer);
   window.clearTimeout(cardReturnTimer);
   window.clearTimeout(redirectTimer);
+  window.clearTimeout(googlePromptTimer);
   window.google?.accounts?.id.cancel();
 });
 
@@ -659,34 +691,42 @@ const hideToast = () => {
               <span></span>
             </div>
 
-            <button
-              class="google-app-button"
-              type="button"
-              :disabled="status === 'loading' || status === 'idle'"
-              @click="signInWithGoogle"
-            >
-              <span class="google-mark" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false">
-                  <path
-                    fill="#4285f4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34a853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.15v2.84C3.96 20.53 7.68 23 12 23z"
-                  />
-                  <path
-                    fill="#fbbc05"
-                    d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.15A10.96 10.96 0 0 0 1 12c0 1.77.42 3.45 1.15 4.94l3.69-2.84z"
-                  />
-                  <path
-                    fill="#ea4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.68 1 3.96 3.47 2.15 7.06l3.69 2.84C6.71 7.3 9.14 5.38 12 5.38z"
-                  />
-                </svg>
-              </span>
-              <span>{{ status === "loading" ? "Connecting" : "Continue with Google" }}</span>
-            </button>
+            <div class="google-button-frame">
+              <button
+                class="google-app-button"
+                type="button"
+                :disabled="status === 'idle' || status === 'loading'"
+                aria-hidden="true"
+                tabindex="-1"
+              >
+                <span class="google-icon-box" aria-hidden="true">
+                  <svg viewBox="0 0 533.5 544.3" focusable="false">
+                    <path
+                      fill="#4285f4"
+                      d="M533.5 278.4c0-18.5-1.5-37.1-4.7-55.3H272.1v104.8h147c-6.1 33.8-25.7 63.7-54.4 82.7v68h87.7c51.5-47.4 81.1-117.4 81.1-200.2z"
+                    />
+                    <path
+                      fill="#34a853"
+                      d="M272.1 544.3c73.4 0 135.3-24.1 180.4-65.7l-87.7-68c-24.4 16.6-55.9 26-92.6 26-71 0-131.2-47.9-152.8-112.3H28.9v70.1c46.2 91.9 140.3 149.9 243.2 149.9z"
+                    />
+                    <path
+                      fill="#fbbc05"
+                      d="M119.3 324.3c-11.4-33.8-11.4-70.4 0-104.2V150H28.9c-38.6 76.9-38.6 167.5 0 244.4l90.4-70.1z"
+                    />
+                    <path
+                      fill="#ea4335"
+                      d="M272.1 107.7c38.8-.6 76.3 14 104.4 40.8l77.7-77.7C405 24.6 339.7-.8 272.1 0 169.2 0 75.1 58 28.9 150l90.4 70.1c21.5-64.5 81.8-112.4 152.8-112.4z"
+                    />
+                  </svg>
+                </span>
+                <span>{{ status === "loading" ? "Connecting" : "Continue with Google" }}</span>
+              </button>
+              <div
+                ref="googleButtonHost"
+                class="google-button-host"
+                :class="{ 'is-hidden': status === 'idle' || status === 'loading' }"
+              ></div>
+            </div>
 
             <button class="forgot-password-link" type="button" @click="showPasswordReset">
               Forgot your password?
@@ -1299,8 +1339,32 @@ const hideToast = () => {
   line-height: 1.25;
 }
 
+.google-button-frame {
+  position: relative;
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  place-items: center;
+}
+
+.google-button-host {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  place-items: center;
+  opacity: 0.001;
+}
+
+.google-button-host.is-hidden {
+  display: none;
+}
+
 .google-app-button {
   position: relative;
+  z-index: 1;
   width: 100%;
   min-height: 52px;
   display: flex;
@@ -1308,21 +1372,21 @@ const hideToast = () => {
   justify-content: center;
   gap: 12px;
   overflow: hidden;
-  border: 1px solid rgba(225, 245, 236, 0.15);
+  border: 1px solid rgba(225, 245, 236, 0.17);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(236, 250, 241, 0.08), rgba(235, 218, 244, 0.07)),
-    rgba(3, 4, 7, 0.52);
+    linear-gradient(135deg, rgba(236, 250, 241, 0.055), rgba(235, 218, 244, 0.055)),
+    rgba(4, 5, 8, 0.48);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.42),
-    0 16px 34px rgba(0, 0, 0, 0.24);
+    inset 0 1px 0 rgba(255, 255, 255, 0.095),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.38);
   color: rgba(250, 248, 252, 0.92);
   cursor: pointer;
   font: inherit;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 0.96rem;
+  font-weight: 650;
   letter-spacing: 0;
+  pointer-events: none;
   transition:
     border-color 180ms ease,
     background 180ms ease,
@@ -1347,18 +1411,17 @@ const hideToast = () => {
     transform 260ms ease;
 }
 
-.google-app-button:hover {
-  border-color: rgba(225, 245, 236, 0.26);
+.google-button-frame:hover .google-app-button:not(:disabled) {
+  border-color: rgba(225, 245, 236, 0.3);
   background:
-    linear-gradient(135deg, rgba(236, 250, 241, 0.12), rgba(235, 218, 244, 0.1)),
-    rgba(5, 6, 10, 0.64);
+    linear-gradient(135deg, rgba(236, 250, 241, 0.085), rgba(235, 218, 244, 0.08)),
+    rgba(6, 7, 11, 0.6);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.13),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.42),
-    0 18px 38px rgba(0, 0, 0, 0.28);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4);
 }
 
-.google-app-button:hover::before {
+.google-button-frame:hover .google-app-button:not(:disabled)::before {
   opacity: 1;
   transform: translateX(42%);
 }
@@ -1368,26 +1431,24 @@ const hideToast = () => {
 }
 
 .google-app-button:disabled {
-  cursor: wait;
   opacity: 0.72;
 }
 
-.google-mark {
+.google-icon-box {
   position: relative;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.16),
-    0 8px 18px rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
 }
 
-.google-mark svg {
-  width: 17px;
-  height: 17px;
+.google-icon-box svg {
+  width: 19px;
+  height: 19px;
 }
 
 .google-app-button span:last-child {
