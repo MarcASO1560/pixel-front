@@ -17,6 +17,7 @@ import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
 import { PIXEL_ART_PALETTE } from "../../pixel-art/lib/palette";
 import LifeOscillatorPreview from "./LifeOscillatorPreview.vue";
 import ProjectEditorDialog from "./ProjectEditorDialog.vue";
+import ProjectPixelArtThumbnail from "./ProjectPixelArtThumbnail.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
 
 type ExplorerProject = {
@@ -1391,17 +1392,12 @@ onUnmounted(() => {
                   class="project-cover"
                   :class="{ 'has-pixel-art': hasProjectPixelArt(project.projectPixelArt) }"
                 >
-                  <div
+                  <ProjectPixelArtThumbnail
                     v-if="hasProjectPixelArt(project.projectPixelArt)"
                     class="project-cover__pixel-art"
-                    aria-hidden="true"
-                  >
-                    <span
-                      v-for="(pixel, index) in project.projectPixelArt?.pixels || []"
-                      :key="`project-pixel-${project.id}-${index}`"
-                      :style="{ backgroundColor: pixel || 'transparent' }"
-                    ></span>
-                  </div>
+                    :pixels="project.projectPixelArt?.pixels || []"
+                    :size="project.projectPixelArt?.size || PROJECT_PIXEL_SIZE"
+                  />
                   <span v-else class="project-cover__shine" aria-hidden="true"></span>
                 </div>
               </div>
@@ -1971,8 +1967,9 @@ onUnmounted(() => {
     position: relative;
     z-index: 5;
     flex-direction: column;
-    min-height: 100vh;
-    max-height: 100dvh;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     color: var(--text);
   }
 
@@ -2080,10 +2077,13 @@ onUnmounted(() => {
   }
 
   .workspace-layout {
+    position: relative;
+    z-index: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     flex: 1;
     min-height: 0;
+    overflow: hidden;
   }
 
   .studio-main {
@@ -2315,17 +2315,10 @@ onUnmounted(() => {
   }
 
   .project-cover__pixel-art {
-    display: grid;
-    grid-template-columns: repeat(16, 1fr);
-    grid-template-rows: repeat(16, 1fr);
+    display: block;
     width: 100%;
     height: 100%;
     image-rendering: pixelated;
-  }
-
-  .project-cover__pixel-art span {
-    min-width: 0;
-    min-height: 0;
   }
 
   .project-card__body {

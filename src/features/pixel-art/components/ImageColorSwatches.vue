@@ -309,9 +309,48 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     border: 0;
   }
 
-  @media (max-width: 420px) {
+  @media (max-width: 768px) {
     .image-color-swatches {
+      grid-template-areas:
+        "primary primary-value"
+        "secondary secondary-value"
+        "actions actions";
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 6px 9px;
       width: 100%;
+    }
+
+    .image-color-swatches__stack,
+    .image-color-swatches__values {
+      display: contents;
+    }
+
+    .image-color-swatches__swatch {
+      position: relative;
+      inset: auto;
+      width: 34px;
+      height: 34px;
+    }
+
+    .image-color-swatches__swatch--primary {
+      grid-area: primary;
+    }
+
+    .image-color-swatches__swatch--secondary {
+      grid-area: secondary;
+    }
+
+    .image-color-swatches__values div:first-child {
+      grid-area: primary-value;
+    }
+
+    .image-color-swatches__values div:last-child {
+      grid-area: secondary-value;
+    }
+
+    .image-color-swatches__actions {
+      gap: 6px;
+      padding-top: 2px;
     }
   }
 

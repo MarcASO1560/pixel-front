@@ -5,6 +5,7 @@ import {
   Link2,
   Link2Off,
   MousePointer2,
+  PanelRightOpen,
   Plus,
   Scaling,
   SlidersHorizontal,
@@ -297,6 +298,9 @@ const imagePointerEnd = ref<Point | null>(null);
 const imageClipboard = ref<PixelBlock | null>(null);
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
+const isImageMobileDockOpen = ref(false);
+const imageMobileDockCloseRef = ref<HTMLButtonElement | null>(null);
+const imageMobileDockTriggerRef = ref<HTMLButtonElement | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
 const isImageGridVisible = ref(true);
 const customImageGridColor = ref(DEFAULT_CUSTOM_IMAGE_GRID_COLOR);
@@ -317,6 +321,9 @@ const imagePanX = ref(0);
 const imagePanY = ref(0);
 const imageViewportWidth = ref(0);
 const imageViewportHeight = ref(0);
+const isImageMobileViewport = computed(
+  () => imageViewportWidth.value > 0 && imageViewportWidth.value <= 768,
+);
 const imageStageWidth = ref(0);
 const imageStageHeight = ref(0);
 const areImageDimensionsLinked = ref(true);
@@ -3382,6 +3389,18 @@ const closeImageInspectorPanel = () => {
   activeImageInspectorPanel.value = null;
 };
 
+const openImageMobileDock = () => {
+  isImageMobileDockOpen.value = true;
+  void nextTick(() => imageMobileDockCloseRef.value?.focus({ preventScroll: true }));
+};
+
+const closeImageMobileDock = (restoreFocus = true) => {
+  isImageMobileDockOpen.value = false;
+  if (restoreFocus) {
+    void nextTick(() => imageMobileDockTriggerRef.value?.focus({ preventScroll: true }));
+  }
+};
+
 const selectCustomImageBackground = (event: Event) => {
   const input = event.currentTarget as HTMLInputElement;
   customImageBackground.value = input.value;
@@ -3574,7 +3593,8 @@ const runImageKeyboardAction = (action: ImageKeyboardAction) => {
       nudgeImageSelection({ x: action.deltaX, y: action.deltaY });
       break;
     case "escape":
-      if (imageSelection.value) deselectImagePixels();
+      if (isImageMobileDockOpen.value) closeImageMobileDock();
+      else if (imageSelection.value) deselectImagePixels();
       else closeImageInspectorPanel();
       break;
   }
@@ -3931,10 +3951,28 @@ onUnmounted(() => {
 
         <aside
           v-if="isImageEditor"
+          id="image-editor-properties"
           class="image-editor-right-dock"
-          :class="{ 'has-active-inspector': activeImageInspectorPanel }"
+          :class="{
+            'has-active-inspector': activeImageInspectorPanel,
+            'is-mobile-open': isImageMobileDockOpen,
+          }"
+          :aria-hidden="isImageMobileViewport && !isImageMobileDockOpen"
+          :inert="isImageMobileViewport && !isImageMobileDockOpen"
           aria-label="Image properties"
         >
+          <div class="image-editor-mobile-dock-header">
+            <strong>Layers, colors &amp; options</strong>
+            <button
+              ref="imageMobileDockCloseRef"
+              type="button"
+              aria-label="Close image panels"
+              @click="closeImageMobileDock()"
+            >
+              <X :size="20" :stroke-width="2" aria-hidden="true" />
+            </button>
+          </div>
+
           <div class="image-editor-layers-host">
             <ImageLayersPanel
               :layers="imageLayers"
@@ -3960,6 +3998,8 @@ onUnmounted(() => {
             :style="imageColorPickerStyle"
             aria-label="Drawing colors"
           >
+            <h2 class="image-editor-color-heading">Colors</h2>
+
             <div class="image-editor-color-picker-stage">
               <div
                 class="image-editor-color-wheel"
@@ -4027,6 +4067,7 @@ onUnmounted(() => {
             />
 
             <div class="image-editor-color-palette">
+              <div class="image-editor-color-palette-heading">Palette</div>
               <ImagePalettePanel
                 :swatches="usedImagePaletteColors"
                 :pinned-colors="personalImagePalette"
@@ -4392,6 +4433,7 @@ onUnmounted(() => {
               @click="toggleImageInspectorPanel('resize')"
             >
               <Scaling :size="19" :stroke-width="2.1" aria-hidden="true" />
+              <span>Resize</span>
             </button>
             <button
               type="button"
@@ -4403,6 +4445,7 @@ onUnmounted(() => {
               @click="toggleImageInspectorPanel('preferences')"
             >
               <SlidersHorizontal :size="19" :stroke-width="2.1" aria-hidden="true" />
+              <span>View</span>
             </button>
             <button
               type="button"
@@ -4414,6 +4457,7 @@ onUnmounted(() => {
               @click="toggleImageInspectorPanel('transform')"
             >
               <MousePointer2 :size="19" :stroke-width="2.1" aria-hidden="true" />
+              <span>Transform</span>
             </button>
             <button
               type="button"
@@ -4425,6 +4469,7 @@ onUnmounted(() => {
               @click="toggleImageInspectorPanel('transfer')"
             >
               <Download :size="19" :stroke-width="2.1" aria-hidden="true" />
+              <span>Files</span>
             </button>
           </div>
         </div>
@@ -4444,6 +4489,20 @@ onUnmounted(() => {
           @undo="undoImage"
           @redo="redoImage"
         />
+
+        <button
+          v-if="isImageEditor"
+          ref="imageMobileDockTriggerRef"
+          type="button"
+          class="image-editor-mobile-dock-trigger"
+          aria-controls="image-editor-properties"
+          :aria-expanded="isImageMobileDockOpen"
+          aria-label="Open layers, colors and image options"
+          @click="openImageMobileDock"
+        >
+          <PanelRightOpen :size="17" :stroke-width="2" aria-hidden="true" />
+          <span>Panels</span>
+        </button>
 
         <section
           v-if="isImageEditor"
@@ -4968,6 +5027,11 @@ onUnmounted(() => {
     white-space: nowrap;
   }
 
+  .image-editor-mobile-dock-trigger,
+  .image-editor-mobile-dock-header {
+    display: none;
+  }
+
   .image-editor-zoom-host {
     position: static;
     flex: 0 0 auto;
@@ -5084,6 +5148,12 @@ onUnmounted(() => {
     border-radius: 0;
     box-shadow: none;
     transform: none;
+  }
+
+  .image-editor-color-heading,
+  .image-editor-color-palette-heading,
+  .image-editor-inspector-button span {
+    display: none;
   }
 
   .image-editor-color-picker-stage {
@@ -5986,23 +6056,43 @@ onUnmounted(() => {
     }
   }
 
-  @media (max-width: 620px) {
+  @media (max-width: 768px) {
+    .resource-editor {
+      width: 100%;
+      height: 100dvh;
+      min-height: 0;
+      max-height: none;
+    }
+
     .resource-editor :deep(.studio-topbar) {
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      gap: 8px;
-      padding-right: 8px;
-      padding-left: 8px;
+      grid-template-areas: "brand center user";
+      grid-template-columns: max-content minmax(0, 1fr) max-content;
+      row-gap: 0;
+      column-gap: 10px;
+      padding-right: 10px;
+      padding-left: 10px;
+    }
+
+    .resource-editor :deep(.studio-topbar__center) {
+      justify-self: stretch;
+      width: 100%;
+      min-width: 0;
     }
 
     .resource-editor :deep(.studio-topbar__brand-name),
     .resource-editor :deep(.studio-topbar__brand-separator),
     .resource-editor :deep(.studio-topbar__user-label),
-    .resource-editor :deep(.studio-topbar__brand-trail) {
+    .resource-editor :deep(.studio-topbar__brand-trail > :not(.studio-topbar__project-logo)) {
       display: none;
     }
 
     .resource-editor-title__kind {
       display: none;
+    }
+
+    .resource-editor-title {
+      width: 100%;
+      box-sizing: border-box;
     }
 
     .resource-editor-title__name {
@@ -6014,11 +6104,174 @@ onUnmounted(() => {
     }
 
     .resource-editor-canvas {
-      grid-template-columns: 44px minmax(0, 1fr);
+      --editor-left-dock: 48px;
+      grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
+      grid-template-rows: 44px minmax(0, 1fr) 40px;
     }
 
     .image-editor-right-dock {
-      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+      grid-column: 1 / -1;
+      grid-row: 1 / -1;
+      display: flex;
+      width: 100%;
+      max-width: none;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      border-left: 0;
+      visibility: hidden;
+      opacity: 0.86;
+      pointer-events: none;
+      backface-visibility: hidden;
+      transform: translate3d(100%, 0, 0);
+      will-change: transform, opacity;
+      transition:
+        transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 220ms ease-out,
+        visibility 0s linear 320ms;
+    }
+
+    .image-editor-right-dock.is-mobile-open {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate3d(0, 0, 0);
+      transition-delay: 0s;
+    }
+
+    .image-editor-mobile-dock-header {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 48px;
+      padding: 0 8px 0 14px;
+      box-sizing: border-box;
+      color: var(--editor-text);
+      background: var(--editor-panel);
+      border-bottom: 1px solid var(--editor-border);
+    }
+
+    .image-editor-mobile-dock-header strong {
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .image-editor-mobile-dock-header button {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      color: var(--editor-muted);
+      cursor: pointer;
+      background: transparent;
+      border: 0;
+      border-radius: var(--editor-radius-sm);
+    }
+
+    .image-editor-mobile-dock-header button:hover,
+    .image-editor-mobile-dock-header button:focus-visible {
+      color: var(--editor-text);
+      background: var(--editor-hover);
+      outline: none;
+    }
+
+    .image-editor-layers-host {
+      flex: 0 0 auto;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .image-editor-layers-host :deep(.image-layers-panel__list) {
+      max-height: clamp(96px, 24dvh, 180px);
+    }
+
+    .image-editor-color-panel {
+      grid-template-areas:
+        "heading heading"
+        "picker value"
+        "picker swatches"
+        "palette palette";
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 10px 12px;
+      padding: 0 12px 12px;
+    }
+
+    .image-editor-color-heading {
+      display: flex;
+      grid-area: heading;
+      align-items: center;
+      min-height: 42px;
+      padding: 0 12px;
+      margin: 0 -12px;
+      color: var(--editor-text);
+      font-size: 12px;
+      font-weight: 760;
+      border-bottom: 1px solid var(--editor-border);
+    }
+
+    .image-editor-color-picker-stage {
+      margin-right: -160px;
+      margin-bottom: -160px;
+      transform: scale(0.452);
+    }
+
+    .image-editor-color-palette {
+      padding-top: 0;
+    }
+
+    .image-editor-color-palette-heading {
+      display: flex;
+      align-items: center;
+      min-height: 34px;
+      color: var(--editor-muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .image-editor-inspector-button {
+      display: inline-flex;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .image-editor-inspector-button span {
+      display: inline;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .image-editor-side-inspector {
+      flex: 0 0 auto;
+      min-height: 0;
+      overflow: visible;
+    }
+
+    .image-editor-inspector-rail {
+      position: sticky;
+      top: 48px;
+      background: var(--editor-panel);
+    }
+
+    .image-editor-inspector-panel {
+      flex: 0 0 auto;
+      max-height: none;
+      overflow: visible;
     }
 
     .image-editor-context-host,
@@ -6026,9 +6279,129 @@ onUnmounted(() => {
     .image-editor-statusbar {
       grid-column: 2;
     }
+
+    .image-editor-context-host {
+      padding-right: 86px;
+      box-sizing: border-box;
+    }
+
+    .image-editor-left-dock {
+      padding: 4px;
+    }
+
+    .image-editor-toolbar {
+      width: 40px;
+      min-width: 40px;
+    }
+
+    .image-editor-statusbar {
+      gap: 4px;
+      min-height: 40px;
+      padding-right: 4px;
+      padding-left: 8px;
+    }
+
+    .image-editor-mobile-dock-trigger {
+      position: absolute;
+      top: 5px;
+      right: 6px;
+      z-index: 6;
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 5px;
+      align-items: center;
+      justify-content: center;
+      min-width: 40px;
+      height: 34px;
+      padding: 0 8px;
+      color: var(--editor-muted);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      background: transparent;
+      border: 0;
+      border-radius: var(--editor-radius-sm);
+    }
+
+    .image-editor-mobile-dock-trigger:hover,
+    .image-editor-mobile-dock-trigger:focus-visible,
+    .image-editor-mobile-dock-trigger[aria-expanded="true"] {
+      color: var(--editor-text);
+      background: var(--editor-hover);
+      outline: none;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .resource-editor :deep(.studio-topbar) {
+      column-gap: 6px;
+      padding-right: 6px;
+      padding-left: 6px;
+    }
+
+    .resource-editor-title {
+      gap: 5px;
+      padding-right: 7px;
+      padding-left: 7px;
+    }
+
+    .resource-editor-title__name {
+      max-width: 104px;
+    }
+
+    .image-editor-statusbar__document,
+    .image-editor-mobile-dock-trigger span {
+      display: none;
+    }
+
+    .image-editor-statusbar {
+      justify-content: center;
+    }
+
+    .image-editor-context-host {
+      padding-right: 46px;
+    }
+
+    .image-editor-mobile-dock-trigger {
+      padding: 0;
+    }
+
+    .image-editor-color-panel {
+      grid-template-columns: 104px minmax(0, 1fr);
+      gap: 8px 10px;
+      padding-right: 10px;
+      padding-left: 10px;
+    }
+
+    .image-editor-color-heading {
+      padding-right: 10px;
+      padding-left: 10px;
+      margin-right: -10px;
+      margin-left: -10px;
+    }
+
+    .image-editor-color-picker-stage {
+      margin-right: -188px;
+      margin-bottom: -188px;
+      transform: scale(0.356);
+    }
+
+    .image-editor-inspector-button {
+      gap: 3px;
+      font-size: 10px;
+    }
+
+    .image-editor-inspector-button svg {
+      width: 16px;
+      height: 16px;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .image-editor-right-dock {
+      transition: none;
+    }
+
     .image-editor-selection,
     .resource-editor-loader span {
       animation: none;

@@ -153,18 +153,29 @@ const handleUserClick = () => {
         :title="canShowBrandTrailPixelArt ? brandTrailText : undefined"
         @click="handleBrandTrailClick"
       >
-        <span
+        <svg
           v-if="canShowBrandTrailPixelArt"
           class="studio-topbar__project-logo"
-          :style="{ '--project-logo-size': brandTrailPixelArt?.size || 16 }"
+          :viewBox="`0 0 ${brandTrailPixelArt?.size || 16} ${brandTrailPixelArt?.size || 16}`"
+          preserveAspectRatio="none"
+          shape-rendering="crispEdges"
           aria-hidden="true"
+          focusable="false"
         >
-          <span
+          <template
             v-for="(pixel, index) in brandTrailPixelArt?.pixels || []"
             :key="`topbar-project-logo-${index}`"
-            :style="{ backgroundColor: pixel || 'transparent' }"
-          ></span>
-        </span>
+          >
+            <rect
+              v-if="pixel"
+              :x="index % (brandTrailPixelArt?.size || 16)"
+              :y="Math.floor(index / (brandTrailPixelArt?.size || 16))"
+              width="1"
+              height="1"
+              :fill="pixel"
+            />
+          </template>
+        </svg>
         <span
           v-else-if="brandTrailLoading"
           class="studio-topbar__project-logo-loader"
@@ -188,18 +199,29 @@ const handleUserClick = () => {
         @click="handleUserClick"
       >
         <span class="studio-topbar__avatar">
-          <span
+          <svg
             v-if="canShowPixelAvatar"
             class="studio-topbar__pixel-avatar"
-            :style="{ '--avatar-size': userPixelAvatar?.size || 16 }"
+            :viewBox="`0 0 ${userPixelAvatar?.size || 16} ${userPixelAvatar?.size || 16}`"
+            preserveAspectRatio="none"
+            shape-rendering="crispEdges"
             aria-hidden="true"
+            focusable="false"
           >
-            <span
+            <template
               v-for="(pixel, index) in userPixelAvatar?.pixels || []"
               :key="`topbar-avatar-${index}`"
-              :style="{ backgroundColor: pixel || 'transparent' }"
-            ></span>
-          </span>
+            >
+              <rect
+                v-if="pixel"
+                :x="index % (userPixelAvatar?.size || 16)"
+                :y="Math.floor(index / (userPixelAvatar?.size || 16))"
+                width="1"
+                height="1"
+                :fill="pixel"
+              />
+            </template>
+          </svg>
           <img
             v-else-if="canShowUserAvatar"
             :src="userAvatarUrl"
@@ -219,13 +241,17 @@ const handleUserClick = () => {
 
 <style scoped>
   .studio-topbar {
+    position: relative;
+    z-index: 10;
     display: grid;
+    flex: 0 0 auto;
     grid-template-areas: "brand center user";
     grid-template-columns: minmax(180px, 1fr) minmax(0, var(--studio-topbar-center-max)) minmax(180px, 1fr);
     gap: 18px;
     align-items: center;
     min-height: 72px;
     padding: 14px 22px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--line);
     background: rgba(5, 5, 5, 0.72);
     backdrop-filter: blur(18px);
@@ -354,9 +380,7 @@ const handleUserClick = () => {
   }
 
   .studio-topbar__project-logo {
-    display: grid;
-    grid-template-columns: repeat(var(--project-logo-size), 1fr);
-    grid-template-rows: repeat(var(--project-logo-size), 1fr);
+    display: block;
     width: 42px;
     height: 42px;
     overflow: hidden;
@@ -364,12 +388,6 @@ const handleUserClick = () => {
     border: 1px solid rgba(247, 241, 231, 0.18);
     border-radius: 8px;
     image-rendering: pixelated;
-  }
-
-  .studio-topbar__project-logo span {
-    display: block;
-    min-width: 0;
-    min-height: 0;
   }
 
   .studio-topbar__project-logo-loader {
@@ -465,20 +483,11 @@ const handleUserClick = () => {
   }
 
   .studio-topbar__pixel-avatar {
-    display: grid;
-    grid-template-columns: repeat(var(--avatar-size), 1fr);
-    grid-template-rows: repeat(var(--avatar-size), 1fr);
+    display: block;
     width: 100%;
     height: 100%;
     background: rgba(255, 252, 244, 0.045);
     image-rendering: pixelated;
-  }
-
-  .studio-topbar__pixel-avatar span {
-    display: block;
-    min-width: 0;
-    min-height: 0;
-    overflow: visible;
   }
 
   .studio-topbar__user-label {
@@ -502,6 +511,7 @@ const handleUserClick = () => {
       gap: 10px 14px;
       align-items: center;
       padding: 12px 14px;
+      background: #050505;
     }
 
     .studio-topbar__center {
@@ -523,7 +533,7 @@ const handleUserClick = () => {
       gap: 14px 10px;
       min-height: 0;
       padding: 13px 12px 12px;
-      background: rgba(5, 5, 5, 0.96);
+      background: #050505;
       backdrop-filter: blur(18px) saturate(110%);
     }
 

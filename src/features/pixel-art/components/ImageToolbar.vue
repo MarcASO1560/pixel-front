@@ -161,6 +161,21 @@ const getToolTitle = (tool: (typeof tools)[number]) =>
     opacity: 0.34;
   }
 
+  @media (max-width: 768px) {
+    .image-toolbar {
+      grid-template-columns: 40px;
+      width: 40px;
+      padding: 0;
+    }
+
+    .image-toolbar__button {
+      width: 40px;
+      min-width: 40px;
+      height: 40px;
+      min-height: 40px;
+    }
+  }
+
   @media (forced-colors: active) {
     .image-toolbar__button {
       border: 1px solid ButtonBorder;

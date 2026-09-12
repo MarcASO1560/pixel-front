@@ -236,13 +236,54 @@ const updateBrushSize = (event: Event) => {
     opacity: 0.4;
   }
 
-  @media (max-width: 620px) {
+  @media (max-width: 768px) {
+    .image-tool-options {
+      min-height: 44px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+
+    .image-tool-options::-webkit-scrollbar {
+      display: none;
+    }
+
+    .image-tool-options__history,
+    .image-tool-options__tool,
+    .image-tool-options__size,
+    .image-tool-options__filled {
+      flex-shrink: 0;
+    }
+
+    .image-tool-options__button {
+      width: 36px;
+      min-width: 36px;
+      height: 36px;
+      min-height: 36px;
+    }
+
     .image-tool-options__tool {
       min-width: 0;
     }
 
     .image-tool-options__size input[type="range"] {
       width: 72px;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .image-tool-options {
+      gap: 6px;
+      padding-right: 4px;
+      padding-left: 4px;
+    }
+
+    .image-tool-options__size input[type="range"] {
+      width: 60px;
+    }
+
+    .image-tool-options__tool {
+      display: none;
     }
   }
 

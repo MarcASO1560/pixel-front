@@ -171,6 +171,31 @@ const canZoomIn = computed(() => normalizedZoom.value < normalizedMaximum.value 
     background: #343434;
   }
 
+  @media (max-width: 768px) {
+    .image-zoom-controls {
+      height: 36px;
+    }
+
+    .image-zoom-controls__button {
+      width: 36px;
+      min-width: 36px;
+      height: 36px;
+      min-height: 36px;
+    }
+
+    .image-zoom-controls__value {
+      min-width: 44px;
+      padding-right: 2px;
+      padding-left: 2px;
+      line-height: 36px;
+    }
+
+    .image-zoom-controls__separator {
+      margin-right: 2px;
+      margin-left: 2px;
+    }
+  }
+
   @media (forced-colors: active) {
     .image-zoom-controls__button {
       border: 1px solid ButtonBorder;
