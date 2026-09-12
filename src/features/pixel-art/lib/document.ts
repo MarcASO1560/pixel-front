@@ -1,0 +1,214 @@
+import type { PixelArtDocumentV2, PixelColor, PixelLayer } from "../types";
+
+export const MIN_IMAGE_DIMENSION = 1;
+export const MAX_IMAGE_DIMENSION = 256;
+export const MAX_IMAGE_LAYERS = 64;
+
+export const clampImageDimension = (value: unknown, fallback = 32) => {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  const safeFallback = Math.min(
+    MAX_IMAGE_DIMENSION,
+    Math.max(MIN_IMAGE_DIMENSION, Math.round(fallback)),
+  );
+
+  if (!Number.isFinite(numericValue)) {
+    return safeFallback;
+  }
+
+  return Math.min(
+    MAX_IMAGE_DIMENSION,
+    Math.max(MIN_IMAGE_DIMENSION, Math.round(numericValue)),
+  );
+};
+export const normalizePixelColor = (value: unknown): PixelColor => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const candidate = value.trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(candidate) || /^#[0-9A-F]{8}$/.test(candidate)) {
+    return candidate;
+  }
+
+  return null;
+};
+
+export const normalizePalette = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const colors: string[] = [];
+  for (const entry of value) {
+    const color = normalizePixelColor(entry);
+    if (color && !colors.includes(color)) {
+      colors.push(color);
+    }
+  }
+
+  return colors;
+};
+
+export const normalizePixels = (value: unknown, width: number, height: number) => {
+  const source = Array.isArray(value) ? value : [];
+  return Array.from({ length: width * height }, (_, index) => normalizePixelColor(source[index]));
+};
+
+export const createLayerId = () => {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `layer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+export const createPixelLayer = (
+  width: number,
+  height: number,
+  options: Partial<Omit<PixelLayer, "pixels">> & { pixels?: unknown } = {},
+): PixelLayer => ({
+  id: typeof options.id === "string" && options.id.trim() ? options.id : createLayerId(),
+  name: typeof options.name === "string" && options.name.trim() ? options.name.trim() : "Layer 1",
+  visible: options.visible !== false,
+  locked: options.locked === true,
+  opacity: Math.min(1, Math.max(0, Number.isFinite(options.opacity) ? Number(options.opacity) : 1)),
+  pixels: normalizePixels(options.pixels, width, height),
+});
+
+export const createPixelArtDocument = (
+  width = 32,
+  height = 32,
+  options: Partial<Pick<PixelArtDocumentV2, "palette" | "layers">> = {},
+): PixelArtDocumentV2 => {
+  const normalizedWidth = clampImageDimension(width);
+  const normalizedHeight = clampImageDimension(height);
+  const layers = Array.isArray(options.layers)
+    ? options.layers
+        .slice(0, MAX_IMAGE_LAYERS)
+        .map((layer, index) =>
+          createPixelLayer(normalizedWidth, normalizedHeight, {
+            ...layer,
+            name: layer.name || `Layer ${index + 1}`,
+          }),
+        )
+    : [];
+
+  return {
+    version: 2,
+    width: normalizedWidth,
+    height: normalizedHeight,
+    palette: normalizePalette(options.palette),
+    layers:
+      layers.length > 0
+        ? ensureUniqueLayerIds(layers)
+        : [createPixelLayer(normalizedWidth, normalizedHeight)],
+  };
+};
+
+export const ensureUniqueLayerIds = (layers: PixelLayer[]) => {
+  const usedIds = new Set<string>();
+
+  return layers.map((layer) => {
+    let id = layer.id;
+    while (!id || usedIds.has(id)) {
+      id = createLayerId();
+    }
+    usedIds.add(id);
+    return id === layer.id ? layer : { ...layer, id };
+  });
+};
+
+export const clonePixelArtDocument = (document: PixelArtDocumentV2): PixelArtDocumentV2 => ({
+  version: 2,
+  width: document.width,
+  height: document.height,
+  palette: [...document.palette],
+  layers: document.layers.map((layer) => ({ ...layer, pixels: [...layer.pixels] })),
+});
+
+type RgbaColor = { red: number; green: number; blue: number; alpha: number };
+
+const readRgba = (color: string): RgbaColor => {
+  const hex = color.slice(1);
+  return {
+    red: Number.parseInt(hex.slice(0, 2), 16),
+    green: Number.parseInt(hex.slice(2, 4), 16),
+    blue: Number.parseInt(hex.slice(4, 6), 16),
+    alpha: hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1,
+  };
+};
+
+const componentToHex = (value: number) =>
+  Math.round(Math.min(255, Math.max(0, value)))
+    .toString(16)
+    .padStart(2, "0")
+    .toUpperCase();
+
+const writeRgba = ({ red, green, blue, alpha }: RgbaColor): PixelColor => {
+  if (alpha <= 0) {
+    return null;
+  }
+
+  const rgb = `${componentToHex(red)}${componentToHex(green)}${componentToHex(blue)}`;
+  if (alpha >= 0.999) {
+    return `#${rgb}`;
+  }
+
+  return `#${rgb}${componentToHex(alpha * 255)}`;
+};
+
+export const blendPixelColors = (
+  background: PixelColor,
+  foreground: PixelColor,
+  layerOpacity = 1,
+): PixelColor => {
+  if (!foreground || layerOpacity <= 0) {
+    return background;
+  }
+
+  const foregroundRgba = readRgba(foreground);
+  const foregroundAlpha = foregroundRgba.alpha * Math.min(1, Math.max(0, layerOpacity));
+  if (foregroundAlpha <= 0) {
+    return background;
+  }
+
+  const backgroundRgba = background
+    ? readRgba(background)
+    : { red: 0, green: 0, blue: 0, alpha: 0 };
+  const outputAlpha = foregroundAlpha + backgroundRgba.alpha * (1 - foregroundAlpha);
+  if (outputAlpha <= 0) {
+    return null;
+  }
+
+  return writeRgba({
+    red:
+      (foregroundRgba.red * foregroundAlpha +
+        backgroundRgba.red * backgroundRgba.alpha * (1 - foregroundAlpha)) /
+      outputAlpha,
+    green:
+      (foregroundRgba.green * foregroundAlpha +
+        backgroundRgba.green * backgroundRgba.alpha * (1 - foregroundAlpha)) /
+      outputAlpha,
+    blue:
+      (foregroundRgba.blue * foregroundAlpha +
+        backgroundRgba.blue * backgroundRgba.alpha * (1 - foregroundAlpha)) /
+      outputAlpha,
+    alpha: outputAlpha,
+  });
+};
+
+export const compositeVisibleLayers = (document: PixelArtDocumentV2) => {
+  const pixels: PixelColor[] = Array(document.width * document.height).fill(null);
+
+  for (const layer of document.layers) {
+    if (!layer.visible || layer.opacity <= 0) {
+      continue;
+    }
+
+    for (let index = 0; index < pixels.length; index += 1) {
+      pixels[index] = blendPixelColors(pixels[index], layer.pixels[index], layer.opacity);
+    }
+  }
+
+  return pixels;
+};

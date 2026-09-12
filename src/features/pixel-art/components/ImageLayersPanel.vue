@@ -1,0 +1,654 @@
+<script setup lang="ts">
+import { computed, nextTick, ref, useId, watch, type ComponentPublicInstance } from "vue";
+
+import type { PixelLayer } from "../types";
+
+const props = withDefaults(
+  defineProps<{
+    layers: PixelLayer[];
+    activeLayerId: string;
+    canEdit: boolean;
+    maxLayers?: number;
+  }>(),
+  {
+    maxLayers: 64,
+  },
+);
+
+const emit = defineEmits<{
+  select: [id: string];
+  add: [];
+  duplicate: [id: string];
+  remove: [id: string];
+  rename: [payload: { id: string; name: string }];
+  "toggle-visible": [id: string];
+  "toggle-lock": [id: string];
+  "preview-opacity": [payload: { id: string; opacity: number }];
+  "set-opacity": [payload: { id: string; opacity: number }];
+  move: [payload: { id: string; direction: "up" | "down" }];
+}>();
+
+const renamingLayerId = ref<string | null>(null);
+const renameDraft = ref("");
+const renameInputRef = ref<HTMLInputElement | null>(null);
+const layerNameButtonRefs = new Map<string, HTMLButtonElement>();
+const titleId = useId();
+const opacityInputId = useId();
+
+const layerLimit = computed(() =>
+  Number.isFinite(props.maxLayers) ? Math.max(1, Math.floor(props.maxLayers)) : 64,
+);
+const canAddLayer = computed(
+  () => props.canEdit && props.layers.length < layerLimit.value,
+);
+const activeLayer = computed(
+  () => props.layers.find((layer) => layer.id === props.activeLayerId) ?? null,
+);
+
+// Documents are composed bottom-to-top, while layer panels conventionally show
+// the topmost layer first.
+const displayedLayers = computed(() => [...props.layers].reverse());
+
+const sourceIndexOf = (id: string) => props.layers.findIndex((layer) => layer.id === id);
+const canMoveUp = (id: string) => {
+  const index = sourceIndexOf(id);
+  return props.canEdit && index >= 0 && index < props.layers.length - 1;
+};
+const canMoveDown = (id: string) => props.canEdit && sourceIndexOf(id) > 0;
+
+const setRenameInputRef = (element: Element | ComponentPublicInstance | null) => {
+  renameInputRef.value = element instanceof HTMLInputElement ? element : null;
+};
+
+const setLayerNameButtonRef = (
+  id: string,
+  element: Element | ComponentPublicInstance | null,
+) => {
+  if (element instanceof HTMLButtonElement) {
+    layerNameButtonRefs.set(id, element);
+  } else {
+    layerNameButtonRefs.delete(id);
+  }
+};
+
+const selectLayer = (id: string) => {
+  emit("select", id);
+};
+
+const startRename = async (layer: PixelLayer) => {
+  if (!props.canEdit) {
+    return;
+  }
+
+  selectLayer(layer.id);
+  renamingLayerId.value = layer.id;
+  renameDraft.value = layer.name;
+  await nextTick();
+  renameInputRef.value?.focus();
+  renameInputRef.value?.select();
+};
+
+const cancelRename = async (restoreFocus = false) => {
+  const layerId = renamingLayerId.value;
+  renamingLayerId.value = null;
+  renameDraft.value = "";
+  renameInputRef.value = null;
+
+  if (restoreFocus && layerId) {
+    await nextTick();
+    layerNameButtonRefs.get(layerId)?.focus();
+  }
+};
+
+const commitRename = (layer: PixelLayer) => {
+  if (renamingLayerId.value !== layer.id) {
+    return;
+  }
+
+  const name = renameDraft.value.trim();
+  void cancelRename();
+  if (name && name !== layer.name) {
+    emit("rename", { id: layer.id, name });
+  }
+};
+
+const emitOpacity = (event: Event, mode: "preview" | "commit") => {
+  const layer = activeLayer.value;
+  if (!layer || !props.canEdit) {
+    return;
+  }
+
+  const input = event.currentTarget as HTMLInputElement;
+  const percentage = Number(input.value);
+  if (!Number.isFinite(percentage)) {
+    return;
+  }
+
+  emit(mode === "preview" ? "preview-opacity" : "set-opacity", {
+    id: layer.id,
+    opacity: Math.min(1, Math.max(0, percentage / 100)),
+  });
+};
+
+watch(
+  () => props.layers,
+  (layers) => {
+    if (
+      renamingLayerId.value &&
+      !layers.some((layer) => layer.id === renamingLayerId.value)
+    ) {
+      void cancelRename();
+    }
+  },
+  { deep: false },
+);
+</script>
+
+<template>
+  <section class="image-layers-panel" :aria-labelledby="titleId">
+    <header class="image-layers-panel__header">
+      <div class="image-layers-panel__heading">
+        <h2 :id="titleId">Layers</h2>
+        <span :aria-label="`${layers.length} of ${layerLimit} layers`">
+          {{ layers.length }}/{{ layerLimit }}
+        </span>
+      </div>
+
+      <button
+        type="button"
+        class="layer-icon-button layer-icon-button--add"
+        :disabled="!canAddLayer"
+        :title="
+          !canEdit
+            ? 'Editing is unavailable'
+            : canAddLayer
+              ? 'Add layer'
+              : `Layer limit reached (${layerLimit})`
+        "
+        aria-label="Add layer"
+        @click="emit('add')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+    </header>
+
+    <p v-if="layers.length === 0" class="image-layers-panel__empty">
+      No layers available.
+    </p>
+
+    <ol v-else class="image-layers-panel__list" aria-label="Image layers">
+      <li
+        v-for="layer in displayedLayers"
+        :key="layer.id"
+        class="image-layer-row"
+        :class="{
+          'is-active': layer.id === activeLayerId,
+          'is-hidden': !layer.visible,
+        }"
+        :aria-current="layer.id === activeLayerId ? 'true' : undefined"
+        @click="selectLayer(layer.id)"
+      >
+        <div class="image-layer-row__main">
+          <button
+            type="button"
+            class="layer-icon-button"
+            :disabled="!canEdit"
+            :aria-label="layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`"
+            :title="layer.visible ? 'Hide layer' : 'Show layer'"
+            @click.stop="emit('toggle-visible', layer.id)"
+          >
+            <svg v-if="layer.visible" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12s3.4-5 9.5-5 9.5 5 9.5 5-3.4 5-9.5 5-9.5-5-9.5-5Z" />
+              <circle cx="12" cy="12" r="2.3" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m4 4 16 16" />
+              <path d="M9.8 7.3A9.8 9.8 0 0 1 12 7c6.1 0 9.5 5 9.5 5a14 14 0 0 1-2.1 2.5M6.4 8.4A14.8 14.8 0 0 0 2.5 12s3.4 5 9.5 5c.8 0 1.5-.1 2.2-.2" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            class="layer-icon-button"
+            :disabled="!canEdit"
+            :aria-label="layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`"
+            :title="layer.locked ? 'Unlock layer' : 'Lock layer'"
+            @click.stop="emit('toggle-lock', layer.id)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="5" y="10" width="14" height="10" rx="2" />
+              <path v-if="layer.locked" d="M8 10V7a4 4 0 0 1 8 0v3" />
+              <path v-else d="M9 10V7a4 4 0 0 1 7.7-1.5" />
+            </svg>
+          </button>
+
+          <span class="image-layer-row__thumbnail" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="m12 4 7 4-7 4-7-4 7-4Z" />
+              <path d="m5 12 7 4 7-4M5 16l7 4 7-4" />
+            </svg>
+          </span>
+
+          <input
+            v-if="renamingLayerId === layer.id"
+            :ref="setRenameInputRef"
+            v-model="renameDraft"
+            class="image-layer-row__name-input"
+            type="text"
+            maxlength="80"
+            :aria-label="`Rename ${layer.name}`"
+            @click.stop
+            @dblclick.stop
+            @blur="commitRename(layer)"
+            @keydown.enter.prevent.stop="commitRename(layer)"
+            @keydown.escape.prevent.stop="cancelRename(true)"
+          />
+          <button
+            v-else
+            :ref="(element) => setLayerNameButtonRef(layer.id, element)"
+            type="button"
+            class="image-layer-row__name"
+            :title="canEdit ? `${layer.name} — double-click to rename` : layer.name"
+            @click.stop="selectLayer(layer.id)"
+            @dblclick.stop="startRename(layer)"
+            @keydown.enter.prevent.stop="startRename(layer)"
+          >
+            <span>{{ layer.name }}</span>
+            <small v-if="layer.locked">Locked</small>
+          </button>
+        </div>
+
+        <div class="image-layer-row__actions" role="group" :aria-label="`Actions for ${layer.name}`">
+          <button
+            type="button"
+            class="layer-icon-button"
+            :disabled="!canMoveUp(layer.id)"
+            :aria-label="`Move ${layer.name} up`"
+            title="Move layer up"
+            @click.stop="emit('move', { id: layer.id, direction: 'up' })"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14 5-5 5 5" /></svg>
+          </button>
+          <button
+            type="button"
+            class="layer-icon-button"
+            :disabled="!canMoveDown(layer.id)"
+            :aria-label="`Move ${layer.name} down`"
+            title="Move layer down"
+            @click.stop="emit('move', { id: layer.id, direction: 'down' })"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+          </button>
+          <span class="image-layer-row__action-spacer" aria-hidden="true"></span>
+          <button
+            type="button"
+            class="layer-icon-button"
+            :disabled="!canEdit || layers.length >= layerLimit"
+            :aria-label="`Duplicate ${layer.name}`"
+            title="Duplicate layer"
+            @click.stop="emit('duplicate', layer.id)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="8" y="8" width="11" height="11" rx="2" />
+              <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="layer-icon-button layer-icon-button--danger"
+            :disabled="!canEdit || layers.length <= 1"
+            :aria-label="`Delete ${layer.name}`"
+            title="Delete layer"
+            @click.stop="emit('remove', layer.id)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 7h14M9 7V4h6v3M8 10v8M12 10v8M16 10v8M7 7l1 14h8l1-14" />
+            </svg>
+          </button>
+        </div>
+      </li>
+    </ol>
+
+    <div v-if="activeLayer" class="image-layers-panel__opacity">
+      <label :for="opacityInputId">
+        <span>Opacity</span>
+        <output>{{ Math.round(activeLayer.opacity * 100) }}%</output>
+      </label>
+      <input
+        :id="opacityInputId"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        :value="Math.round(activeLayer.opacity * 100)"
+        :disabled="!canEdit"
+        :aria-label="`Opacity for ${activeLayer.name}`"
+        @input="emitOpacity($event, 'preview')"
+        @change="emitOpacity($event, 'commit')"
+      />
+    </div>
+  </section>
+</template>
+
+<style scoped>
+  .image-layers-panel {
+    --layers-ink: #f2f2f2;
+    --layers-muted: #a8a8a8;
+    --layers-line: #2d2d2d;
+    --layers-control: #171717;
+    --layers-control-hover: #262626;
+    --layers-focus: #ffffff;
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--layers-ink);
+    background: transparent;
+  }
+
+  .image-layers-panel__header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 42px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--layers-line);
+  }
+
+  .image-layers-panel__heading {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  .image-layers-panel__heading h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 760;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+
+  .image-layers-panel__heading span {
+    min-width: 0;
+    padding: 0;
+    color: var(--layers-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .image-layers-panel__list {
+    display: grid;
+    max-height: min(36vh, 328px);
+    padding: 0;
+    margin: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    list-style: none;
+    scrollbar-color: #4a4a4a transparent;
+    scrollbar-width: thin;
+  }
+
+  .image-layer-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px;
+    align-items: center;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 0;
+    border-bottom: 1px solid var(--layers-line);
+    border-radius: 5px;
+    cursor: default;
+    transition: background-color 100ms ease;
+  }
+
+  .image-layer-row:hover {
+    background: #1d1d1d;
+  }
+
+  .image-layer-row.is-active {
+    --layers-focus: #111111;
+    color: #111111;
+    background: #e6e6e6;
+    border-bottom-color: #e6e6e6;
+  }
+
+  .image-layer-row.is-active .image-layer-row__name small {
+    color: #555555;
+  }
+
+  .image-layer-row.is-active .image-layer-row__thumbnail {
+    color: #555555;
+    background: #d4d4d4;
+    border-color: #9a9a9a;
+  }
+
+  .image-layer-row.is-active .layer-icon-button {
+    color: #222222;
+  }
+
+  .image-layer-row.is-active .layer-icon-button:hover:not(:disabled) {
+    color: #000000;
+    background: #c9c9c9;
+    border-color: #9a9a9a;
+  }
+
+  .image-layer-row.is-hidden .image-layer-row__thumbnail,
+  .image-layer-row.is-hidden .image-layer-row__name {
+    opacity: 0.5;
+  }
+
+  .image-layer-row__main {
+    display: grid;
+    grid-template-columns: 30px 30px 34px minmax(0, 1fr);
+    gap: 4px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .image-layer-row__thumbnail {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    overflow: hidden;
+    color: #8d8d8d;
+    background: var(--layers-control);
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+  }
+
+  .image-layer-row__thumbnail svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.65;
+  }
+
+  .image-layer-row__name,
+  .image-layer-row__name-input {
+    min-width: 0;
+    height: 32px;
+    padding: 0 7px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+  }
+
+  .image-layer-row__name {
+    display: grid;
+    align-content: center;
+    cursor: default;
+  }
+
+  .image-layer-row__name span {
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .image-layer-row__name small {
+    color: var(--layers-muted);
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .image-layer-row__name-input {
+    outline: none;
+    color: #f2f2f2;
+    background: #101010;
+    border-color: #7a7a7a;
+  }
+
+  .image-layer-row__actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    min-height: 30px;
+    padding-left: 0;
+  }
+
+  .image-layer-row__action-spacer {
+    display: none;
+  }
+
+  .layer-icon-button {
+    display: inline-grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #c8c8c8;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  .layer-icon-button:hover:not(:disabled) {
+    color: #ffffff;
+    background: var(--layers-control-hover);
+    border-color: #454545;
+  }
+
+  .layer-icon-button:focus-visible,
+  .image-layer-row__name:focus-visible,
+  .image-layer-row__name-input:focus-visible,
+  .image-layers-panel__opacity input:focus-visible {
+    outline: 2px solid var(--layers-focus);
+    outline-offset: 1px;
+  }
+
+  .layer-icon-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.24;
+  }
+
+  .layer-icon-button svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .layer-icon-button--add {
+    color: #f2f2f2;
+    background: var(--layers-control);
+    border-color: #454545;
+  }
+
+  .layer-icon-button--danger:hover:not(:disabled),
+  .image-layer-row.is-active .layer-icon-button--danger:hover:not(:disabled) {
+    color: #ffffff;
+    background: #752c2c;
+    border-color: #a94b4b;
+  }
+
+  .image-layers-panel__opacity {
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px 9px;
+    border-top: 1px solid var(--layers-line);
+  }
+
+  .image-layers-panel__opacity label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--layers-muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .image-layers-panel__opacity output {
+    color: var(--layers-ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .image-layers-panel__opacity input {
+    width: 100%;
+    height: 24px;
+    margin: 0;
+    accent-color: #ffffff;
+    cursor: pointer;
+  }
+
+  .image-layers-panel__opacity input:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  .image-layers-panel__empty {
+    padding: 20px 12px;
+    margin: 0;
+    color: var(--layers-muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  @media (max-width: 820px) {
+    .image-layer-row__main {
+      grid-template-columns: 30px 30px minmax(0, 1fr);
+    }
+
+    .image-layer-row__thumbnail {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .image-layers-panel {
+      width: 100%;
+    }
+
+    .image-layers-panel__list {
+      max-height: 32vh;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .image-layer-row.is-active {
+      color: HighlightText;
+      background: Highlight;
+      border-color: Highlight;
+    }
+  }
+</style>

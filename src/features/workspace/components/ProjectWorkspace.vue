@@ -31,6 +31,7 @@ import {
 } from "../../../lib/api";
 import StudioTopbarCommandBar from "../../navigation/components/StudioTopbarCommandBar.vue";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
+import { createPixelArtDocument } from "../../pixel-art/lib/document";
 import { PIXEL_ART_PALETTE } from "../../pixel-art/lib/palette";
 import ProjectEditorDialog from "./ProjectEditorDialog.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
@@ -349,13 +350,7 @@ const resourceTypeMeta = (type: string) =>
     icon: fileImageIcon,
   };
 const createDefaultImageResourceData = () => ({
-  pixel_art: {
-    version: 1,
-    width: DEFAULT_RESOURCE_IMAGE_SIZE,
-    height: DEFAULT_RESOURCE_IMAGE_SIZE,
-    anchor: "center",
-    pixels: Array<string | null>(DEFAULT_RESOURCE_IMAGE_SIZE * DEFAULT_RESOURCE_IMAGE_SIZE).fill(null),
-  },
+  pixel_art: createPixelArtDocument(DEFAULT_RESOURCE_IMAGE_SIZE, DEFAULT_RESOURCE_IMAGE_SIZE),
 });
 
 const createEmptyProjectPixels = () =>
@@ -1618,6 +1613,29 @@ const openCreateResourceDialog = async () => {
   isCreateResourceOpen.value = true;
 };
 
+const openRequestedResourceCreation = () => {
+  const parameters = new URLSearchParams(window.location.search);
+  if (parameters.get("create") !== "pixel_animation") {
+    return;
+  }
+
+  void openCreateResourceDialog();
+  selectCreateResourceType("pixel_animation");
+  const suggestedName = parameters.get("name")?.trim();
+  if (suggestedName) {
+    createResourceName.value = suggestedName.slice(0, 80);
+  }
+
+  parameters.delete("create");
+  parameters.delete("name");
+  const query = parameters.toString();
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+  );
+};
+
 const closeCreateResourceDialog = (force = false) => {
   if (isCreatingResource.value && force !== true) {
     return;
@@ -1996,7 +2014,11 @@ onMounted(() => {
     () => void refreshProject(),
     PROJECT_SYNC_INTERVAL_MS,
   );
-  void refreshProject({ showLoading: true, showError: true });
+  void refreshProject({ showLoading: true, showError: true }).then(() => {
+    if (project.value) {
+      openRequestedResourceCreation();
+    }
+  });
 });
 
 onUnmounted(() => {

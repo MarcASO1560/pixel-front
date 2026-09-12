@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef, watch } from "vue";
-import { Eraser, Link2, Link2Off, PaintBucket, Palette, Pencil, Pipette, Plus, Scaling, SlidersHorizontal, X } from "@lucide/vue";
+import {
+  Download,
+  Link2,
+  Link2Off,
+  MousePointer2,
+  Plus,
+  Scaling,
+  SlidersHorizontal,
+  X,
+} from "@lucide/vue";
 import { Icon, type IconifyIcon } from "@iconify/vue";
 import fileImageIcon from "@iconify-icons/mdi/file-image";
 import filmstripIcon from "@iconify-icons/mdi/filmstrip";
@@ -8,15 +17,130 @@ import musicNoteIcon from "@iconify-icons/mdi/music-note";
 
 import {
   fetchApi,
+  patchCurrentUser,
+  patchProjectResource,
   type PixelAvatarData,
   type ProjectPublic,
   type ProjectResourceDetail,
-  type ProjectResourcePublic,
   type UserPublic,
   type WorkspaceBootstrap,
 } from "../../../lib/api";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
-import { PIXEL_ART_PALETTE } from "../../pixel-art/lib/palette";
+import {
+  clonePixelArtDocument,
+  compositeVisibleLayers,
+  createPixelArtDocument,
+  createPixelLayer,
+  MAX_IMAGE_LAYERS,
+  normalizePixelColor,
+} from "../../pixel-art/lib/document";
+import {
+  isCompleteImageColor,
+  normalizeImageColorDraft,
+} from "../../pixel-art/lib/color";
+import { createImageCanvasRenderPlan } from "../../pixel-art/lib/canvasRendering";
+import {
+  clearRect,
+  constrainPointToEightDirections,
+  ellipsePoints,
+  extractBlock,
+  flipBlock,
+  linePoints,
+  moveLayer,
+  moveRegion,
+  normalizeSelection,
+  paintPixels,
+  placeBlock,
+  rectanglePoints,
+  rotateBlock90,
+  squareBrushPoints,
+  strokePoints,
+  type PixelBlock,
+  type PixelBuffer,
+  type Point,
+} from "../../pixel-art/lib/drawing";
+import { createHistory, type SnapshotHistory } from "../../pixel-art/lib/history";
+import {
+  createImageGridOverlayPlan,
+  getImageGridKeylineColor,
+  type ImageGridLineStyle,
+} from "../../pixel-art/lib/gridOverlay";
+import { graffitiBrushStamp } from "../../pixel-art/lib/graffitiBrush";
+import {
+  canMutateImageLayerPixels,
+  isImagePixelMutationTool,
+} from "../../pixel-art/lib/layerEditing";
+import {
+  getImagePixelIndexFromClientPoint,
+  getImagePixelSegmentFromClientSegment,
+} from "../../pixel-art/lib/hitTesting";
+import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
+import {
+  getImagePointerColorChannel,
+  getImageToolColorIntent,
+  type ImageColorChannel,
+} from "../../pixel-art/lib/pointerColorIntent";
+import {
+  calculateImagePreviewSize,
+  IMAGE_PREVIEW_MAX_SIZE,
+} from "../../pixel-art/lib/previewSizing";
+import {
+  parsePixelArtResourceData,
+  PixelArtMigrationError,
+  serializePixelArtResourceData,
+} from "../../pixel-art/lib/migrations";
+import {
+  addPinnedPaletteColor,
+  deletePinnedPaletteColor,
+  deriveUsedPaletteColors,
+  editPinnedPaletteColor,
+  normalizePinnedPaletteColors,
+  PIXEL_ART_PALETTE,
+  type PinnedPaletteColor,
+} from "../../pixel-art/lib/palette";
+import { resizePixelArtDocument } from "../../pixel-art/lib/resize";
+import {
+  exportPixelArtJsonBlob,
+  exportPixelArtPng,
+  importPixelArtJson,
+  importRasterImage,
+  importRasterImageReduced,
+  RasterImageTooLargeError,
+  sanitizeImageFileName,
+  type PngExportScale,
+} from "../../pixel-art/lib/importExport";
+import { useImageAutosave } from "../../pixel-art/composables/useImageAutosave";
+import { useImagePreferences } from "../../pixel-art/composables/useImagePreferences";
+import {
+  getImageKeyboardAction,
+  isEditableKeyboardTarget,
+  type ImageKeyboardAction,
+} from "../../pixel-art/composables/useImageKeyboardShortcuts";
+import type {
+  ImageEditorSnapshot,
+  ImageResizeAnchor,
+  ImageSelection,
+  ImageTool,
+  PixelArtDocumentV2,
+  PixelColor,
+  PixelLayer,
+} from "../../pixel-art/types";
+import ImageImportExportPanel from "../../pixel-art/components/ImageImportExportPanel.vue";
+import ImageLayersPanel from "../../pixel-art/components/ImageLayersPanel.vue";
+import ImageSaveStatus from "../../pixel-art/components/ImageSaveStatus.vue";
+import ImageToolbar from "../../pixel-art/components/ImageToolbar.vue";
+import ImageToolOptions from "../../pixel-art/components/ImageToolOptions.vue";
+import ImageTransformPanel from "../../pixel-art/components/ImageTransformPanel.vue";
+import ImageZoomControls from "../../pixel-art/components/ImageZoomControls.vue";
+import ImageColorSwatches from "../../pixel-art/components/ImageColorSwatches.vue";
+import ImagePalettePanel from "../../pixel-art/components/ImagePalettePanel.vue";
+import type {
+  ImagePaletteEditRequest,
+  ImagePalettePinRequest,
+  ImagePaletteRemoveRequest,
+} from "../../pixel-art/components/ImagePalettePanel.types";
+import ImageEditorNotice from "../../pixel-art/components/ImageEditorNotice.vue";
+import ImageConflictNotice from "../../pixel-art/components/ImageConflictNotice.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
 
 type ResourceRouteKind = "image" | "animation" | "melody";
@@ -28,29 +152,16 @@ type EditorMeta = {
   color: string;
 };
 
-type PixelColor = string | null;
-type ImagePaintTool = "pencil" | "erase";
-type ImageTool = ImagePaintTool | "fill" | "picker";
 type ImagePixelSnapshot = PixelColor[];
 type ImageAnchorArrowDirection = "down" | "left" | "right" | "up";
-type ImageInspectorPanel = "preferences" | "resize";
+type ImageInspectorPanel = "preferences" | "resize" | "transfer" | "transform";
+type ImageZoomMode = "actual" | "custom" | "fit";
 type ImageGridGap = 1 | 2 | 3;
-type ImageGridLineStyle = "solid" | "dashed" | "dots";
 type ImageGridSubdivisionThickness = 1 | 2 | 3;
 type ImageSubdivisionLine = {
   index: number;
   style: Record<string, string>;
 };
-type ImageResizeAnchor =
-  | "top-left"
-  | "top"
-  | "top-right"
-  | "left"
-  | "center"
-  | "right"
-  | "bottom-left"
-  | "bottom"
-  | "bottom-right";
 type ImageResizeAnchorOption = {
   arrows: ImageAnchorArrowDirection[];
   column: number;
@@ -65,15 +176,18 @@ type ImagePreviewViewport = {
   visible: boolean;
   width: number;
 };
-
-type ImageResourceData = {
-  version: 1;
-  width: number;
-  height: number;
-  anchor: ImageResizeAnchor;
-  palette?: string[];
-  pixels: PixelColor[];
+type ImageFloatingPreview = {
+  size: number;
+  visible: boolean;
 };
+type ImageConflictOperation =
+  | { kind: "document" }
+  | { kind: "rename"; name: string };
+type ImageGraffitiPreviewGesture = Readonly<{
+  inverted: boolean;
+  primaryColor: string;
+  secondaryColor: string;
+}>;
 
 const props = defineProps<{
   projectId: string;
@@ -118,8 +232,8 @@ const DEFAULT_IMAGE_WIDTH = 32;
 const DEFAULT_IMAGE_HEIGHT = 32;
 const MIN_IMAGE_DIMENSION = 1;
 const MAX_IMAGE_DIMENSION = 256;
-const MIN_IMAGE_ZOOM = 0.35;
-const MAX_IMAGE_ZOOM = 16;
+const MIN_IMAGE_ZOOM = 0.25;
+const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
@@ -164,13 +278,23 @@ const imageGridWidth = ref(DEFAULT_IMAGE_WIDTH);
 const imageGridHeight = ref(DEFAULT_IMAGE_HEIGHT);
 const imageGridWidthDraft = ref(String(DEFAULT_IMAGE_WIDTH));
 const imageGridHeightDraft = ref(String(DEFAULT_IMAGE_HEIGHT));
-const imagePixels = shallowRef<PixelColor[]>(
-  Array(DEFAULT_IMAGE_WIDTH * DEFAULT_IMAGE_HEIGHT).fill(null),
-);
+const initialImageDocument = createPixelArtDocument(DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT);
+const imageLayers = shallowRef<PixelLayer[]>(initialImageDocument.layers);
+const activeImageLayerId = ref(initialImageDocument.layers[0]?.id || "");
+const imageSelection = ref<ImageSelection | null>(null);
 const selectedImageColor = ref(DEFAULT_PENCIL_COLOR);
 const selectedImageColorDraft = ref(DEFAULT_PENCIL_COLOR.toUpperCase());
-const imageColorPalette = ref<string[]>([]);
+const secondaryImageColor = ref("#000000");
+const personalImagePalette = ref<PinnedPaletteColor[]>([]);
+const imagePaletteUserId = ref("");
+const isPersonalImagePaletteSaving = ref(false);
 const activeImageTool = ref<ImageTool>("pencil");
+const imageBrushSize = ref(1);
+const isImageShapeFilled = ref(false);
+const imageShapePreviewPoints = shallowRef<Point[]>([]);
+const imagePointerStart = ref<Point | null>(null);
+const imagePointerEnd = ref<Point | null>(null);
+const imageClipboard = ref<PixelBlock | null>(null);
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
@@ -185,6 +309,7 @@ const imageGridGap = ref<ImageGridGap>(1);
 const imageGridLineOpacity = ref(0.18);
 const imageGridLineOpacityDraft = ref("0.18");
 const imageZoom = ref(1);
+const imageZoomMode = ref<ImageZoomMode>("fit");
 const selectedImageHue = ref(0);
 const selectedImageSaturation = ref(0);
 const selectedImageValue = ref(1);
@@ -192,10 +317,15 @@ const imagePanX = ref(0);
 const imagePanY = ref(0);
 const imageViewportWidth = ref(0);
 const imageViewportHeight = ref(0);
+const imageStageWidth = ref(0);
+const imageStageHeight = ref(0);
 const areImageDimensionsLinked = ref(true);
 const isPaintingImage = ref(false);
 const isPanningImage = ref(false);
+const isImageSpacePressed = ref(false);
+const imageInteractionKind = ref<"paint" | "shape" | "select" | "move" | null>(null);
 const hoveredImagePixelIndex = ref<number | null>(null);
+const imageGraffitiPreviewGesture = ref<ImageGraffitiPreviewGesture | null>(null);
 const imageStageRef = ref<HTMLElement | null>(null);
 const imageArtboardRef = ref<HTMLElement | null>(null);
 const imageCanvasRef = ref<HTMLCanvasElement | null>(null);
@@ -209,8 +339,47 @@ const imagePreviewViewport = ref<ImagePreviewViewport>({
   visible: false,
   width: 100,
 });
-const imageAutosaveTimeout = ref<number | null>(null);
-const imageAutosaveVersion = ref(0);
+const imageFloatingPreview = ref<ImageFloatingPreview>({
+  size: IMAGE_PREVIEW_MAX_SIZE,
+  visible: false,
+});
+const imageHistory = shallowRef<SnapshotHistory<ImageEditorSnapshot> | null>(null);
+const isImageTransferBusy = ref(false);
+const imageTransferNotice = ref("");
+const imageTransferNoticeTone = ref<"error" | "info" | "success">("info");
+const isImageConflictOpen = ref(false);
+const imageConflictRemoteRevision = ref<number | null>(null);
+const imageConflictOperation = ref<ImageConflictOperation | null>(null);
+const isImageConflictResolving = ref(false);
+const isRenamingResource = ref(false);
+const isResourceNameSaving = ref(false);
+const resourceNameSaveError = ref("");
+const resourceNameDraft = ref("");
+let imageMoveSourceBuffer: PixelBuffer | null = null;
+let imageMoveSourceSelection: ImageSelection | null = null;
+let imageMoveDidChange = false;
+let imagePanPointerId: number | null = null;
+let imagePanPointerClientX = 0;
+let imagePanPointerClientY = 0;
+let imageViewportPaintPointerId: number | null = null;
+let imageViewportPaintButtonMask = 0;
+let imagePointerColorChannel: ImageColorChannel = "primary";
+let imageInteractionColor: PixelColor = DEFAULT_PENCIL_COLOR;
+let imageInteractionTool: ImageTool | null = null;
+let imageInteractionPrimaryColor = DEFAULT_PENCIL_COLOR;
+let imageInteractionSecondaryColor = "#000000";
+let imageInteractionGraffitiInverted = false;
+let isImageViewportPaintAwaitingArtboard = false;
+let imageViewportPaintClientX = 0;
+let imageViewportPaintClientY = 0;
+let imagePreferencesController: ReturnType<typeof useImagePreferences> | null = null;
+let isApplyingImagePreferences = false;
+let imageAutosaveSequence = 0;
+let resourceMutationQueue: Promise<void> = Promise.resolve();
+let personalImagePaletteMutationQueue: Promise<void> = Promise.resolve();
+let pendingPersonalImagePaletteMutations = 0;
+let resourceNameCommitPromise: Promise<void> | null = null;
+let allowImageUnload = false;
 const isProfileDialogOpen = ref(false);
 const profileUserName = ref(props.userName || "");
 const profileUsername = ref(props.userUsername || "");
@@ -239,6 +408,44 @@ const editorStyle = computed(() => ({
 }));
 
 const imagePixelCount = computed(() => imageGridWidth.value * imageGridHeight.value);
+const activeImageLayer = computed(
+  () =>
+    imageLayers.value.find((layer) => layer.id === activeImageLayerId.value) ||
+    imageLayers.value[imageLayers.value.length - 1] ||
+    null,
+);
+const imagePixels = computed<PixelColor[]>({
+  get: () =>
+    activeImageLayer.value?.pixels ||
+    Array<PixelColor>(imageGridWidth.value * imageGridHeight.value).fill(null),
+  set: (pixels) => {
+    const activeLayerId = activeImageLayer.value?.id;
+    if (!activeLayerId) return;
+    imageLayers.value = imageLayers.value.map((layer) =>
+      layer.id === activeLayerId ? { ...layer, pixels } : layer,
+    );
+  },
+});
+const usedImagePaletteColors = computed(() => deriveUsedPaletteColors(imageLayers.value));
+const canEditImage = computed(
+  () =>
+    isImageEditor.value &&
+    (project.value?.access_role === "owner" || project.value?.access_role === "editor"),
+);
+const canManagePersonalImagePalette = computed(
+  () => Boolean(imagePaletteUserId.value) && !isPersonalImagePaletteSaving.value,
+);
+const canMutateActiveImageLayerPixels = computed(
+  () => canEditImage.value && canMutateImageLayerPixels(activeImageLayer.value),
+);
+const isActiveImagePixelMutationTool = computed(() =>
+  isImagePixelMutationTool(activeImageTool.value),
+);
+const isImagePixelMutationBlocked = computed(
+  () => isActiveImagePixelMutationTool.value && !canMutateActiveImageLayerPixels.value,
+);
+const canUndoImage = computed(() => Boolean(imageHistory.value?.canUndo) && canEditImage.value);
+const canRedoImage = computed(() => Boolean(imageHistory.value?.canRedo) && canEditImage.value);
 const getRgbFromHexColor = (color: string) => {
   const hex = color.replace("#", "");
 
@@ -251,31 +458,8 @@ const getRgbFromHexColor = (color: string) => {
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const colorComponentToHex = (value: number) =>
   Math.round(Math.min(255, Math.max(0, value))).toString(16).padStart(2, "0");
-const normalizeHexColorInput = (value: string) => {
-  const hex = value.replace(/[^0-9a-f]/gi, "").slice(0, 6).toUpperCase();
-
-  return `#${hex}`;
-};
-const isCompleteHexColor = (value: string) => /^#[0-9A-F]{6}$/.test(value);
-const normalizeImagePalette = (palette: unknown) => {
-  if (!Array.isArray(palette)) {
-    return [];
-  }
-
-  const colors: string[] = [];
-  for (const color of palette) {
-    if (typeof color !== "string") {
-      continue;
-    }
-
-    const normalized = normalizeHexColorInput(color);
-    if (isCompleteHexColor(normalized) && !colors.includes(normalized)) {
-      colors.push(normalized);
-    }
-  }
-
-  return colors;
-};
+const normalizeHexColorInput = normalizeImageColorDraft;
+const isCompleteHexColor = isCompleteImageColor;
 const hsvToHexColor = (hue: number, saturation: number, value: number) => {
   const chroma = value * saturation;
   const huePrime = ((hue % 360) + 360) % 360 / 60;
@@ -339,16 +523,18 @@ const setSelectedImageColor = (color: string, options: { syncHsv?: boolean } = {
   }
 };
 const applySelectedImageHsv = () => {
+  const alpha = selectedImageColor.value.length === 9 ? selectedImageColor.value.slice(7) : "";
   setSelectedImageColor(
-    hsvToHexColor(
+    `${hsvToHexColor(
       selectedImageHue.value,
       selectedImageSaturation.value,
       selectedImageValue.value,
-    ),
+    )}${alpha}`,
     { syncHsv: false },
   );
 };
 const updateSelectedImageColorFromInput = (event: Event) => {
+  if (!canEditImage.value) return;
   const input = event.currentTarget as HTMLInputElement;
   const normalized = normalizeHexColorInput(input.value);
   selectedImageColorDraft.value = normalized;
@@ -359,6 +545,10 @@ const updateSelectedImageColorFromInput = (event: Event) => {
   }
 };
 const commitSelectedImageColorInput = () => {
+  if (!canEditImage.value) {
+    selectedImageColorDraft.value = selectedImageColor.value.toUpperCase();
+    return;
+  }
   if (isCompleteHexColor(selectedImageColorDraft.value)) {
     setSelectedImageColor(selectedImageColorDraft.value);
     return;
@@ -366,64 +556,141 @@ const commitSelectedImageColorInput = () => {
 
   selectedImageColorDraft.value = selectedImageColor.value.toUpperCase();
 };
-const addImagePaletteColor = (color = selectedImageColor.value, options: { autosave?: boolean } = {}) => {
-  const normalized = normalizeHexColorInput(color);
-  if (!isCompleteHexColor(normalized) || imageColorPalette.value.includes(normalized)) {
+const imagePinnedPalettesAreEqual = (
+  left: readonly PinnedPaletteColor[],
+  right: readonly PinnedPaletteColor[],
+) =>
+  left.length === right.length &&
+  left.every(
+    (entry, index) =>
+      entry.id === right[index]?.id &&
+      entry.color === right[index]?.color &&
+      entry.name === right[index]?.name,
+  );
+
+const enqueuePersonalImagePaletteMutation = <T,>(mutation: () => Promise<T>) => {
+  pendingPersonalImagePaletteMutations += 1;
+  isPersonalImagePaletteSaving.value = true;
+
+  const settleMutation = () => {
+    pendingPersonalImagePaletteMutations = Math.max(
+      0,
+      pendingPersonalImagePaletteMutations - 1,
+    );
+    isPersonalImagePaletteSaving.value = pendingPersonalImagePaletteMutations > 0;
+  };
+  const operation = personalImagePaletteMutationQueue
+    .then(mutation, mutation)
+    .then(
+      (result) => {
+        settleMutation();
+        return result;
+      },
+      (error: unknown) => {
+        settleMutation();
+        throw error;
+      },
+    );
+  personalImagePaletteMutationQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
+};
+
+const waitForPersonalImagePaletteMutations = async () => {
+  let pendingQueue = personalImagePaletteMutationQueue;
+  await pendingQueue;
+
+  while (pendingQueue !== personalImagePaletteMutationQueue) {
+    pendingQueue = personalImagePaletteMutationQueue;
+    await pendingQueue;
+  }
+};
+
+const persistPersonalImagePalette = (
+  nextPalette: readonly PinnedPaletteColor[],
+  successMessage: string,
+) => {
+  if (!canManagePersonalImagePalette.value) {
     return false;
   }
 
-  imageColorPalette.value = [...imageColorPalette.value, normalized];
-  if (options.autosave !== false) {
-    scheduleImageAutosave();
+  const normalized = normalizePinnedPaletteColors(nextPalette);
+  if (imagePinnedPalettesAreEqual(normalized, personalImagePalette.value)) {
+    return false;
   }
-  return true;
+
+  const previousPalette = personalImagePalette.value;
+  personalImagePalette.value = normalized;
+
+  return enqueuePersonalImagePaletteMutation(async () => {
+    try {
+      const user = await patchCurrentUser({ pixel_art_palette: normalized });
+      personalImagePalette.value = normalizePinnedPaletteColors(user.pixel_art_palette);
+      showImageNotice(successMessage, "success");
+      return true;
+    } catch (error) {
+      personalImagePalette.value = previousPalette;
+      showImageNotice(
+        error instanceof Error ? error.message : "Your personal palette could not be saved.",
+        "error",
+      );
+      return false;
+    }
+  });
+};
+
+const pinImagePaletteColor = async (
+  request: ImagePalettePinRequest = { color: selectedImageColor.value },
+) => {
+  const nextPalette = addPinnedPaletteColor(personalImagePalette.value, request);
+  if (imagePinnedPalettesAreEqual(nextPalette, personalImagePalette.value)) {
+    showImageNotice("That color is already pinned to your palette.", "info");
+    return false;
+  }
+  return persistPersonalImagePalette(nextPalette, "Color pinned to your palette.");
 };
 const selectImagePaletteColor = (color: string) => {
+  if (!canEditImage.value) return;
   setSelectedImageColor(color);
 };
-const removeImagePaletteColor = (color: string) => {
-  const normalized = normalizeHexColorInput(color);
-  const nextPalette = imageColorPalette.value.filter((paletteColor) => paletteColor !== normalized);
-
-  if (nextPalette.length === imageColorPalette.value.length) {
-    return;
+const selectSecondaryImagePaletteColor = (color: string) => {
+  if (!canEditImage.value) return;
+  setSecondaryImageColor(color);
+};
+const editImagePaletteColor = (request: ImagePaletteEditRequest) => {
+  const normalizedColor = normalizePixelColor(request.color);
+  const hasColorCollision = Boolean(
+    request.id &&
+      normalizedColor &&
+      personalImagePalette.value.some(
+        (entry) => entry.id !== request.id && entry.color === normalizedColor,
+      ),
+  );
+  if (hasColorCollision) {
+    showImageNotice(
+      "That color is already pinned. Choose another color or edit its existing swatch.",
+      "info",
+    );
+    return false;
   }
 
-  imageColorPalette.value = nextPalette;
-  scheduleImageAutosave();
+  const nextPalette = request.id
+    ? editPinnedPaletteColor(personalImagePalette.value, request.id, request)
+    : addPinnedPaletteColor(personalImagePalette.value, request);
+  return persistPersonalImagePalette(nextPalette, "Saved color updated.");
 };
+const unpinImagePaletteColor = ({ id }: ImagePaletteRemoveRequest) =>
+  persistPersonalImagePalette(
+    deletePinnedPaletteColor(personalImagePalette.value, id),
+    "Color unpinned. Pixels using it were not changed.",
+  );
 const getImageGridLineBackground = (color: string) => {
   const { blue, green, red } = getRgbFromHexColor(color);
 
   return `rgba(${red}, ${green}, ${blue}, var(--image-grid-line-opacity, 0.18))`;
 };
-const getImageGridDashImage = (color: string) => {
-  if (!isImageGridVisible.value || imageGridLineStyle.value !== "dashed") {
-    return "none";
-  }
-
-  const { blue, green, red } = getRgbFromHexColor(color);
-  const step = Math.max(4, imageArtboardMetrics.value.cellSize + imageGridLineGap.value);
-  const dashLength = 8;
-  const gapLength = 6;
-  const opacity = Math.max(0, Math.min(1, imageGridLineOpacity.value));
-  const dashArray = step < dashLength + gapLength ? `${Math.max(2, step * 0.45)} ${Math.max(2, step * 0.55)}` : `${dashLength} ${gapLength}`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${step}" height="${step}" viewBox="0 0 ${step} ${step}"><g stroke="rgb(${red},${green},${blue})" stroke-opacity="${opacity}" stroke-width="1" stroke-dasharray="${dashArray}" stroke-linecap="butt"><line x1="0.5" y1="0" x2="0.5" y2="${step}"/><line x1="0" y1="0.5" x2="${step}" y2="0.5"/></g></svg>`;
-
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-};
-const getImageGridBackground = (color: string) => {
-  const lineColor = getImageGridLineBackground(color);
-
-  if (imageGridLineStyle.value === "dots" || imageGridLineStyle.value === "dashed") {
-    return "transparent";
-  }
-
-  return lineColor;
-};
-const activeImageGridLineBackground = computed(() =>
-  getImageGridBackground(customImageGridColor.value),
-);
 const activeImageInspectorLabel = computed(() => {
   if (activeImageInspectorPanel.value === "resize") {
     return "Resize";
@@ -433,58 +700,96 @@ const activeImageInspectorLabel = computed(() => {
     return "Preferences";
   }
 
-  return "Options";
-});
-const imageArtboardBaseSize = computed(() => {
-  const viewportWidth = imageViewportWidth.value || 1024;
-  const viewportHeight = imageViewportHeight.value || 768;
-  if (viewportWidth <= 520) {
-    const availableWidth = Math.max(180, viewportWidth - 28);
-    const availableHeight = Math.max(220, viewportHeight - 420);
-
-    return Math.min(availableWidth, availableHeight, 310);
+  if (activeImageInspectorPanel.value === "transform") {
+    return "Transform";
   }
 
-  const viewportMin = Math.min(viewportWidth, viewportHeight);
-  const aspectRatio = imageGridWidth.value / imageGridHeight.value;
+  if (activeImageInspectorPanel.value === "transfer") {
+    return "Import & export";
+  }
 
-  return Math.min(viewportMin * 0.62, 620, viewportHeight * 0.68 * aspectRatio);
+  return "Options";
 });
-const imageGridLineGap = computed(() =>
-  isImageGridVisible.value && imageGridLineStyle.value === "solid" ? imageGridGap.value : 0,
-);
 const imageArtboardMetricsForZoom = (zoom: number) => {
   const gridWidth = imageGridWidth.value;
   const gridHeight = imageGridHeight.value;
-  const gap = imageGridLineGap.value;
-  const borderSize = 2;
-  const horizontalGapSize = Math.max(0, gridWidth - 1) * gap;
-  const verticalGapSize = Math.max(0, gridHeight - 1) * gap;
-  const availableWidth = Math.max(
-    gridWidth,
-    imageArtboardBaseSize.value * zoom - horizontalGapSize - borderSize,
-  );
-  const cellSize = Math.max(1, Math.round(availableWidth / gridWidth));
+  const cellSize = clampImageZoom(zoom);
+  const renderPlan = createImageCanvasRenderPlan({ cellSize, gridHeight, gridWidth });
 
   return {
     cellSize,
-    height: gridHeight * cellSize + verticalGapSize + borderSize,
-    width: gridWidth * cellSize + horizontalGapSize + borderSize,
+    height: renderPlan.cssHeight + 2,
+    width: renderPlan.cssWidth + 2,
   };
 };
 const imageArtboardMetrics = computed(() => imageArtboardMetricsForZoom(imageZoom.value));
 const imageArtboardWidth = computed(() => imageArtboardMetrics.value.width);
 const imageArtboardHeight = computed(() => imageArtboardMetrics.value.height);
+const imageGridOverlayPlan = computed(() =>
+  createImageGridOverlayPlan({
+    cellSize: imageArtboardMetrics.value.cellSize,
+    gridHeight: imageGridHeight.value,
+    gridWidth: imageGridWidth.value,
+    lineStyle: imageGridLineStyle.value,
+  }),
+);
+const imageGridOverlayPath = computed(() =>
+  [
+    ...imageGridOverlayPlan.value.verticalLines,
+    ...imageGridOverlayPlan.value.horizontalLines,
+  ]
+    .map(({ x1, x2, y1, y2 }) => `M ${x1} ${y1} L ${x2} ${y2}`)
+    .join(" "),
+);
+const imageGridOverlayOpacity = computed(() => {
+  if (!isImageGridVisible.value) {
+    return 0;
+  }
+
+  const lowZoomVisibility = clamp01((imageGridOverlayPlan.value.step - 4) / 2);
+
+  return clamp01(imageGridLineOpacity.value) * lowZoomVisibility;
+});
+const imageGridStrokeWidth = computed(() =>
+  Math.min(imageGridGap.value, Math.max(0.75, imageGridOverlayPlan.value.step * 0.25)),
+);
+const imageGridDashArray = computed(() => {
+  const step = imageGridOverlayPlan.value.step;
+  const dashLength = Math.min(6, Math.max(3, step * 0.35));
+  const gapLength = Math.min(4, Math.max(2, step * 0.25));
+
+  return `${dashLength.toFixed(2)} ${gapLength.toFixed(2)}`;
+});
+const imageGridDotRadius = computed(() => Math.max(0.75, imageGridStrokeWidth.value / 2));
+const imageGridDotPatternId = computed(
+  () => `image-grid-dots-${props.resourceId.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+);
+const imageGridDotClipRect = computed(() => {
+  const inset = imageGridDotRadius.value + 0.01;
+
+  return {
+    height: Math.max(0, imageGridOverlayPlan.value.cssHeight - inset * 2),
+    width: Math.max(0, imageGridOverlayPlan.value.cssWidth - inset * 2),
+    x: inset,
+    y: inset,
+  };
+});
+const hasImageGridDotIntersections = computed(
+  () =>
+    imageGridWidth.value > 1 &&
+    imageGridHeight.value > 1 &&
+    imageGridDotClipRect.value.width > 0 &&
+    imageGridDotClipRect.value.height > 0,
+);
 const imageSubdivisionLinePosition = (lineIndex: number) => {
   const cellSize = imageArtboardMetrics.value.cellSize;
-  const gap = imageGridLineGap.value;
   const thickness = imageGridSubdivisionThickness.value;
-  const gapCenter = lineIndex * cellSize + Math.max(0, lineIndex - 1) * gap + gap / 2;
+  const lineCenter = lineIndex * cellSize;
 
-  return Math.max(0, gapCenter - thickness / 2);
+  return Math.max(0, lineCenter - thickness / 2);
 };
 const createImageSubdivisionLines = (count: number, axis: "horizontal" | "vertical") => {
-  if (!isImageGridVisible.value || imageGridSubdivision.value <= 1) {
+  if (imageGridOverlayOpacity.value <= 0 || imageGridSubdivision.value <= 1) {
     return [];
   }
 
@@ -495,8 +800,8 @@ const createImageSubdivisionLines = (count: number, axis: "horizontal" | "vertic
       index: lineIndex,
       style:
         axis === "vertical"
-          ? { left: `${1 + position}px`, width: `${imageGridSubdivisionThickness.value}px` }
-          : { height: `${imageGridSubdivisionThickness.value}px`, top: `${1 + position}px` },
+          ? { left: `${position}px`, width: `${imageGridSubdivisionThickness.value}px` }
+          : { height: `${imageGridSubdivisionThickness.value}px`, top: `${position}px` },
     });
   }
 
@@ -516,47 +821,123 @@ const imageHoverCellStyle = computed(() => {
   const column = hoveredImagePixelIndex.value % imageGridWidth.value;
   const row = Math.floor(hoveredImagePixelIndex.value / imageGridWidth.value);
   const cellSize = imageArtboardMetrics.value.cellSize;
-  const gap = imageGridLineGap.value;
 
   return {
     height: `${cellSize}px`,
-    left: `${1 + column * (cellSize + gap)}px`,
-    top: `${1 + row * (cellSize + gap)}px`,
+    left: `${column * cellSize}px`,
+    top: `${row * cellSize}px`,
     width: `${cellSize}px`,
   };
 });
-const imageCanvasGridStyle = computed(() => ({
-  background: activeImageGridLineBackground.value,
-  gap: `${imageGridLineGap.value}px`,
-  gridTemplateColumns: `repeat(${imageGridWidth.value}, 1fr)`,
-  gridTemplateRows: `repeat(${imageGridHeight.value}, 1fr)`,
-  height: `${imageArtboardHeight.value}px`,
-  "--image-grid-height": `${imageGridHeight.value}`,
-  "--image-grid-line-opacity": isImageGridVisible.value ? `${imageGridLineOpacity.value}` : "0",
-  "--image-grid-dash-image": getImageGridDashImage(customImageGridColor.value),
-  "--image-grid-dash-opacity": isImageGridVisible.value && imageGridLineStyle.value === "dashed" ? "1" : "0",
-  "--image-grid-dot-color":
-    imageGridLineStyle.value === "dots"
-      ? getImageGridLineBackground(customImageGridColor.value)
-      : "transparent",
-  "--image-grid-dot-opacity": isImageGridVisible.value && imageGridLineStyle.value === "dots" ? "1" : "0",
-  "--image-grid-dot-size": `${Math.max(2, Math.min(4, imageArtboardMetrics.value.cellSize * 0.16))}px`,
-  "--image-grid-step": `${imageArtboardMetrics.value.cellSize + imageGridLineGap.value}px`,
-  "--image-grid-subdivision-color": getImageGridLineBackground(customImageSubdivisionColor.value),
-  "--image-grid-subdivision-thickness": `${imageGridSubdivisionThickness.value}px`,
-  "--image-grid-width": `${imageGridWidth.value}`,
-  "--image-artboard-height": `${imageArtboardHeight.value}px`,
-  "--image-artboard-half-height": `${imageArtboardHeight.value / 2}px`,
-  "--image-artboard-half-width": `${imageArtboardWidth.value / 2}px`,
-  "--image-artboard-width": `${imageArtboardWidth.value}px`,
-  "--image-artboard-center-x": "50%",
-  "--image-artboard-center-y": imageViewportWidth.value <= 520 ? "46%" : "50%",
-  "--image-pan-x": `${imagePanX.value}px`,
-  "--image-pan-y": `${imagePanY.value}px`,
-  "--image-zoom": `${imageZoom.value}`,
-  "--image-pixel-background": customImageBackground.value,
-  width: `${imageArtboardWidth.value}px`,
-}));
+const isImageGraffitiHoverPreview = computed(
+  () =>
+    hoveredImagePixelIndex.value !== null &&
+    (imageGraffitiPreviewGesture.value !== null || activeImageTool.value === "graffiti"),
+);
+const imageGraffitiHoverCells = computed(() => {
+  const hoveredIndex = hoveredImagePixelIndex.value;
+  if (
+    hoveredIndex === null ||
+    !isImageGraffitiHoverPreview.value ||
+    !canMutateActiveImageLayerPixels.value
+  ) {
+    return [];
+  }
+
+  const cellSize = imageArtboardMetrics.value.cellSize;
+  const gesture = imageGraffitiPreviewGesture.value;
+  const pixels = graffitiBrushStamp(
+    {
+      x: hoveredIndex % imageGridWidth.value,
+      y: Math.floor(hoveredIndex / imageGridWidth.value),
+    },
+    {
+      bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
+      brushSize: imageBrushSize.value,
+      inverted: gesture?.inverted ?? false,
+      primaryColor: gesture?.primaryColor ?? selectedImageColor.value,
+      secondaryColor: gesture?.secondaryColor ?? secondaryImageColor.value,
+    },
+  );
+
+  return pixels.map((pixel) => ({
+    key: `${pixel.x}-${pixel.y}`,
+    style: {
+      backgroundColor: pixel.color,
+      borderColor: getImageGridKeylineColor(pixel.color),
+      borderWidth: cellSize >= 4 ? "1px" : "0",
+      height: `${cellSize}px`,
+      left: `${pixel.x * cellSize}px`,
+      top: `${pixel.y * cellSize}px`,
+      width: `${cellSize}px`,
+    },
+  }));
+});
+const imageArtboardAriaLabel = computed(() => {
+  const base = `Pixel art drawing grid, ${imageGridWidth.value} by ${imageGridHeight.value} pixels. ${activeImageTool.value} tool on ${activeImageLayer.value?.name || "active layer"}, primary color ${selectedImageColor.value}, secondary color ${secondaryImageColor.value}.`;
+  const toolDescription =
+    activeImageTool.value === "graffiti"
+      ? " Alternates both colors in a 1 by 1 checker pattern. The right button reverses the pattern."
+      : "";
+  const layerState =
+    activeImageLayer.value && !activeImageLayer.value.visible
+      ? " The active layer is hidden; show it to edit pixels."
+      : activeImageLayer.value?.locked
+        ? " The active layer is locked; unlock it to edit pixels."
+        : "";
+
+  return `${base}${toolDescription}${layerState}`;
+});
+const imageViewportAriaLabel = computed(() => {
+  const navigation = "Hold Space to pan, or use the mouse wheel to zoom.";
+  if (isImagePixelMutationBlocked.value) {
+    const reason =
+      activeImageLayer.value && !activeImageLayer.value.visible
+        ? "The active layer is hidden; show it to edit pixels."
+        : activeImageLayer.value?.locked
+          ? "The active layer is locked; unlock it to edit pixels."
+          : "Pixel editing is unavailable.";
+    return `Drawing workspace. ${reason} ${navigation}`;
+  }
+
+  return `Drawing workspace. Start a stroke here and move onto the canvas. ${navigation}`;
+});
+const imageSelectionStyle = computed(() => {
+  const selection = imageSelection.value;
+  if (!selection || selection.width <= 0 || selection.height <= 0) return {};
+  const cellSize = imageArtboardMetrics.value.cellSize;
+
+  return {
+    height: `${selection.height * cellSize}px`,
+    left: `${selection.x * cellSize}px`,
+    top: `${selection.y * cellSize}px`,
+    width: `${selection.width * cellSize}px`,
+  };
+});
+const imageCanvasGridStyle = computed(() => {
+  return {
+    gap: "0px",
+    gridTemplateColumns: `repeat(${imageGridWidth.value}, 1fr)`,
+    gridTemplateRows: `repeat(${imageGridHeight.value}, 1fr)`,
+    height: `${imageArtboardHeight.value}px`,
+    "--image-grid-height": `${imageGridHeight.value}`,
+    "--image-grid-line-opacity": `${imageGridOverlayOpacity.value}`,
+    "--image-grid-subdivision-color": getImageGridLineBackground(customImageSubdivisionColor.value),
+    "--image-grid-subdivision-thickness": `${imageGridSubdivisionThickness.value}px`,
+    "--image-grid-width": `${imageGridWidth.value}`,
+    "--image-artboard-height": `${imageArtboardHeight.value}px`,
+    "--image-artboard-half-height": `${imageArtboardHeight.value / 2}px`,
+    "--image-artboard-half-width": `${imageArtboardWidth.value / 2}px`,
+    "--image-artboard-width": `${imageArtboardWidth.value}px`,
+    "--image-artboard-center-x": "50%",
+    "--image-artboard-center-y": imageViewportWidth.value <= 520 ? "46%" : "50%",
+    "--image-pan-x": `${imagePanX.value}px`,
+    "--image-pan-y": `${imagePanY.value}px`,
+    "--image-zoom": `${imageZoom.value}`,
+    "--image-pixel-background": customImageBackground.value,
+    width: `${imageArtboardWidth.value}px`,
+  };
+});
 const imagePreviewGridStyle = computed(() => ({
   aspectRatio: `${imageGridWidth.value} / ${imageGridHeight.value}`,
   gridTemplateColumns: `repeat(${imageGridWidth.value}, 1fr)`,
@@ -576,6 +957,10 @@ const imagePreviewViewportStyle = computed(() => ({
   left: `${imagePreviewViewport.value.left}%`,
   top: `${imagePreviewViewport.value.top}%`,
   width: `${imagePreviewViewport.value.width}%`,
+}));
+const imageFloatingPreviewStyle = computed(() => ({
+  "--image-preview-size": `${imageFloatingPreview.value.size}px`,
+  visibility: imageFloatingPreview.value.visible ? "visible" : "hidden",
 }));
 const selectedImageHueColor = computed(() =>
   hsvToHexColor(selectedImageHue.value, 1, 1),
@@ -621,15 +1006,17 @@ const renderImageCanvas = () => {
   }
 
   const cellSize = imageArtboardMetrics.value.cellSize;
-  const gap = imageGridLineGap.value;
   const width = imageGridWidth.value;
   const height = imageGridHeight.value;
-  const canvasWidth = width * cellSize + Math.max(0, width - 1) * gap;
-  const canvasHeight = height * cellSize + Math.max(0, height - 1) * gap;
-  canvas.width = Math.max(1, canvasWidth);
-  canvas.height = Math.max(1, canvasHeight);
-  canvas.style.width = `${canvasWidth}px`;
-  canvas.style.height = `${canvasHeight}px`;
+  const renderPlan = createImageCanvasRenderPlan({
+    cellSize,
+    gridHeight: height,
+    gridWidth: width,
+  });
+  canvas.width = Math.max(1, renderPlan.bitmapWidth);
+  canvas.height = Math.max(1, renderPlan.bitmapHeight);
+  canvas.style.width = `${renderPlan.cssWidth}px`;
+  canvas.style.height = `${renderPlan.cssHeight}px`;
 
   const context = canvas.getContext("2d");
   if (!context) {
@@ -638,13 +1025,65 @@ const renderImageCanvas = () => {
 
   context.imageSmoothingEnabled = false;
   context.clearRect(0, 0, canvas.width, canvas.height);
+  const visiblePixels = compositeVisibleLayers(buildImageDocument());
 
-  for (let index = 0; index < imagePixels.value.length; index += 1) {
+  for (let index = 0; index < visiblePixels.length; index += 1) {
     const column = index % width;
     const row = Math.floor(index / width);
-    context.fillStyle = imagePixels.value[index] || customImageBackground.value;
-    context.fillRect(column * (cellSize + gap), row * (cellSize + gap), cellSize, cellSize);
+    context.fillStyle = customImageBackground.value;
+    context.fillRect(
+      column * renderPlan.cellStride,
+      row * renderPlan.cellStride,
+      renderPlan.cellSize,
+      renderPlan.cellSize,
+    );
+    const color = visiblePixels[index];
+    if (color) {
+      context.fillStyle = color;
+      context.fillRect(
+        column * renderPlan.cellStride,
+        row * renderPlan.cellStride,
+        renderPlan.cellSize,
+        renderPlan.cellSize,
+      );
+    }
   }
+
+  if (imageShapePreviewPoints.value.length > 0) {
+    context.save();
+    context.globalAlpha = 0.72;
+    context.fillStyle = imageInteractionColor || "transparent";
+    for (const point of imageShapePreviewPoints.value) {
+      context.fillRect(
+        point.x * renderPlan.cellStride,
+        point.y * renderPlan.cellStride,
+        renderPlan.cellSize,
+        renderPlan.cellSize,
+      );
+    }
+    context.restore();
+  }
+};
+
+const setSecondaryImageColor = (color: string) => {
+  if (!canEditImage.value) return;
+  const normalized = normalizeHexColorInput(color);
+  if (isCompleteHexColor(normalized)) {
+    secondaryImageColor.value = normalized;
+  }
+};
+
+const swapImageColors = () => {
+  if (!canEditImage.value) return;
+  const previousPrimary = selectedImageColor.value;
+  setSelectedImageColor(secondaryImageColor.value);
+  secondaryImageColor.value = previousPrimary;
+};
+
+const resetImageColors = () => {
+  if (!canEditImage.value) return;
+  setSelectedImageColor("#FFFFFF");
+  secondaryImageColor.value = "#000000";
 };
 
 const renderImagePreviewCanvas = () => {
@@ -666,9 +1105,10 @@ const renderImagePreviewCanvas = () => {
   context.imageSmoothingEnabled = false;
   context.fillStyle = customImageBackground.value;
   context.fillRect(0, 0, width, height);
+  const visiblePixels = compositeVisibleLayers(buildImageDocument());
 
-  for (let index = 0; index < imagePixels.value.length; index += 1) {
-    const color = imagePixels.value[index];
+  for (let index = 0; index < visiblePixels.length; index += 1) {
+    const color = visiblePixels[index];
     if (!color) {
       continue;
     }
@@ -679,6 +1119,16 @@ const renderImagePreviewCanvas = () => {
     context.fillRect(column, row, 1, 1);
   }
 };
+
+watch(
+  imagePreviewCanvasRef,
+  (canvas) => {
+    if (canvas) {
+      renderImagePreviewCanvas();
+    }
+  },
+  { flush: "post" },
+);
 
 const getImageColorTriangleWeights = (x: number, y: number) => {
   const denominator =
@@ -775,13 +1225,47 @@ const canonicalResourcePath = computed(
     )}`,
 );
 
-const returnToStudio = () => {
-  window.location.assign("/studio");
+const navigateAfterImageSave = async (path: string) => {
+  if (isImageEditor.value && isRenamingResource.value) {
+    await commitResourceName();
+  }
+
+  if (isImageEditor.value) {
+    await imageAutosave.flush();
+    await resourceMutationQueue;
+    await waitForPersonalImagePaletteMutations();
+
+    const hasUnsavedName =
+      isRenamingResource.value &&
+      Boolean(resourceNameDraft.value.trim()) &&
+      resourceNameDraft.value.trim() !== resource.value?.name;
+    if (
+      imageAutosave.hasPendingChanges.value ||
+      isResourceNameSaving.value ||
+      isPersonalImagePaletteSaving.value ||
+      hasUnsavedName ||
+      imageConflictOperation.value !== null
+    ) {
+      const shouldLeave = window.confirm(
+        "Your latest changes could not be saved. Leave the editor anyway? Unsaved changes may be lost.",
+      );
+      if (!shouldLeave) {
+        showImageNotice(
+          imageSaveError.value || "Save your pending changes before leaving the editor.",
+          "error",
+        );
+        return;
+      }
+    }
+  }
+
+  allowImageUnload = true;
+  window.location.assign(path);
 };
 
-const returnToProject = () => {
-  window.location.assign(projectPath.value);
-};
+const returnToStudio = () => navigateAfterImageSave("/studio");
+
+const returnToProject = () => navigateAfterImageSave(projectPath.value);
 
 const updateProfile = (user: UserPublic) => {
   profileUsername.value = user.username || "";
@@ -789,13 +1273,18 @@ const updateProfile = (user: UserPublic) => {
   profileAvatarUrl.value = user.avatar_url || "";
   profileEmail.value = user.email;
   profilePixelAvatar.value = user.avatar_pixel_art || null;
+  imagePaletteUserId.value = user.id;
+  personalImagePalette.value = normalizePinnedPaletteColors(user.pixel_art_palette);
   isProfileDialogOpen.value = false;
 };
 
 const emptyImagePixels = (width = imageGridWidth.value, height = imageGridHeight.value) =>
   Array<PixelColor>(width * height).fill(null);
 
-const imagePixelsAreEqual = (left: ImagePixelSnapshot, right: ImagePixelSnapshot) =>
+const imagePixelsAreEqual = (
+  left: ReadonlyArray<PixelColor>,
+  right: ReadonlyArray<PixelColor>,
+) =>
   left.length === right.length && left.every((pixel, index) => pixel === right[index]);
 
 const normalizeImageDimension = (value: unknown, fallback: number) => {
@@ -816,117 +1305,467 @@ const normalizeImageResizeAnchor = (value: unknown): ImageResizeAnchor =>
     ? (value as ImageResizeAnchor)
     : DEFAULT_IMAGE_RESIZE_ANCHOR;
 
-const normalizeImagePixels = (pixels: unknown, width = imageGridWidth.value, height = imageGridHeight.value) => {
-  if (!Array.isArray(pixels)) {
-    return emptyImagePixels(width, height);
-  }
-
-  return Array.from({ length: width * height }, (_, index) => {
-    const pixel = pixels[index];
-    return typeof pixel === "string" && pixel.trim() ? pixel : null;
-  });
-};
-
 const readImagePixelsFromData = (data: Record<string, unknown>) => {
-  const pixelArtData = data.pixel_art;
-  if (
-    pixelArtData &&
-    typeof pixelArtData === "object" &&
-    "pixels" in pixelArtData
-  ) {
-    const imageData = pixelArtData as {
-      anchor?: unknown;
-      height?: unknown;
-      palette?: unknown;
-      pixels?: unknown;
-      size?: unknown;
-      width?: unknown;
-    };
-    const width = normalizeImageDimension(imageData.width ?? imageData.size, DEFAULT_IMAGE_WIDTH);
-    const height = normalizeImageDimension(imageData.height ?? imageData.size, DEFAULT_IMAGE_HEIGHT);
-
-    return {
-      anchor: normalizeImageResizeAnchor(imageData.anchor),
-      height,
-      palette: normalizeImagePalette(imageData.palette),
-      pixels: normalizeImagePixels(imageData.pixels, width, height),
-      width,
-    };
-  }
-
-  const width = normalizeImageDimension(data.width ?? data.size, DEFAULT_IMAGE_WIDTH);
-  const height = normalizeImageDimension(data.height ?? data.size, DEFAULT_IMAGE_HEIGHT);
+  const result = parsePixelArtResourceData(data);
+  const legacyPixelArt =
+    data.pixel_art && typeof data.pixel_art === "object"
+      ? (data.pixel_art as Record<string, unknown>)
+      : data;
 
   return {
-    anchor: normalizeImageResizeAnchor(data.anchor),
-    height,
-    palette: normalizeImagePalette(data.palette),
-    pixels: normalizeImagePixels(data.pixels, width, height),
-    width,
+    anchor: normalizeImageResizeAnchor(legacyPixelArt.anchor),
+    document: result.document,
+    migrated: result.migrated,
+    warnings: result.warnings,
   };
 };
 
-const buildImageResourceData = (): ImageResourceData => ({
-  version: 1,
-  width: imageGridWidth.value,
-  height: imageGridHeight.value,
-  anchor: imageResizeAnchor.value,
-  palette: [...imageColorPalette.value],
-  pixels: [...imagePixels.value],
-});
+const showImageNotice = (
+  message: string,
+  tone: "error" | "info" | "success" = "info",
+) => {
+  imageTransferNotice.value = message;
+  imageTransferNoticeTone.value = tone;
+};
 
-const saveImagePixels = async (version: number) => {
+const enqueueResourceMutation = <T,>(mutation: () => Promise<T>) => {
+  const operation = resourceMutationQueue.then(mutation, mutation);
+  resourceMutationQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
+};
+
+const markImageReadOnly = () => {
+  if (project.value) {
+    project.value = { ...project.value, access_role: "viewer" };
+  }
+};
+
+const openImageConflict = (
+  operation: ImageConflictOperation,
+  remoteRevision: number | null,
+) => {
+  imageConflictOperation.value = operation;
+  imageConflictRemoteRevision.value = remoteRevision;
+  isImageConflictOpen.value = true;
+};
+
+const persistResourceName = async (name: string) => {
+  isResourceNameSaving.value = true;
+  try {
+    await enqueueResourceMutation(async () => {
+      const currentResource = resource.value;
+      if (!currentResource || !canEditImage.value) {
+        throw new Error("You no longer have permission to rename this image.");
+      }
+
+      const result = await patchProjectResource(props.projectId, props.resourceId, {
+        name,
+        base_revision: currentResource.revision,
+      });
+
+      if (!result.ok) {
+        if (result.conflict) {
+          openImageConflict(
+            { kind: "rename", name },
+            result.conflict.current_revision,
+          );
+          throw new Error("A newer version exists. Choose which name to keep.");
+        }
+        if (result.status === 403) {
+          markImageReadOnly();
+        }
+        throw new Error(
+          result.status === 403
+            ? "You no longer have permission to rename this image."
+            : `The image name could not be saved${result.status ? ` (${result.status})` : ""}.`,
+        );
+      }
+
+      resource.value = {
+        ...currentResource,
+        ...result.resource,
+        data: currentResource.data,
+      };
+    });
+  } finally {
+    isResourceNameSaving.value = false;
+  }
+};
+
+const startRenamingResource = () => {
+  if (!canEditImage.value || !resource.value) return;
+  resourceNameSaveError.value = "";
+  resourceNameDraft.value = resource.value.name;
+  isRenamingResource.value = true;
+};
+
+const cancelRenamingResource = () => {
+  isRenamingResource.value = false;
+  resourceNameSaveError.value = "";
+  resourceNameDraft.value = resource.value?.name || "";
+};
+
+const performResourceNameCommit = async () => {
   const currentResource = resource.value;
-  if (!currentResource || !isImageEditor.value) {
+  const name = resourceNameDraft.value.trim();
+  if (!currentResource || !canEditImage.value || !name || name === currentResource.name) {
+    cancelRenamingResource();
     return;
   }
 
-  const nextData = {
-    ...(currentResource.data || {}),
-    pixel_art: buildImageResourceData(),
-  };
+  await imageAutosave.flush();
+  if (imageAutosave.hasPendingChanges.value) {
+    showImageNotice(
+      imageSaveError.value || "Save the pending image changes before renaming it.",
+      "error",
+    );
+    return;
+  }
 
-  const savedResource = await fetchApi<ProjectResourcePublic>(
+  try {
+    await persistResourceName(name);
+    resourceNameSaveError.value = "";
+    isRenamingResource.value = false;
+    showImageNotice("Image name updated.", "success");
+  } catch (error) {
+    resourceNameSaveError.value =
+      error instanceof Error ? error.message : "The image name could not be saved.";
+    showImageNotice(resourceNameSaveError.value, "error");
+  }
+};
+
+const commitResourceName = () => {
+  if (resourceNameCommitPromise) {
+    return resourceNameCommitPromise;
+  }
+
+  const operation = performResourceNameCommit();
+  resourceNameCommitPromise = operation;
+  void operation.finally(() => {
+    if (resourceNameCommitPromise === operation) {
+      resourceNameCommitPromise = null;
+    }
+  });
+  return operation;
+};
+
+const buildImageDocument = (): PixelArtDocumentV2 => ({
+  version: 2,
+  width: imageGridWidth.value,
+  height: imageGridHeight.value,
+  palette: [...usedImagePaletteColors.value],
+  // Pixel buffers are treated as immutable throughout the editor. Reusing them
+  // here keeps rendering and history snapshots cheap even at the v1 limits.
+  layers: imageLayers.value.map((layer) => ({ ...layer, pixels: layer.pixels })),
+});
+
+const createImageSnapshot = (): ImageEditorSnapshot => ({
+  document: buildImageDocument(),
+  activeLayerId: activeImageLayerId.value,
+  selection: imageSelection.value ? { ...imageSelection.value } : null,
+});
+
+const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSnapshot) => {
+  const leftDocument = left.document;
+  const rightDocument = right.document;
+  if (
+    left.activeLayerId !== right.activeLayerId ||
+    leftDocument.width !== rightDocument.width ||
+    leftDocument.height !== rightDocument.height ||
+    leftDocument.palette.length !== rightDocument.palette.length ||
+    leftDocument.layers.length !== rightDocument.layers.length ||
+    leftDocument.palette.some((color, index) => color !== rightDocument.palette[index])
+  ) {
+    return false;
+  }
+
+  const leftSelection = left.selection;
+  const rightSelection = right.selection;
+  if (
+    Boolean(leftSelection) !== Boolean(rightSelection) ||
+    (leftSelection &&
+      rightSelection &&
+      (leftSelection.x !== rightSelection.x ||
+        leftSelection.y !== rightSelection.y ||
+        leftSelection.width !== rightSelection.width ||
+        leftSelection.height !== rightSelection.height))
+  ) {
+    return false;
+  }
+
+  return leftDocument.layers.every((layer, index) => {
+    const other = rightDocument.layers[index];
+    return (
+      other !== undefined &&
+      layer.id === other.id &&
+      layer.name === other.name &&
+      layer.visible === other.visible &&
+      layer.locked === other.locked &&
+      layer.opacity === other.opacity &&
+      layer.pixels === other.pixels
+    );
+  });
+};
+
+const applyImageSnapshot = (snapshot: ImageEditorSnapshot) => {
+  const document = snapshot.document;
+  imageGridWidth.value = document.width;
+  imageGridHeight.value = document.height;
+  imageLayers.value = document.layers.map((layer) => ({
+    ...layer,
+    pixels: layer.pixels,
+  }));
+  activeImageLayerId.value =
+    document.layers.some((layer) => layer.id === snapshot.activeLayerId)
+      ? snapshot.activeLayerId
+      : document.layers[document.layers.length - 1]?.id || "";
+  imageSelection.value = snapshot.selection ? { ...snapshot.selection } : null;
+  syncImageDimensionDrafts();
+  scheduleImageCanvasRender();
+  void nextTick(scheduleImagePreviewViewportUpdate);
+};
+
+const resetImageHistory = () => {
+  imageHistory.value = createHistory(createImageSnapshot(), {
+    equals: imageSnapshotsAreEqual,
+    limit: 100,
+  });
+};
+
+const commitImageHistory = () => {
+  if (!imageHistory.value) {
+    resetImageHistory();
+    return;
+  }
+
+  imageHistory.value = imageHistory.value.push(createImageSnapshot());
+};
+
+const undoImage = () => {
+  if (!imageHistory.value?.canUndo || !canEditImage.value) return;
+  imageHistory.value = imageHistory.value.undo();
+  applyImageSnapshot(imageHistory.value.current);
+  scheduleImageAutosave();
+};
+
+const redoImage = () => {
+  if (!imageHistory.value?.canRedo || !canEditImage.value) return;
+  imageHistory.value = imageHistory.value.redo();
+  applyImageSnapshot(imageHistory.value.current);
+  scheduleImageAutosave();
+};
+
+const saveImageDocument = async (_sequence: number) => {
+  // Capture one immutable view only when the debounced request actually starts;
+  // pointermove events merely advance a tiny sequence token.
+  const document = buildImageDocument();
+
+  await enqueueResourceMutation(async () => {
+    const currentResource = resource.value;
+    if (!currentResource || !canEditImage.value) {
+      throw new Error("You no longer have permission to save this image.");
+    }
+
+    const nextData = serializePixelArtResourceData(
+      currentResource.data || {},
+      document,
+    );
+
+    const result = await patchProjectResource(props.projectId, props.resourceId, {
+      data: nextData,
+      base_revision: currentResource.revision,
+    });
+
+    if (!result.ok) {
+      if (result.conflict) {
+        openImageConflict({ kind: "document" }, result.conflict.current_revision);
+        throw new Error("A newer version exists. Choose which version to keep.");
+      }
+      if (result.status === 403) {
+        markImageReadOnly();
+      }
+      throw new Error(
+        result.status === 403
+          ? "You no longer have permission to save this image."
+          : `Save failed${result.status ? ` (${result.status})` : ""}. Your changes are still local.`,
+      );
+    }
+
+    resource.value = {
+      ...currentResource,
+      ...result.resource,
+      data: nextData,
+    };
+  });
+};
+
+const imageAutosave = useImageAutosave<number>(saveImageDocument, {
+  debounceMs: IMAGE_AUTOSAVE_MS,
+});
+const imageSaveStatus = imageAutosave.status;
+const imageSaveError = imageAutosave.errorMessage;
+const imageLastSavedAt = imageAutosave.lastSavedAt;
+const hasPendingImageNameChange = computed(() => {
+  const nextName = resourceNameDraft.value.trim();
+  return Boolean(
+    isRenamingResource.value &&
+      nextName &&
+      nextName !== resource.value?.name,
+  );
+});
+const displayedImageSaveStatus = computed(() =>
+  isResourceNameSaving.value
+    ? "saving"
+    : resourceNameSaveError.value
+      ? "error"
+      : hasPendingImageNameChange.value
+        ? "dirty"
+        : imageSaveStatus.value,
+);
+const displayedImageSaveError = computed(
+  () => resourceNameSaveError.value || imageSaveError.value,
+);
+const normalizeResourceUpdatedAt = (value: string | null | undefined) => {
+  const timestamp = value?.trim();
+  if (!timestamp) return null;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp)) return timestamp;
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
+    ? `${timestamp}Z`
+    : timestamp;
+};
+const effectiveImageLastSavedAt = computed(
+  () => imageLastSavedAt.value ?? normalizeResourceUpdatedAt(resource.value?.updated_at),
+);
+const isImageSaveClean = computed(
+  () =>
+    displayedImageSaveStatus.value === "saved" &&
+    !imageAutosave.hasPendingChanges.value &&
+    !hasPendingImageNameChange.value,
+);
+const retryImageSave = () => {
+  if (!canEditImage.value) return;
+  if (
+    resourceNameSaveError.value &&
+    isRenamingResource.value &&
+    resourceNameDraft.value.trim()
+  ) {
+    void commitResourceName();
+    return;
+  }
+  void imageAutosave.retry();
+};
+
+const saveImageNow = async () => {
+  if (
+    !canEditImage.value ||
+    displayedImageSaveStatus.value === "saving" ||
+    isImageSaveClean.value
+  ) return;
+
+  if (isRenamingResource.value) {
+    await commitResourceName();
+  }
+
+  await imageAutosave.flush();
+};
+
+const reloadImageAfterConflict = async () => {
+  await waitForPersonalImagePaletteMutations();
+  allowImageUnload = true;
+  window.location.reload();
+};
+
+const fetchLatestImageResource = () =>
+  fetchApi<ProjectResourceDetail>(
     `/projects/${encodeURIComponent(props.projectId)}/resources/${encodeURIComponent(
       props.resourceId,
     )}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ data: nextData }),
-    },
   );
 
-  if (savedResource && version === imageAutosaveVersion.value) {
-    resource.value = {
-      ...currentResource,
-      ...savedResource,
-      data: nextData,
-    };
+const keepLocalImageAfterConflict = async () => {
+  const operation = imageConflictOperation.value;
+  if (!operation || isImageConflictResolving.value) return;
+
+  isImageConflictResolving.value = true;
+  try {
+    const latestResource = await fetchLatestImageResource();
+    if (!latestResource) {
+      throw new Error("The latest remote version could not be loaded.");
+    }
+
+    const latestImageData =
+      operation.kind === "rename"
+        ? readImagePixelsFromData(latestResource.data || {})
+        : null;
+
+    // Keep all remote resource fields, then reapply only the local operation.
+    resource.value = latestResource;
+    imageConflictRemoteRevision.value = null;
+    imageConflictOperation.value = null;
+    isImageConflictOpen.value = false;
+
+    if (operation.kind === "rename") {
+      const remoteDocument = latestImageData?.document;
+      if (!remoteDocument) {
+        throw new Error("The latest remote image could not be loaded.");
+      }
+
+      const previousActiveLayerId = activeImageLayerId.value;
+      imageGridWidth.value = remoteDocument.width;
+      imageGridHeight.value = remoteDocument.height;
+      imageLayers.value = remoteDocument.layers;
+      activeImageLayerId.value = remoteDocument.layers.some(
+        (layer) => layer.id === previousActiveLayerId,
+      )
+        ? previousActiveLayerId
+        : remoteDocument.layers[remoteDocument.layers.length - 1]?.id || "";
+      imageSelection.value = null;
+      syncImageDimensionDrafts();
+      resetImageHistory();
+      scheduleImageCanvasRender();
+      void nextTick(scheduleImagePreviewViewportUpdate);
+
+      await persistResourceName(operation.name);
+      resourceNameDraft.value = operation.name;
+      resourceNameSaveError.value = "";
+      isRenamingResource.value = false;
+      showImageNotice("Local image name kept on top of the remote version.", "success");
+      return;
+    }
+
+    imageAutosave.schedule(++imageAutosaveSequence);
+    await imageAutosave.retry();
+    if (!imageAutosave.hasPendingChanges.value) {
+      showImageNotice("Local image changes kept on top of the remote version.", "success");
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "The conflict could not be resolved.";
+    if (operation.kind === "rename") {
+      resourceNameSaveError.value = message;
+    }
+    showImageNotice(message, "error");
+  } finally {
+    isImageConflictResolving.value = false;
   }
 };
 
 const scheduleImageAutosave = () => {
-  if (!isImageEditor.value) {
+  if (!canEditImage.value) {
     return;
   }
 
-  imageAutosaveVersion.value += 1;
-  const version = imageAutosaveVersion.value;
-
-  if (imageAutosaveTimeout.value !== null) {
-    window.clearTimeout(imageAutosaveTimeout.value);
-  }
-
-  imageAutosaveTimeout.value = window.setTimeout(() => {
-    imageAutosaveTimeout.value = null;
-    void saveImagePixels(version);
-  }, IMAGE_AUTOSAVE_MS);
+  imageAutosave.schedule(++imageAutosaveSequence);
 };
 
 const updateImagePixels = (nextPixels: ImagePixelSnapshot) => {
+  if (!canMutateActiveImageLayerPixels.value) {
+    return false;
+  }
+
   const normalizedPixels = emptyImagePixels().map((_, index) => nextPixels[index] || null);
 
   if (imagePixelsAreEqual(imagePixels.value, normalizedPixels)) {
@@ -982,25 +1821,29 @@ const imageLineBetweenPixels = (fromIndex: number, toIndex: number) => {
   return pixels;
 };
 
-const getImagePixelIndexFromPointer = (event: PointerEvent) => {
-  const canvas = event.currentTarget as HTMLElement;
-  const rect = canvas.getBoundingClientRect();
-  const borderLeft = canvas.clientLeft;
-  const borderTop = canvas.clientTop;
-  const contentWidth = Math.max(1, canvas.clientWidth - borderLeft * 2);
-  const contentHeight = Math.max(1, canvas.clientHeight - borderTop * 2);
-  const x = event.clientX - rect.left - borderLeft;
-  const y = event.clientY - rect.top - borderTop;
-
-  if (x < 0 || y < 0 || x > contentWidth || y > contentHeight) {
+const getImagePixelIndexFromClientCoordinates = (clientX: number, clientY: number) => {
+  const canvas = imageArtboardRef.value;
+  if (!canvas) {
     return null;
   }
-
-  const step = imageArtboardMetrics.value.cellSize + imageGridLineGap.value;
-  const column = Math.min(imageGridWidth.value - 1, Math.floor(x / step));
-  const row = Math.min(imageGridHeight.value - 1, Math.floor(y / step));
-  return imagePixelIndexFor(row, column);
+  const rect = canvas.getBoundingClientRect();
+  return getImagePixelIndexFromClientPoint({
+    borderLeft: canvas.clientLeft,
+    borderTop: canvas.clientTop,
+    cellSize: imageArtboardMetrics.value.cellSize,
+    clientHeight: canvas.clientHeight,
+    clientWidth: canvas.clientWidth,
+    clientX,
+    clientY,
+    gridHeight: imageGridHeight.value,
+    gridWidth: imageGridWidth.value,
+    rectLeft: rect.left,
+    rectTop: rect.top,
+  });
 };
+
+const getImagePixelIndexFromPointer = (event: PointerEvent) =>
+  getImagePixelIndexFromClientCoordinates(event.clientX, event.clientY);
 
 const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
   const pixelIndex = getImagePixelIndexFromPointer(event);
@@ -1010,25 +1853,52 @@ const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
   return pixelIndex;
 };
 
-const isImageErasePointer = (event: PointerEvent) =>
-  event.button === 2 || (event.buttons & 2) === 2;
-
-const getImagePointerTool = (event: PointerEvent): ImagePaintTool => {
-  if (!isImageErasePointer(event)) {
-    return activeImageTool.value === "erase" ? "erase" : "pencil";
-  }
-
-  return activeImageTool.value === "erase" ? "pencil" : "erase";
-};
-
 const focusAndCaptureImagePointer = (event: PointerEvent) => {
-  const canvas = event.currentTarget as HTMLElement;
-  canvas.focus();
-  canvas.setPointerCapture?.(event.pointerId);
+  const interactionTarget = event.currentTarget as HTMLElement;
+  imageStageRef.value?.focus({ preventScroll: true });
+  if (event.type !== "pointerup" && event.type !== "pointercancel") {
+    interactionTarget.setPointerCapture?.(event.pointerId);
+  }
 };
 
 const clampImageZoom = (zoom: number) => Math.min(MAX_IMAGE_ZOOM, Math.max(MIN_IMAGE_ZOOM, zoom));
 const clampPercentage = (value: number) => Math.min(100, Math.max(0, value));
+
+const setImageZoom = (zoom: number, mode: ImageZoomMode = "custom") => {
+  const nextZoom = clampImageZoom(zoom);
+  imageZoomMode.value = mode;
+  if (Math.abs(nextZoom - imageZoom.value) < 0.0001) return;
+  imageZoom.value = nextZoom;
+  scheduleImageCanvasRender();
+  scheduleImagePreviewViewportUpdate();
+};
+
+const fitImageToScreen = () => {
+  const stage = imageStageRef.value;
+  const stageWidth = stage?.clientWidth || imageStageWidth.value || imageViewportWidth.value || 1024;
+  const stageHeight = stage?.clientHeight || imageStageHeight.value || imageViewportHeight.value || 768;
+  imageStageWidth.value = stageWidth;
+  imageStageHeight.value = stageHeight;
+
+  const usableWidth = Math.max(160, stageWidth - 64);
+  const usableHeight = Math.max(180, stageHeight - 96);
+  const fittedCellSize = Math.min(
+    (usableWidth - 2) / Math.max(1, imageGridWidth.value),
+    (usableHeight - 2) / Math.max(1, imageGridHeight.value),
+  );
+  imagePanX.value = 0;
+  imagePanY.value = 0;
+  setImageZoom(fittedCellSize, "fit");
+};
+
+const showImageAtActualSize = () => {
+  imagePanX.value = 0;
+  imagePanY.value = 0;
+  setImageZoom(1, "actual");
+};
+
+const zoomImageIn = () => setImageZoom(imageZoom.value * 1.25, "custom");
+const zoomImageOut = () => setImageZoom(imageZoom.value / 1.25, "custom");
 
 let imagePreviewViewportFrame: number | null = null;
 
@@ -1038,11 +1908,21 @@ const updateImagePreviewViewport = () => {
 
   if (!stage || !artboard || !isImageEditor.value) {
     imagePreviewViewport.value = { ...imagePreviewViewport.value, visible: false };
+    imageFloatingPreview.value = { ...imageFloatingPreview.value, visible: false };
     return;
   }
 
   const stageRect = stage.getBoundingClientRect();
   const artboardRect = artboard.getBoundingClientRect();
+  imageFloatingPreview.value = {
+    size: calculateImagePreviewSize({
+      documentHeight: imageGridHeight.value,
+      documentWidth: imageGridWidth.value,
+      stageHeight: stageRect.height,
+      stageWidth: stageRect.width,
+    }),
+    visible: true,
+  };
   const intersectionLeft = Math.max(stageRect.left, artboardRect.left);
   const intersectionTop = Math.max(stageRect.top, artboardRect.top);
   const intersectionRight = Math.min(stageRect.right, artboardRect.right);
@@ -1086,6 +1966,46 @@ const scheduleImagePreviewViewportUpdate = () => {
   });
 };
 
+let imageFitFrame: number | null = null;
+let imageStageResizeObserver: ResizeObserver | null = null;
+
+const scheduleImageFitToScreen = () => {
+  if (typeof window === "undefined") return;
+  if (imageFitFrame !== null) window.cancelAnimationFrame(imageFitFrame);
+  imageFitFrame = window.requestAnimationFrame(() => {
+    imageFitFrame = null;
+    if (imageZoomMode.value === "fit") fitImageToScreen();
+  });
+};
+
+const syncImageStageSize = () => {
+  const stage = imageStageRef.value;
+  const nextWidth = stage?.clientWidth || 0;
+  const nextHeight = stage?.clientHeight || 0;
+  const didResize = nextWidth !== imageStageWidth.value || nextHeight !== imageStageHeight.value;
+  imageStageWidth.value = nextWidth;
+  imageStageHeight.value = nextHeight;
+
+  if (didResize && imageZoomMode.value === "fit") {
+    scheduleImageFitToScreen();
+  }
+  scheduleImagePreviewViewportUpdate();
+};
+
+const observeImageStage = () => {
+  imageStageResizeObserver?.disconnect();
+  imageStageResizeObserver = null;
+
+  const stage = imageStageRef.value;
+  if (!stage) return;
+
+  if (typeof ResizeObserver !== "undefined") {
+    imageStageResizeObserver = new ResizeObserver(syncImageStageSize);
+    imageStageResizeObserver.observe(stage);
+  }
+  syncImageStageSize();
+};
+
 const updateImageViewportSize = () => {
   if (typeof window === "undefined") {
     return;
@@ -1093,7 +2013,7 @@ const updateImageViewportSize = () => {
 
   imageViewportWidth.value = window.innerWidth;
   imageViewportHeight.value = window.innerHeight;
-  scheduleImagePreviewViewportUpdate();
+  syncImageStageSize();
 };
 
 const zoomImageFromWheel = (event: WheelEvent) => {
@@ -1113,8 +2033,8 @@ const zoomImageFromWheel = (event: WheelEvent) => {
   const artboardRect = artboard?.getBoundingClientRect();
 
   if (stageRect && artboardRect && artboardRect.width > 0 && artboardRect.height > 0) {
-    const anchorClientX = Math.min(artboardRect.right, Math.max(artboardRect.left, event.clientX));
-    const anchorClientY = Math.min(artboardRect.bottom, Math.max(artboardRect.top, event.clientY));
+    const anchorClientX = event.clientX;
+    const anchorClientY = event.clientY;
     const relativeX = (anchorClientX - artboardRect.left) / artboardRect.width;
     const relativeY = (anchorClientY - artboardRect.top) / artboardRect.height;
     const nextMetrics = imageArtboardMetricsForZoom(nextZoom);
@@ -1125,86 +2045,360 @@ const zoomImageFromWheel = (event: WheelEvent) => {
     imagePanY.value = anchorClientY - centeredTop - relativeY * nextMetrics.height;
   }
 
+  imageZoomMode.value = "custom";
   imageZoom.value = nextZoom;
   scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
 };
 
-const isImagePanButton = (event: PointerEvent) => event.button === 1 || (event.buttons & 4) === 4;
+const getImagePointerEventIntent = (event: PointerEvent) =>
+  getImagePointerIntent({
+    button: event.button,
+    buttons: event.buttons,
+    spacePressed: isImageSpacePressed.value,
+    startsOnArtboard: event.currentTarget === imageArtboardRef.value,
+  });
+
+const isImagePanButton = (event: PointerEvent) => getImagePointerEventIntent(event) === "pan";
+
+const captureImagePointerInteractionIntent = (event: PointerEvent) => {
+  imageInteractionTool = activeImageTool.value;
+  imagePointerColorChannel =
+    getImagePointerColorChannel({ button: event.button, buttons: event.buttons }) || "primary";
+  imageInteractionPrimaryColor = selectedImageColor.value;
+  imageInteractionSecondaryColor = secondaryImageColor.value;
+  imageViewportPaintButtonMask = imagePointerColorChannel === "secondary" ? 2 : 1;
+  const colorIntent = getImageToolColorIntent({
+    tool: imageInteractionTool,
+    channel: imagePointerColorChannel,
+    primaryColor: selectedImageColor.value,
+    secondaryColor: secondaryImageColor.value,
+  });
+  if (colorIntent.kind === "checker") {
+    imageInteractionPrimaryColor = colorIntent.primaryColor;
+    imageInteractionSecondaryColor = colorIntent.secondaryColor;
+    imageInteractionGraffitiInverted = colorIntent.inverted;
+  } else {
+    imageInteractionGraffitiInverted = false;
+  }
+  imageGraffitiPreviewGesture.value =
+    colorIntent.kind === "checker"
+      ? {
+          inverted: colorIntent.inverted,
+          primaryColor: colorIntent.primaryColor,
+          secondaryColor: colorIntent.secondaryColor,
+        }
+      : null;
+  imageInteractionColor =
+    colorIntent.kind === "paint"
+      ? colorIntent.color
+      : colorIntent.kind === "checker" && colorIntent.inverted
+        ? colorIntent.secondaryColor
+        : selectedImageColor.value;
+};
 
 const startPanningImageFromPointer = (event: PointerEvent) => {
+  if (imagePanPointerId !== null || imageViewportPaintPointerId !== null) {
+    return;
+  }
+
+  imagePanPointerId = event.pointerId;
+  imagePanPointerClientX = event.clientX;
+  imagePanPointerClientY = event.clientY;
   isPanningImage.value = true;
   hoveredImagePixelIndex.value = null;
   focusAndCaptureImagePointer(event);
 };
 
-const continuePanningImageFromPointer = (event: PointerEvent) => {
-  if (!isPanningImage.value) {
+const startImageViewportInteractionFromPointer = (event: PointerEvent) => {
+  const intent = getImagePointerEventIntent(event);
+  if (intent === "pan") {
+    startPanningImageFromPointer(event);
     return;
   }
 
-  imagePanX.value += event.movementX;
-  imagePanY.value += event.movementY;
+  if (
+    intent !== "paint" ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null
+  ) {
+    return;
+  }
+
+  if (
+    isImagePixelMutationTool(activeImageTool.value) &&
+    !canMutateActiveImageLayerPixels.value
+  ) {
+    return;
+  }
+
+  imageViewportPaintPointerId = event.pointerId;
+  captureImagePointerInteractionIntent(event);
+  isImageViewportPaintAwaitingArtboard = true;
+  imageViewportPaintClientX = event.clientX;
+  imageViewportPaintClientY = event.clientY;
+  hoveredImagePixelIndex.value = null;
+  focusAndCaptureImagePointer(event);
+};
+
+const startImageArtboardInteractionFromPointer = (event: PointerEvent) => {
+  const intent = getImagePointerEventIntent(event);
+  if (intent === "pan") {
+    startPanningImageFromPointer(event);
+    return;
+  }
+
+  if (
+    intent !== "paint" ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null
+  ) {
+    return;
+  }
+
+  if (
+    isImagePixelMutationTool(activeImageTool.value) &&
+    !canMutateActiveImageLayerPixels.value
+  ) {
+    return;
+  }
+
+  imageViewportPaintPointerId = event.pointerId;
+  captureImagePointerInteractionIntent(event);
+  imageViewportPaintClientX = event.clientX;
+  imageViewportPaintClientY = event.clientY;
+  const initialPixelIndex = getImagePixelIndexFromPointer(event);
+  isImageViewportPaintAwaitingArtboard = initialPixelIndex === null;
+  if (initialPixelIndex === null) {
+    hoveredImagePixelIndex.value = null;
+    focusAndCaptureImagePointer(event);
+    return;
+  }
+  startPaintingImageFromPointer(event, false, initialPixelIndex);
+};
+
+const continuePanningImageFromPointer = (event: PointerEvent) => {
+  if (!isPanningImage.value || imagePanPointerId !== event.pointerId) {
+    return;
+  }
+
+  const deltaX = event.clientX - imagePanPointerClientX;
+  const deltaY = event.clientY - imagePanPointerClientY;
+  imagePanPointerClientX = event.clientX;
+  imagePanPointerClientY = event.clientY;
+
+  if (deltaX === 0 && deltaY === 0) {
+    return;
+  }
+
+  imageZoomMode.value = "custom";
+  imagePanX.value += deltaX;
+  imagePanY.value += deltaY;
   scheduleImagePreviewViewportUpdate();
 };
 
-let lastPaintedImagePixelIndex: number | null = null;
-let imageResizeCenterColumnRemainder = 0;
-let imageResizeCenterRowRemainder = 0;
-
-const paintImagePixels = (indexes: number[], forcedTool?: ImagePaintTool) => {
-  if (!isImageEditor.value) {
+const processImagePointerSegment = (
+  event: PointerEvent,
+  to: Readonly<{ x: number; y: number }>,
+) => {
+  const artboard = imageArtboardRef.value;
+  if (!artboard) {
     return;
   }
 
-  const tool = forcedTool || activeImageTool.value;
-  const nextColor = tool === "erase" ? null : selectedImageColor.value;
-  const didAddPaletteColor = nextColor
-    ? addImagePaletteColor(nextColor, { autosave: false })
-    : false;
+  const from = { x: imageViewportPaintClientX, y: imageViewportPaintClientY };
+  imageViewportPaintClientX = to.x;
+  imageViewportPaintClientY = to.y;
+  const artboardRect = artboard.getBoundingClientRect();
+  const contentLeft = artboardRect.left + artboard.clientLeft;
+  const contentTop = artboardRect.top + artboard.clientTop;
+  const pixelSegment = getImagePixelSegmentFromClientSegment({
+    borderLeft: artboard.clientLeft,
+    borderTop: artboard.clientTop,
+    bounds: {
+      bottom: contentTop + artboard.clientHeight,
+      left: contentLeft,
+      right: contentLeft + artboard.clientWidth,
+      top: contentTop,
+    },
+    cellSize: imageArtboardMetrics.value.cellSize,
+    clientHeight: artboard.clientHeight,
+    clientWidth: artboard.clientWidth,
+    from,
+    gridHeight: imageGridHeight.value,
+    gridWidth: imageGridWidth.value,
+    rectLeft: artboardRect.left,
+    rectTop: artboardRect.top,
+    to,
+  });
+
+  if (!pixelSegment) {
+    if (!isImageViewportPaintAwaitingArtboard && imageInteractionKind.value === "paint") {
+      lastPaintedImagePixelIndex = null;
+    }
+    return;
+  }
+
+  const { startIndex: segmentStartIndex, endIndex: segmentEndIndex } = pixelSegment;
+
+  if (isImageViewportPaintAwaitingArtboard) {
+    isImageViewportPaintAwaitingArtboard = false;
+    startPaintingImageFromPointer(event, false, segmentStartIndex);
+    if (segmentEndIndex !== segmentStartIndex) {
+      continuePaintingImageFromPointer(event, segmentEndIndex);
+    }
+    return;
+  }
+
+  if (
+    imageInteractionKind.value === "paint" &&
+    getImagePixelIndexFromClientCoordinates(from.x, from.y) === null
+  ) {
+    lastPaintedImagePixelIndex = segmentStartIndex;
+  }
+  continuePaintingImageFromPointer(event, segmentEndIndex);
+};
+
+const getImagePointerSamplePoints = (event: PointerEvent) => {
+  const coalescedEvents =
+    typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
+  const points = coalescedEvents.map((sample) => ({ x: sample.clientX, y: sample.clientY }));
+  const lastPoint = points[points.length - 1];
+  if (!lastPoint || lastPoint.x !== event.clientX || lastPoint.y !== event.clientY) {
+    points.push({ x: event.clientX, y: event.clientY });
+  }
+  return points;
+};
+
+const continueImageViewportInteractionFromPointer = (event: PointerEvent) => {
+  if (isPanningImage.value) {
+    continuePanningImageFromPointer(event);
+    return;
+  }
+
+  if (imageViewportPaintPointerId !== event.pointerId) {
+    return;
+  }
+
+  if (
+    event.type === "pointermove" &&
+    (event.buttons & imageViewportPaintButtonMask) !== imageViewportPaintButtonMask
+  ) {
+    stopPaintingImage(event);
+    return;
+  }
+
+  for (const point of getImagePointerSamplePoints(event)) {
+    processImagePointerSegment(event, point);
+  }
+  updateHoveredImagePixelFromPointer(event);
+};
+
+const finishImagePointerInteractionFromPointer = (event: PointerEvent) => {
+  if (imagePanPointerId === event.pointerId) {
+    continuePanningImageFromPointer(event);
+    stopPaintingImage(event);
+    return;
+  }
+
+  if (imageViewportPaintPointerId !== event.pointerId) {
+    return;
+  }
+
+  for (const point of getImagePointerSamplePoints(event)) {
+    processImagePointerSegment(event, point);
+  }
+  updateHoveredImagePixelFromPointer(event);
+  stopPaintingImage(event);
+};
+
+let lastPaintedImagePixelIndex: number | null = null;
+const paintImagePixels = (indexes: number[], color: PixelColor) => {
+  if (!canMutateActiveImageLayerPixels.value) {
+    return;
+  }
+
+  const nextColor = color;
+  const centers = indexes
+    .filter((index) => index >= 0 && index < imagePixelCount.value)
+    .map((index) => ({
+      x: index % imageGridWidth.value,
+      y: Math.floor(index / imageGridWidth.value),
+    }));
+  const points = centers.flatMap((point) =>
+    squareBrushPoints(point, imageBrushSize.value, {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+    }),
+  );
+  const mutation = paintPixels(
+    {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+      pixels: imagePixels.value,
+    },
+    points,
+    nextColor,
+  );
+  const didChange = mutation.changes.length > 0;
+
+  if (!didChange) return;
+
+  imagePixels.value = [...mutation.buffer.pixels];
+  scheduleImageCanvasRender();
+  scheduleImageAutosave();
+};
+
+const paintImageGraffitiPixels = (indexes: number[]) => {
+  if (!canMutateActiveImageLayerPixels.value) {
+    return;
+  }
+
+  const centers = indexes
+    .filter((index) => index >= 0 && index < imagePixelCount.value)
+    .map((index) => imagePointFromPixelIndex(index));
+  const brushOptions = {
+    bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
+    brushSize: imageBrushSize.value,
+    inverted: imageInteractionGraffitiInverted,
+    primaryColor: imageInteractionPrimaryColor,
+    secondaryColor: imageInteractionSecondaryColor,
+  };
+  const pixelsByIndex = new Map<number, string>();
+  for (const center of centers) {
+    for (const pixel of graffitiBrushStamp(center, brushOptions)) {
+      pixelsByIndex.set(pixel.y * imageGridWidth.value + pixel.x, pixel.color);
+    }
+  }
+
+  if (pixelsByIndex.size === 0) return;
+
+  const nextPixels = [...imagePixels.value];
   let didChange = false;
-
-  for (const index of indexes) {
-    if (index < 0 || index >= imagePixelCount.value) {
-      continue;
-    }
-
-    if (imagePixels.value[index] === nextColor) {
-      continue;
-    }
-
-    imagePixels.value[index] = nextColor;
+  for (const [index, color] of pixelsByIndex) {
+    if (nextPixels[index] === color) continue;
+    nextPixels[index] = color;
     didChange = true;
   }
 
-  if (!didChange) {
-    if (didAddPaletteColor) {
-      scheduleImageAutosave();
-    }
-    return;
-  }
+  if (!didChange) return;
 
-  triggerRef(imagePixels);
+  imagePixels.value = nextPixels;
   scheduleImageCanvasRender();
   scheduleImageAutosave();
 };
 
 const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) => {
-  if (!isImageEditor.value || startIndex < 0 || startIndex >= imagePixelCount.value) {
+  if (
+    !canMutateActiveImageLayerPixels.value ||
+    startIndex < 0 ||
+    startIndex >= imagePixelCount.value
+  ) {
     return;
   }
 
   const targetColor = imagePixels.value[startIndex] || null;
-  const didAddPaletteColor = replacementColor
-    ? addImagePaletteColor(replacementColor, { autosave: false })
-    : false;
-
-  if (targetColor === replacementColor) {
-    if (didAddPaletteColor) {
-      scheduleImageAutosave();
-    }
-    return;
-  }
+  if (targetColor === replacementColor) return;
 
   const nextPixels = [...imagePixels.value];
   const pending = [startIndex];
@@ -1229,16 +2423,18 @@ const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) =
     if (column < imageGridWidth.value - 1) pending.push(index + 1);
   }
 
-  const didChange = updateImagePixels(nextPixels);
-  if (replacementColor && didChange) {
-    addImagePaletteColor(replacementColor, { autosave: false });
-  }
+  updateImagePixels(nextPixels);
 };
 
-const pickImageColorFrom = (pixelIndex: number) => {
-  const color = imagePixels.value[pixelIndex];
+const pickImageColorFrom = (pixelIndex: number, channel: ImageColorChannel) => {
+  const color = compositeVisibleLayers(buildImageDocument())[pixelIndex];
 
   if (!color) {
+    return;
+  }
+
+  if (channel === "secondary") {
+    setSecondaryImageColor(color);
     return;
   }
 
@@ -1246,6 +2442,7 @@ const pickImageColorFrom = (pixelIndex: number) => {
 };
 
 const updateImageHueFromPointer = (event: PointerEvent) => {
+  if (!canEditImage.value) return;
   if (event.type === "pointermove" && event.buttons === 0) {
     return;
   }
@@ -1278,6 +2475,7 @@ const getImageTriangleWeightsFromPointer = (event: PointerEvent) => {
 };
 
 const updateImageColorTriangleFromPointer = (event: PointerEvent) => {
+  if (!canEditImage.value) return;
   if (event.type === "pointermove" && event.buttons === 0) {
     return;
   }
@@ -1290,11 +2488,13 @@ const updateImageColorTriangleFromPointer = (event: PointerEvent) => {
 };
 
 const startImageHueSelection = (event: PointerEvent) => {
+  if (!canEditImage.value) return;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   updateImageHueFromPointer(event);
 };
 
 const startImageColorTriangleSelection = (event: PointerEvent) => {
+  if (!canEditImage.value) return;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   updateImageColorTriangleFromPointer(event);
 };
@@ -1307,49 +2507,228 @@ watch(
   { immediate: true },
 );
 
-const startPaintingImageFromPointer = (event: PointerEvent) => {
-  if (isImagePanButton(event)) {
+const imagePointFromPixelIndex = (pixelIndex: number): Point => ({
+  x: pixelIndex % imageGridWidth.value,
+  y: Math.floor(pixelIndex / imageGridWidth.value),
+});
+
+const isImageShapeTool = (
+  tool: ImageTool,
+): tool is "line" | "rectangle" | "ellipse" =>
+  tool === "line" || tool === "rectangle" || tool === "ellipse";
+
+const constrainImageShapeEnd = (
+  start: Point,
+  end: Point,
+  event: PointerEvent,
+  tool: ImageTool,
+) => {
+  if (!event.shiftKey) return end;
+  if (tool === "line") {
+    return constrainPointToEightDirections(start, end);
+  }
+
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const span = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+  return {
+    x: start.x + (deltaX < 0 ? -span : span),
+    y: start.y + (deltaY < 0 ? -span : span),
+  };
+};
+
+const updateImageShapePreview = (end: Point, event: PointerEvent) => {
+  const start = imagePointerStart.value;
+  const tool = imageInteractionTool;
+  if (!start || !tool || !isImageShapeTool(tool)) return;
+  const constrainedEnd = constrainImageShapeEnd(start, end, event, tool);
+  imagePointerEnd.value = constrainedEnd;
+  const options = {
+    bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
+    brushSize: imageBrushSize.value,
+    filled: isImageShapeFilled.value,
+  };
+  imageShapePreviewPoints.value =
+    tool === "line"
+      ? strokePoints(linePoints(start, constrainedEnd), imageBrushSize.value, options.bounds)
+      : tool === "rectangle"
+        ? rectanglePoints(start, constrainedEnd, options)
+        : ellipsePoints(start, constrainedEnd, options);
+  scheduleImageCanvasRender();
+};
+
+const applyImagePoints = (points: Point[], color: PixelColor) => {
+  if (!canMutateActiveImageLayerPixels.value) return false;
+  const mutation = paintPixels(
+    {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+      pixels: imagePixels.value,
+    },
+    points,
+    color,
+  );
+  if (mutation.changes.length === 0) return false;
+  imagePixels.value = [...mutation.buffer.pixels];
+  scheduleImageCanvasRender();
+  scheduleImageAutosave();
+  return true;
+};
+
+const startPaintingImageFromPointer = (
+  event: PointerEvent,
+  allowPan = true,
+  initialPixelIndex?: number,
+) => {
+  if (allowPan && isImagePanButton(event)) {
     startPanningImageFromPointer(event);
     return;
   }
 
-  const pixelIndex = updateHoveredImagePixelFromPointer(event);
+  const pointerPixelIndex = updateHoveredImagePixelFromPointer(event);
+  const pixelIndex = initialPixelIndex ?? pointerPixelIndex;
 
   if (pixelIndex === null) {
     return;
   }
 
-  const pointerTool = getImagePointerTool(event);
+  const point = imagePointFromPixelIndex(pixelIndex);
+  const tool = imageInteractionTool;
+  if (!tool) return;
 
-  if (activeImageTool.value === "picker") {
+  if (tool === "picker") {
     focusAndCaptureImagePointer(event);
-    pickImageColorFrom(pixelIndex);
+    pickImageColorFrom(pixelIndex, imagePointerColorChannel);
+    activeImageTool.value = "pencil";
     return;
   }
 
-  if (activeImageTool.value === "fill") {
+  if (tool === "fill") {
     focusAndCaptureImagePointer(event);
-    fillImagePixelsFrom(pixelIndex, isImageErasePointer(event) ? null : selectedImageColor.value);
+    fillImagePixelsFrom(pixelIndex, imageInteractionColor);
+    commitImageHistory();
+    return;
+  }
+
+  if (tool === "select") {
+    focusAndCaptureImagePointer(event);
+    imagePointerStart.value = point;
+    imagePointerEnd.value = point;
+    imageSelection.value = normalizeSelection(point, point, {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+    });
+    imageInteractionKind.value = "select";
+    return;
+  }
+
+  if (tool === "move") {
+    if (!canMutateActiveImageLayerPixels.value) return;
+    focusAndCaptureImagePointer(event);
+    imagePointerStart.value = point;
+    imagePointerEnd.value = point;
+    imageMoveSourceBuffer = {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+      pixels: [...imagePixels.value],
+    };
+    imageMoveSourceSelection = imageSelection.value ? { ...imageSelection.value } : null;
+    imageMoveDidChange = false;
+    imageInteractionKind.value = "move";
+    isPaintingImage.value = true;
+    return;
+  }
+
+  if (isImageShapeTool(tool)) {
+    if (!canMutateActiveImageLayerPixels.value) return;
+    focusAndCaptureImagePointer(event);
+    imagePointerStart.value = point;
+    imagePointerEnd.value = point;
+    imageInteractionKind.value = "shape";
+    isPaintingImage.value = true;
+    updateImageShapePreview(point, event);
+    return;
+  }
+
+  if (!canMutateActiveImageLayerPixels.value) {
     return;
   }
 
   isPaintingImage.value = true;
+  imageInteractionKind.value = "paint";
   focusAndCaptureImagePointer(event);
-  paintImagePixels([pixelIndex], pointerTool);
+  if (tool === "graffiti") {
+    paintImageGraffitiPixels([pixelIndex]);
+  } else {
+    paintImagePixels([pixelIndex], imageInteractionColor);
+  }
   lastPaintedImagePixelIndex = pixelIndex;
 };
 
-const continuePaintingImageFromPointer = (event: PointerEvent) => {
+const continuePaintingImageFromPointer = (event: PointerEvent, forcedPixelIndex?: number) => {
   if (isPanningImage.value) {
     continuePanningImageFromPointer(event);
     return;
   }
 
-  const pixelIndex = updateHoveredImagePixelFromPointer(event);
+  const pointerPixelIndex = updateHoveredImagePixelFromPointer(event);
+  const pixelIndex = forcedPixelIndex ?? pointerPixelIndex;
 
-  const pointerTool = getImagePointerTool(event);
+  if (
+    (imageInteractionKind.value === "paint" ||
+      imageInteractionKind.value === "shape" ||
+      imageInteractionKind.value === "move") &&
+    !canMutateActiveImageLayerPixels.value
+  ) {
+    cancelImageInteraction(event);
+    return;
+  }
 
-  if (!isPaintingImage.value) {
+  if (imageInteractionKind.value === "select" && pixelIndex !== null && imagePointerStart.value) {
+    const point = imagePointFromPixelIndex(pixelIndex);
+    imagePointerEnd.value = point;
+    imageSelection.value = normalizeSelection(imagePointerStart.value, point, {
+      width: imageGridWidth.value,
+      height: imageGridHeight.value,
+    });
+    return;
+  }
+
+  if (imageInteractionKind.value === "shape" && pixelIndex !== null) {
+    updateImageShapePreview(imagePointFromPixelIndex(pixelIndex), event);
+    return;
+  }
+
+  if (
+    imageInteractionKind.value === "move" &&
+    pixelIndex !== null &&
+    imagePointerStart.value &&
+    imageMoveSourceBuffer
+  ) {
+    if (!canMutateActiveImageLayerPixels.value) {
+      cancelImageInteraction(event);
+      return;
+    }
+    const point = imagePointFromPixelIndex(pixelIndex);
+    const delta = {
+      x: point.x - imagePointerStart.value.x,
+      y: point.y - imagePointerStart.value.y,
+    };
+    const result = imageMoveSourceSelection
+      ? moveRegion(imageMoveSourceBuffer, imageMoveSourceSelection, delta)
+      : {
+          mutation: moveLayer(imageMoveSourceBuffer, delta),
+          selection: null,
+        };
+    imagePixels.value = [...result.mutation.buffer.pixels];
+    imageSelection.value = result.selection;
+    imagePointerEnd.value = point;
+    imageMoveDidChange = !imagePixelsAreEqual(imageMoveSourceBuffer.pixels, imagePixels.value);
+    scheduleImageCanvasRender();
+    return;
+  }
+
+  if (!isPaintingImage.value || imageInteractionKind.value !== "paint") {
     return;
   }
 
@@ -1358,42 +2737,114 @@ const continuePaintingImageFromPointer = (event: PointerEvent) => {
     return;
   }
 
-  paintImagePixels(
-    imageLineBetweenPixels(lastPaintedImagePixelIndex ?? pixelIndex, pixelIndex),
-    pointerTool,
+  const strokePixels = imageLineBetweenPixels(
+    lastPaintedImagePixelIndex ?? pixelIndex,
+    pixelIndex,
   );
+  if (imageInteractionTool === "graffiti") {
+    paintImageGraffitiPixels(strokePixels);
+  } else {
+    paintImagePixels(strokePixels, imageInteractionColor);
+  }
   lastPaintedImagePixelIndex = pixelIndex;
 };
 
-const stopPaintingImage = () => {
+const stopPaintingImage = (event?: PointerEvent) => {
+  const activePointerId = imagePanPointerId ?? imageViewportPaintPointerId;
+  if (
+    event &&
+    activePointerId !== null &&
+    event.pointerId !== activePointerId
+  ) {
+    return;
+  }
+
+  const interactionKind = imageInteractionKind.value;
+  const shouldCommitHistory =
+    interactionKind === "paint" ||
+    interactionKind === "shape" ||
+    (interactionKind === "move" && imageMoveDidChange);
+  if (interactionKind === "shape" && imageShapePreviewPoints.value.length > 0) {
+    applyImagePoints(imageShapePreviewPoints.value, imageInteractionColor);
+  }
   isPaintingImage.value = false;
   isPanningImage.value = false;
+  imagePanPointerId = null;
+  imageViewportPaintPointerId = null;
+  imageViewportPaintButtonMask = 0;
+  imagePointerColorChannel = "primary";
+  imageInteractionColor = selectedImageColor.value;
+  imageInteractionTool = null;
+  imageInteractionPrimaryColor = selectedImageColor.value;
+  imageInteractionSecondaryColor = secondaryImageColor.value;
+  imageInteractionGraffitiInverted = false;
+  imageGraffitiPreviewGesture.value = null;
+  isImageViewportPaintAwaitingArtboard = false;
+  imageViewportPaintClientX = 0;
+  imageViewportPaintClientY = 0;
+  imageInteractionKind.value = null;
+  imagePointerStart.value = null;
+  imagePointerEnd.value = null;
+  imageShapePreviewPoints.value = [];
+  imageMoveSourceBuffer = null;
+  imageMoveSourceSelection = null;
+  imageMoveDidChange = false;
   lastPaintedImagePixelIndex = null;
+  scheduleImageCanvasRender();
+  if (shouldCommitHistory) {
+    if (interactionKind === "move") scheduleImageAutosave();
+    commitImageHistory();
+  }
 };
 
 const leaveImageCanvas = () => {
   hoveredImagePixelIndex.value = null;
-  stopPaintingImage();
 };
 
-const cancelImageInteraction = () => {
+const cancelImageInteraction = (event?: PointerEvent) => {
+  const activePointerId = imagePanPointerId ?? imageViewportPaintPointerId;
+  if (
+    event &&
+    activePointerId !== null &&
+    event.pointerId !== activePointerId
+  ) {
+    return;
+  }
+
+  const interactionKind = imageInteractionKind.value;
+  const wasMoving = interactionKind === "move";
   hoveredImagePixelIndex.value = null;
-  stopPaintingImage();
-};
-
-const imageAnchorAlignment = (anchor: ImageResizeAnchor) => {
-  const row = anchor.startsWith("top")
-    ? "start"
-    : anchor.startsWith("bottom")
-      ? "end"
-      : "center";
-  const column = anchor.endsWith("left")
-    ? "start"
-    : anchor.endsWith("right")
-      ? "end"
-      : "center";
-
-  return { column, row };
+  isPaintingImage.value = false;
+  isPanningImage.value = false;
+  imagePanPointerId = null;
+  imageViewportPaintPointerId = null;
+  imageViewportPaintButtonMask = 0;
+  imagePointerColorChannel = "primary";
+  imageInteractionColor = selectedImageColor.value;
+  imageInteractionTool = null;
+  imageInteractionPrimaryColor = selectedImageColor.value;
+  imageInteractionSecondaryColor = secondaryImageColor.value;
+  imageInteractionGraffitiInverted = false;
+  imageGraffitiPreviewGesture.value = null;
+  isImageViewportPaintAwaitingArtboard = false;
+  imageViewportPaintClientX = 0;
+  imageViewportPaintClientY = 0;
+  imageInteractionKind.value = null;
+  imagePointerStart.value = null;
+  imagePointerEnd.value = null;
+  imageShapePreviewPoints.value = [];
+  if (wasMoving && imageMoveSourceBuffer) {
+    imagePixels.value = [...imageMoveSourceBuffer.pixels];
+    imageSelection.value = imageMoveSourceSelection ? { ...imageMoveSourceSelection } : null;
+  }
+  imageMoveSourceBuffer = null;
+  imageMoveSourceSelection = null;
+  imageMoveDidChange = false;
+  lastPaintedImagePixelIndex = null;
+  scheduleImageCanvasRender();
+  if (interactionKind === "paint") {
+    commitImageHistory();
+  }
 };
 
 const imageResizeAnchorOptionByValue = (anchorValue: ImageResizeAnchor) =>
@@ -1427,48 +2878,11 @@ const imageAnchorExpansionDirection = (anchorValue: ImageResizeAnchor) => {
   return null;
 };
 
-const imageResizeOffset = (
-  previousDimension: number,
-  nextDimension: number,
-  alignment: "center" | "end" | "start",
-  axis: "column" | "row",
-) => {
-  if (alignment === "start") {
-    if (axis === "column") {
-      imageResizeCenterColumnRemainder = 0;
-    } else {
-      imageResizeCenterRowRemainder = 0;
-    }
-
-    return 0;
-  }
-
-  if (alignment === "end") {
-    if (axis === "column") {
-      imageResizeCenterColumnRemainder = 0;
-    } else {
-      imageResizeCenterRowRemainder = 0;
-    }
-
-    return nextDimension - previousDimension;
-  }
-
-  const remainder =
-    axis === "column" ? imageResizeCenterColumnRemainder : imageResizeCenterRowRemainder;
-  const exactOffset = (nextDimension - previousDimension) / 2 + remainder;
-  const offset = Math.floor(exactOffset);
-  const nextRemainder = exactOffset - offset;
-
-  if (axis === "column") {
-    imageResizeCenterColumnRemainder = nextRemainder;
-  } else {
-    imageResizeCenterRowRemainder = nextRemainder;
-  }
-
-  return offset;
-};
-
 const resizeImageWorkspace = (nextWidth: number, nextHeight: number) => {
+  if (!canEditImage.value) {
+    return;
+  }
+
   const width = normalizeImageDimension(nextWidth, imageGridWidth.value);
   const height = normalizeImageDimension(nextHeight, imageGridHeight.value);
 
@@ -1476,41 +2890,23 @@ const resizeImageWorkspace = (nextWidth: number, nextHeight: number) => {
     return;
   }
 
-  const previousWidth = imageGridWidth.value;
-  const previousHeight = imageGridHeight.value;
-  const previousPixels = [...imagePixels.value];
-  const nextPixels = emptyImagePixels(width, height);
-  const alignment = imageAnchorAlignment(imageResizeAnchor.value);
-  const rowOffset = imageResizeOffset(previousHeight, height, alignment.row, "row");
-  const columnOffset = imageResizeOffset(previousWidth, width, alignment.column, "column");
-
-  for (let row = 0; row < previousHeight; row += 1) {
-    const nextRow = row + rowOffset;
-
-    if (nextRow < 0 || nextRow >= height) {
-      continue;
-    }
-
-    for (let column = 0; column < previousWidth; column += 1) {
-      const nextColumn = column + columnOffset;
-
-      if (nextColumn < 0 || nextColumn >= width) {
-        continue;
-      }
-
-      nextPixels[nextRow * width + nextColumn] = previousPixels[row * previousWidth + column] || null;
-    }
-  }
-
-  imageGridWidth.value = width;
-  imageGridHeight.value = height;
-  imagePixels.value = nextPixels;
+  const resizedDocument = resizePixelArtDocument(
+    buildImageDocument(),
+    width,
+    height,
+    imageResizeAnchor.value,
+  );
+  imageGridWidth.value = resizedDocument.width;
+  imageGridHeight.value = resizedDocument.height;
+  imageLayers.value = resizedDocument.layers;
+  imageSelection.value = null;
   scheduleImageCanvasRender();
   imageGridWidthDraft.value = String(width);
   imageGridHeightDraft.value = String(height);
   hoveredImagePixelIndex.value = null;
   stopPaintingImage();
   scheduleImageAutosave();
+  commitImageHistory();
   void nextTick(scheduleImagePreviewViewportUpdate);
 };
 
@@ -1524,7 +2920,15 @@ const updateImageWidthDraft = (event: Event) => {
   imageGridWidthDraft.value = value;
 
   if (areImageDimensionsLinked.value) {
-    imageGridHeightDraft.value = value;
+    const width = Number(value);
+    if (Number.isFinite(width) && width > 0) {
+      imageGridHeightDraft.value = String(
+        normalizeImageDimension(
+          (width * imageGridHeight.value) / imageGridWidth.value,
+          imageGridHeight.value,
+        ),
+      );
+    }
   }
 };
 
@@ -1533,7 +2937,15 @@ const updateImageHeightDraft = (event: Event) => {
   imageGridHeightDraft.value = value;
 
   if (areImageDimensionsLinked.value) {
-    imageGridWidthDraft.value = value;
+    const height = Number(value);
+    if (Number.isFinite(height) && height > 0) {
+      imageGridWidthDraft.value = String(
+        normalizeImageDimension(
+          (height * imageGridWidth.value) / imageGridHeight.value,
+          imageGridWidth.value,
+        ),
+      );
+    }
   }
 };
 
@@ -1546,7 +2958,11 @@ const applyImageWidthDraft = () => {
   const nextWidth = normalizeImageDimension(Number(imageGridWidthDraft.value), imageGridWidth.value);
 
   if (areImageDimensionsLinked.value) {
-    resizeImageWorkspace(nextWidth, nextWidth);
+    const nextHeight = normalizeImageDimension(
+      Number(imageGridHeightDraft.value),
+      imageGridHeight.value,
+    );
+    resizeImageWorkspace(nextWidth, nextHeight);
   } else {
     resizeImageWorkspace(nextWidth, imageGridHeight.value);
   }
@@ -1563,7 +2979,11 @@ const applyImageHeightDraft = () => {
   const nextHeight = normalizeImageDimension(Number(imageGridHeightDraft.value), imageGridHeight.value);
 
   if (areImageDimensionsLinked.value) {
-    resizeImageWorkspace(nextHeight, nextHeight);
+    const nextWidth = normalizeImageDimension(
+      Number(imageGridWidthDraft.value),
+      imageGridWidth.value,
+    );
+    resizeImageWorkspace(nextWidth, nextHeight);
   } else {
     resizeImageWorkspace(imageGridWidth.value, nextHeight);
   }
@@ -1577,9 +2997,380 @@ const selectImageResizeAnchor = (anchor: ImageResizeAnchor) => {
   }
 
   imageResizeAnchor.value = anchor;
-  imageResizeCenterColumnRemainder = 0;
-  imageResizeCenterRowRemainder = 0;
+};
+
+const finishImageLayerMutation = () => {
+  triggerRef(imageLayers);
+  scheduleImageCanvasRender();
   scheduleImageAutosave();
+  commitImageHistory();
+};
+
+const cancelImageInteractionBeforeLayerChange = () => {
+  if (
+    imageInteractionKind.value !== null ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null
+  ) {
+    cancelImageInteraction();
+  }
+};
+
+const selectImageLayer = (layerId: string) => {
+  if (
+    layerId !== activeImageLayerId.value &&
+    imageLayers.value.some((layer) => layer.id === layerId)
+  ) {
+    cancelImageInteractionBeforeLayerChange();
+    activeImageLayerId.value = layerId;
+    imageSelection.value = null;
+  }
+};
+
+const addImageLayer = () => {
+  if (!canEditImage.value || imageLayers.value.length >= MAX_IMAGE_LAYERS) return;
+  cancelImageInteractionBeforeLayerChange();
+  const layer = createPixelLayer(imageGridWidth.value, imageGridHeight.value, {
+    name: `Layer ${imageLayers.value.length + 1}`,
+  });
+  imageLayers.value = [...imageLayers.value, layer];
+  activeImageLayerId.value = layer.id;
+  finishImageLayerMutation();
+};
+
+const duplicateImageLayer = (layerId: string) => {
+  if (!canEditImage.value || imageLayers.value.length >= MAX_IMAGE_LAYERS) return;
+  const index = imageLayers.value.findIndex((layer) => layer.id === layerId);
+  if (index < 0) return;
+  cancelImageInteractionBeforeLayerChange();
+  const source = imageLayers.value[index]!;
+  const duplicate = createPixelLayer(imageGridWidth.value, imageGridHeight.value, {
+    ...source,
+    id: undefined,
+    name: `${source.name} copy`,
+    pixels: source.pixels,
+  });
+  const layers = [...imageLayers.value];
+  layers.splice(index + 1, 0, duplicate);
+  imageLayers.value = layers;
+  activeImageLayerId.value = duplicate.id;
+  finishImageLayerMutation();
+};
+
+const removeImageLayer = (layerId: string) => {
+  if (!canEditImage.value || imageLayers.value.length <= 1) return;
+  const index = imageLayers.value.findIndex((layer) => layer.id === layerId);
+  if (index < 0) return;
+  if (activeImageLayerId.value === layerId) {
+    cancelImageInteractionBeforeLayerChange();
+  }
+  const layers = imageLayers.value.filter((layer) => layer.id !== layerId);
+  imageLayers.value = layers;
+  if (activeImageLayerId.value === layerId) {
+    activeImageLayerId.value = layers[Math.min(index, layers.length - 1)]?.id || "";
+  }
+  imageSelection.value = null;
+  finishImageLayerMutation();
+};
+
+const renameImageLayer = ({ id, name }: { id: string; name: string }) => {
+  if (!canEditImage.value) return;
+  const normalizedName = name.trim();
+  if (!normalizedName) return;
+  const previousLayers = imageLayers.value;
+  imageLayers.value = previousLayers.map((layer) =>
+    layer.id === id ? { ...layer, name: normalizedName } : layer,
+  );
+  if (imageLayers.value.every((layer, index) => layer === previousLayers[index])) return;
+  finishImageLayerMutation();
+};
+
+const toggleImageLayerVisibility = (layerId: string) => {
+  if (!canEditImage.value) return;
+  const layer = imageLayers.value.find((candidate) => candidate.id === layerId);
+  if (layerId === activeImageLayerId.value && layer?.visible) {
+    cancelImageInteractionBeforeLayerChange();
+  }
+  imageLayers.value = imageLayers.value.map((layer) =>
+    layer.id === layerId ? { ...layer, visible: !layer.visible } : layer,
+  );
+  finishImageLayerMutation();
+};
+
+const toggleImageLayerLock = (layerId: string) => {
+  if (!canEditImage.value) return;
+  const layer = imageLayers.value.find((candidate) => candidate.id === layerId);
+  if (layerId === activeImageLayerId.value && layer && !layer.locked) {
+    cancelImageInteractionBeforeLayerChange();
+  }
+  imageLayers.value = imageLayers.value.map((layer) =>
+    layer.id === layerId ? { ...layer, locked: !layer.locked } : layer,
+  );
+  finishImageLayerMutation();
+};
+
+const setImageLayerOpacity = ({ id, opacity }: { id: string; opacity: number }) => {
+  if (!canEditImage.value) return;
+  const normalizedOpacity = Math.min(1, Math.max(0, opacity));
+  imageLayers.value = imageLayers.value.map((layer) =>
+    layer.id === id ? { ...layer, opacity: normalizedOpacity } : layer,
+  );
+  finishImageLayerMutation();
+};
+
+const previewImageLayerOpacity = ({ id, opacity }: { id: string; opacity: number }) => {
+  if (!canEditImage.value) return;
+  const normalizedOpacity = Math.min(1, Math.max(0, opacity));
+  imageLayers.value = imageLayers.value.map((layer) =>
+    layer.id === id ? { ...layer, opacity: normalizedOpacity } : layer,
+  );
+  scheduleImageCanvasRender();
+};
+
+const moveImageLayer = ({
+  id,
+  direction,
+}: {
+  id: string;
+  direction: "up" | "down";
+}) => {
+  if (!canEditImage.value) return;
+  const index = imageLayers.value.findIndex((layer) => layer.id === id);
+  const targetIndex = direction === "up" ? index + 1 : index - 1;
+  if (index < 0 || targetIndex < 0 || targetIndex >= imageLayers.value.length) return;
+  const layers = [...imageLayers.value];
+  [layers[index], layers[targetIndex]] = [layers[targetIndex]!, layers[index]!];
+  imageLayers.value = layers;
+  finishImageLayerMutation();
+};
+
+const activeImageBuffer = () => ({
+  width: imageGridWidth.value,
+  height: imageGridHeight.value,
+  pixels: imagePixels.value,
+});
+
+const selectAllImagePixels = () => {
+  imageSelection.value = {
+    x: 0,
+    y: 0,
+    width: imageGridWidth.value,
+    height: imageGridHeight.value,
+  };
+  activeImageTool.value = "select";
+};
+
+const deselectImagePixels = () => {
+  imageSelection.value = null;
+};
+
+const applyImageMutationPixels = (
+  pixels: ReadonlyArray<PixelColor>,
+  options: { commitHistory?: boolean } = {},
+) => {
+  const didChange = updateImagePixels([...pixels]);
+  if (didChange && options.commitHistory !== false) commitImageHistory();
+  return didChange;
+};
+
+const deleteImageSelection = () => {
+  if (!imageSelection.value || !canMutateActiveImageLayerPixels.value) return;
+  const mutation = clearRect(activeImageBuffer(), imageSelection.value);
+  applyImageMutationPixels(mutation.buffer.pixels);
+};
+
+const copyImageSelection = () => {
+  if (!imageSelection.value) return;
+  imageClipboard.value = extractBlock(activeImageBuffer(), imageSelection.value);
+};
+
+const cutImageSelection = () => {
+  if (!canMutateActiveImageLayerPixels.value) return;
+  copyImageSelection();
+  deleteImageSelection();
+};
+
+const pasteImageSelection = () => {
+  const block = imageClipboard.value;
+  if (!block || !canMutateActiveImageLayerPixels.value) return;
+  const origin = imageSelection.value
+    ? { x: imageSelection.value.x, y: imageSelection.value.y }
+    : {
+        x: Math.floor((imageGridWidth.value - block.width) / 2),
+        y: Math.floor((imageGridHeight.value - block.height) / 2),
+      };
+  const mutation = placeBlock(activeImageBuffer(), block, origin);
+  if (applyImageMutationPixels(mutation.buffer.pixels, { commitHistory: false })) {
+    imageSelection.value = normalizeSelection(
+      origin,
+      { x: origin.x + block.width - 1, y: origin.y + block.height - 1 },
+      { width: imageGridWidth.value, height: imageGridHeight.value },
+    );
+    commitImageHistory();
+  }
+};
+
+const nudgeImageSelection = ({ x, y }: { x: number; y: number }) => {
+  if (!canMutateActiveImageLayerPixels.value) return;
+  if (imageSelection.value) {
+    const result = moveRegion(activeImageBuffer(), imageSelection.value, { x, y });
+    const didChangePixels = applyImageMutationPixels(result.mutation.buffer.pixels, {
+      commitHistory: false,
+    });
+    imageSelection.value = result.selection;
+    if (didChangePixels) {
+      commitImageHistory();
+    }
+    return;
+  }
+
+  const mutation = moveLayer(activeImageBuffer(), { x, y });
+  applyImageMutationPixels(mutation.buffer.pixels);
+};
+
+const transformImagePixels = (
+  transform: (block: PixelBlock) => PixelBlock,
+) => {
+  if (!canMutateActiveImageLayerPixels.value) return;
+  const sourceRect = imageSelection.value || {
+    x: 0,
+    y: 0,
+    width: imageGridWidth.value,
+    height: imageGridHeight.value,
+  };
+  const sourceBuffer = activeImageBuffer();
+  const block = transform(extractBlock(sourceBuffer, sourceRect));
+  const cleared = clearRect(sourceBuffer, sourceRect);
+  const origin = imageSelection.value
+    ? { x: sourceRect.x, y: sourceRect.y }
+    : {
+        x: Math.floor((imageGridWidth.value - block.width) / 2),
+        y: Math.floor((imageGridHeight.value - block.height) / 2),
+      };
+  const placed = placeBlock(cleared.buffer, block, origin, { transparent: "replace" });
+  if (applyImageMutationPixels(placed.buffer.pixels, { commitHistory: false })) {
+    if (imageSelection.value) {
+      imageSelection.value = normalizeSelection(
+        origin,
+        { x: origin.x + block.width - 1, y: origin.y + block.height - 1 },
+        { width: imageGridWidth.value, height: imageGridHeight.value },
+      );
+    }
+    commitImageHistory();
+  }
+};
+
+const flipImageHorizontally = () =>
+  transformImagePixels((block) => flipBlock(block, "horizontal"));
+const flipImageVertically = () =>
+  transformImagePixels((block) => flipBlock(block, "vertical"));
+const rotateImageClockwise = () =>
+  transformImagePixels((block) => rotateBlock90(block, "clockwise"));
+const rotateImageCounterclockwise = () =>
+  transformImagePixels((block) => rotateBlock90(block, "counterclockwise"));
+
+const downloadImageFile = (blob: Blob, extension: "json" | "png") => {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `${sanitizeImageFileName(resourceName.value)}.${extension}`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+};
+
+const applyImportedImageDocument = (document: PixelArtDocumentV2) => {
+  const importedDocument = clonePixelArtDocument(document);
+  imageGridWidth.value = importedDocument.width;
+  imageGridHeight.value = importedDocument.height;
+  imageLayers.value = importedDocument.layers;
+  activeImageLayerId.value = importedDocument.layers[importedDocument.layers.length - 1]?.id || "";
+  imageSelection.value = null;
+  syncImageDimensionDrafts();
+  scheduleImageCanvasRender();
+  scheduleImageAutosave();
+  commitImageHistory();
+  void nextTick(scheduleImagePreviewViewportUpdate);
+};
+
+const importImageFile = async (file: File) => {
+  if (!canEditImage.value || isImageTransferBusy.value) return;
+
+  isImageTransferBusy.value = true;
+  imageTransferNotice.value = "";
+  try {
+    const isJson = file.type === "application/json" || file.type === "text/json" || /\.json$/i.test(file.name);
+    let importedDocument: PixelArtDocumentV2;
+    if (isJson) {
+      importedDocument = await importPixelArtJson(file);
+    } else {
+      const rasterOptions = { layerName: file.name.replace(/\.[^.]+$/, "") || "Layer 1" };
+      try {
+        importedDocument = await importRasterImage(file, rasterOptions);
+      } catch (error) {
+        if (!(error instanceof RasterImageTooLargeError)) throw error;
+        const shouldReduce = window.confirm(
+          `${error.width} × ${error.height} exceeds the 256 × 256 limit. Reduce it proportionally with pixel-perfect nearest-neighbor scaling?`,
+        );
+        if (!shouldReduce) return;
+        importedDocument = await importRasterImageReduced(file, rasterOptions);
+      }
+    }
+
+    if (!window.confirm("Importing this file will replace the current image. Continue?")) {
+      return;
+    }
+
+    applyImportedImageDocument(importedDocument);
+    showImageNotice(
+      `Imported ${file.name} (${importedDocument.width} × ${importedDocument.height}).`,
+      "success",
+    );
+  } catch (error) {
+    showImageNotice(
+      error instanceof Error ? error.message : "The selected file could not be imported.",
+      "error",
+    );
+  } finally {
+    isImageTransferBusy.value = false;
+  }
+};
+
+const exportImagePng = async ({
+  scale,
+  backgroundColor,
+}: {
+  scale: PngExportScale;
+  backgroundColor: string | null;
+}) => {
+  if (isImageTransferBusy.value) return;
+  isImageTransferBusy.value = true;
+  imageTransferNotice.value = "";
+  try {
+    const blob = await exportPixelArtPng(buildImageDocument(), { scale, backgroundColor });
+    downloadImageFile(blob, "png");
+    showImageNotice(`PNG exported at ${scale}×.`, "success");
+  } catch (error) {
+    showImageNotice(error instanceof Error ? error.message : "PNG export failed.", "error");
+  } finally {
+    isImageTransferBusy.value = false;
+  }
+};
+
+const exportImageJson = () => {
+  try {
+    downloadImageFile(exportPixelArtJsonBlob(buildImageDocument()), "json");
+    showImageNotice("Sefkira JSON exported.", "success");
+  } catch (error) {
+    showImageNotice(error instanceof Error ? error.message : "JSON export failed.", "error");
+  }
+};
+
+const openGifAnimationCreation = (file: File) => {
+  const suggestedName = file.name.replace(/\.gif$/i, "").trim() || "Untitled animation";
+  showImageNotice("GIF files continue in the animation creation flow.", "info");
+  return navigateAfterImageSave(
+    `${projectPath.value}?create=pixel_animation&name=${encodeURIComponent(suggestedName)}`,
+  );
 };
 
 const toggleImageInspectorPanel = (panel: ImageInspectorPanel) => {
@@ -1675,74 +3466,368 @@ const toggleImageDimensionLink = () => {
   areImageDimensionsLinked.value = !areImageDimensionsLinked.value;
 };
 
+const loadStoredImagePreferences = (userId: string) => {
+  imagePreferencesController = useImagePreferences({
+    userId,
+    resourceId: props.resourceId,
+    defaults: { resizeAnchor: imageResizeAnchor.value },
+  });
+  const preferences = imagePreferencesController.preferences;
+  isApplyingImagePreferences = true;
+  customImageBackground.value = preferences.background;
+  isImageGridVisible.value = preferences.gridVisible;
+  customImageGridColor.value = preferences.gridColor;
+  imageGridLineStyle.value = preferences.gridLineStyle;
+  imageGridLineOpacity.value = preferences.gridOpacity;
+  imageGridLineOpacityDraft.value = preferences.gridOpacity.toFixed(2);
+  imageGridGap.value = preferences.gridGap;
+  imageGridSubdivision.value = preferences.subdivision;
+  imageGridSubdivisionDraft.value = String(preferences.subdivision);
+  customImageSubdivisionColor.value = preferences.subdivisionColor;
+  imageGridSubdivisionThickness.value = preferences.subdivisionThickness;
+  imageResizeAnchor.value = preferences.resizeAnchor;
+  if (preferences.zoom !== undefined) {
+    imageZoom.value = preferences.zoom;
+    imageZoomMode.value = "custom";
+  } else {
+    imageZoomMode.value = "fit";
+  }
+  isApplyingImagePreferences = false;
+};
+
+const saveStoredImagePreferences = () => {
+  if (!imagePreferencesController || isApplyingImagePreferences || isLoading.value) return;
+  imagePreferencesController.save({
+    background: customImageBackground.value,
+    gridVisible: isImageGridVisible.value,
+    gridColor: customImageGridColor.value,
+    gridLineStyle: imageGridLineStyle.value,
+    gridOpacity: imageGridLineOpacity.value,
+    gridGap: imageGridGap.value,
+    subdivision: imageGridSubdivision.value,
+    subdivisionColor: customImageSubdivisionColor.value,
+    subdivisionThickness: imageGridSubdivisionThickness.value,
+    resizeAnchor: imageResizeAnchor.value,
+    zoom: imageZoom.value,
+  });
+};
+
+watch(
+  [
+    customImageBackground,
+    isImageGridVisible,
+    customImageGridColor,
+    imageGridLineStyle,
+    imageGridLineOpacity,
+    imageGridGap,
+    imageGridSubdivision,
+    customImageSubdivisionColor,
+    imageGridSubdivisionThickness,
+    imageResizeAnchor,
+    imageZoom,
+  ],
+  saveStoredImagePreferences,
+);
+
+watch([isImageGridVisible, imageGridLineStyle, imageGridGap], () => {
+  scheduleImageCanvasRender();
+  void nextTick(scheduleImagePreviewViewportUpdate);
+});
+
+watch([imageGridWidth, imageGridHeight], () => {
+  if (imageZoomMode.value === "fit") {
+    void nextTick(scheduleImageFitToScreen);
+  }
+  void nextTick(scheduleImagePreviewViewportUpdate);
+});
+
+const runImageKeyboardAction = (action: ImageKeyboardAction) => {
+  switch (action.type) {
+    case "select-tool":
+      if (canEditImage.value) activeImageTool.value = action.tool;
+      break;
+    case "undo":
+      undoImage();
+      break;
+    case "redo":
+      redoImage();
+      break;
+    case "select-all":
+      selectAllImagePixels();
+      break;
+    case "copy":
+      copyImageSelection();
+      break;
+    case "cut":
+      cutImageSelection();
+      break;
+    case "paste":
+      pasteImageSelection();
+      break;
+    case "duplicate-layer":
+      duplicateImageLayer(activeImageLayerId.value);
+      break;
+    case "delete-selection":
+      deleteImageSelection();
+      break;
+    case "nudge-selection":
+      nudgeImageSelection({ x: action.deltaX, y: action.deltaY });
+      break;
+    case "escape":
+      if (imageSelection.value) deselectImagePixels();
+      else closeImageInspectorPanel();
+      break;
+  }
+};
+
+const isImageControlKeyboardTarget = (target: EventTarget | null) => {
+  const element = target instanceof Element ? target : null;
+  return Boolean(
+    element?.closest(
+      'button, a[href], summary, [role="button"], [role="slider"], [role="menuitem"], [data-image-shortcuts="off"]',
+    ),
+  );
+};
+
 const handleResourceEditorKeydown = (event: KeyboardEvent) => {
-  if (event.key === "Escape") {
-    closeImageInspectorPanel();
+  if (
+    !isImageEditor.value ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    isImageConflictOpen.value ||
+    isProfileDialogOpen.value ||
+    isEditableKeyboardTarget(event.target) ||
+    isImageControlKeyboardTarget(event.target)
+  ) {
+    return;
+  }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    void saveImageNow();
+    return;
+  }
+
+  if (
+    event.key === "Escape" &&
+    (imagePanPointerId !== null || imageViewportPaintPointerId !== null)
+  ) {
+    event.preventDefault();
+    cancelImageInteraction();
+    return;
+  }
+
+  if (event.code === "Space") {
+    isImageSpacePressed.value = true;
+    event.preventDefault();
+    return;
+  }
+
+  if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (event.key === "[") {
+      imageBrushSize.value = Math.max(1, imageBrushSize.value - 1);
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "]") {
+      imageBrushSize.value = Math.min(8, imageBrushSize.value + 1);
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "1") {
+      fitImageToScreen();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "2") {
+      showImageAtActualSize();
+      event.preventDefault();
+      return;
+    }
+    if (event.key.toLowerCase() === "x") {
+      swapImageColors();
+      event.preventDefault();
+      return;
+    }
+  }
+
+  const action = getImageKeyboardAction(event);
+  if (!action) return;
+  event.preventDefault();
+  runImageKeyboardAction(action);
+};
+
+const handleResourceEditorKeyup = (event: KeyboardEvent) => {
+  if (event.code === "Space") isImageSpacePressed.value = false;
+};
+
+const clearImageTemporaryKeys = () => {
+  isImageSpacePressed.value = false;
+  if (imagePanPointerId !== null || imageViewportPaintPointerId !== null) {
+    cancelImageInteraction();
+  }
+};
+
+const hasImageUnloadRisk = () => {
+  const hasUnsavedName =
+    isRenamingResource.value &&
+    Boolean(resourceNameDraft.value.trim()) &&
+    resourceNameDraft.value.trim() !== resource.value?.name;
+  return (
+    isImageEditor.value &&
+    (imageAutosave.hasPendingChanges.value ||
+      isResourceNameSaving.value ||
+      isPersonalImagePaletteSaving.value ||
+      hasUnsavedName ||
+      imageConflictOperation.value !== null)
+  );
+};
+
+const warnBeforeImageUnload = (event: BeforeUnloadEvent) => {
+  if (allowImageUnload || !hasImageUnloadRisk()) return;
+  event.preventDefault();
+  event.returnValue = "";
+};
+
+const flushImageBeforePageHide = () => {
+  if (imageAutosave.hasPendingChanges.value) {
+    void imageAutosave.flush();
+  }
+  if (isPersonalImagePaletteSaving.value) {
+    void waitForPersonalImagePaletteMutations();
   }
 };
 
 const loadEditor = async () => {
   isLoading.value = true;
   errorMessage.value = "";
+  let shouldFitImageAfterLoad = true;
 
-  const [workspace, resourceDetail] = await Promise.all([
-    fetchApi<WorkspaceBootstrap>("/workspace/"),
-    fetchApi<ProjectResourceDetail>(
-      `/projects/${encodeURIComponent(props.projectId)}/resources/${encodeURIComponent(
-        props.resourceId,
-      )}`,
-    ),
-  ]);
+  try {
+    const [workspace, resourceDetail] = await Promise.all([
+      fetchApi<WorkspaceBootstrap>("/workspace/"),
+      fetchApi<ProjectResourceDetail>(
+        `/projects/${encodeURIComponent(props.projectId)}/resources/${encodeURIComponent(
+          props.resourceId,
+        )}`,
+      ),
+    ]);
 
-  if (!resourceDetail) {
-    errorMessage.value = "This item is no longer available.";
+    if (!resourceDetail) {
+      errorMessage.value = "This item is no longer available.";
+      return;
+    }
+
+    imagePaletteUserId.value = workspace?.user.id || "";
+    personalImagePalette.value = normalizePinnedPaletteColors(
+      workspace?.user.pixel_art_palette,
+    );
+
+    resource.value = resourceDetail;
+    if (editorMetaByType[resourceDetail.type]?.routeKind === "image") {
+      let imageData: ReturnType<typeof readImagePixelsFromData>;
+      try {
+        imageData = readImagePixelsFromData(resourceDetail.data || {});
+      } catch (error) {
+        errorMessage.value =
+          error instanceof PixelArtMigrationError
+            ? `${error.message} This resource was left unchanged.`
+            : "This image could not be opened safely.";
+        return;
+      }
+      imageGridWidth.value = imageData.document.width;
+      imageGridHeight.value = imageData.document.height;
+      syncImageDimensionDrafts();
+      imageResizeAnchor.value = imageData.anchor;
+      imageLayers.value = imageData.document.layers;
+      activeImageLayerId.value = imageData.document.layers[imageData.document.layers.length - 1]?.id || "";
+      imageSelection.value = null;
+      if (imageData.warnings.length > 0) {
+        showImageNotice(imageData.warnings.join(" "), "info");
+      }
+      imageSaveStatus.value = "saved";
+      imageSaveError.value = "";
+      activeImageTool.value = "pencil";
+      setSelectedImageColor(DEFAULT_PENCIL_COLOR);
+    }
+    project.value =
+      workspace?.projects.find((workspaceProject) => workspaceProject.id === props.projectId) || null;
+    if (editorMetaByType[resourceDetail.type]?.routeKind === "image") {
+      loadStoredImagePreferences(workspace?.user.id || profileEmail.value || "local-user");
+      shouldFitImageAfterLoad = imagePreferencesController?.preferences.zoom === undefined;
+      resetImageHistory();
+    }
+
+    const routeKind = editorMetaByType[resourceDetail.type]?.routeKind;
+    if (routeKind && props.resourceKind !== routeKind) {
+      window.history.replaceState(null, "", canonicalResourcePath.value);
+    }
+
+  } catch {
+    errorMessage.value =
+      navigator.onLine === false
+        ? "You appear to be offline. Reconnect and try again."
+        : "The editor could not be loaded. Check your connection and try again.";
+  } finally {
     isLoading.value = false;
+  }
+
+  if (
+    errorMessage.value ||
+    !resource.value ||
+    editorMetaByType[resource.value.type]?.routeKind !== "image"
+  ) {
     return;
   }
 
-  resource.value = resourceDetail;
-  if (editorMetaByType[resourceDetail.type]?.routeKind === "image") {
-    const imageData = readImagePixelsFromData(resourceDetail.data || {});
-    imageGridWidth.value = imageData.width;
-    imageGridHeight.value = imageData.height;
-    syncImageDimensionDrafts();
-    imageResizeAnchor.value = imageData.anchor;
-    imagePixels.value = imageData.pixels;
-    imageColorPalette.value = imageData.palette;
-    imageResizeCenterColumnRemainder = 0;
-    imageResizeCenterRowRemainder = 0;
-    activeImageTool.value = "pencil";
-    setSelectedImageColor(DEFAULT_PENCIL_COLOR);
+  await nextTick();
+  observeImageStage();
+  updateImageViewportSize();
+  const imageStageBounds = imageStageRef.value?.getBoundingClientRect();
+  const loadedArtboardMetrics = imageArtboardMetrics.value;
+  const loadedZoomFitsStage = Boolean(
+    imageStageBounds &&
+    loadedArtboardMetrics.width <= Math.max(1, imageStageBounds.width - 72) &&
+    loadedArtboardMetrics.height <= Math.max(1, imageStageBounds.height - 104),
+  );
+  imagePanX.value = 0;
+  imagePanY.value = 0;
+  if (shouldFitImageAfterLoad || !loadedZoomFitsStage) {
+    fitImageToScreen();
+  } else {
+    imageZoomMode.value = "custom";
   }
-  project.value =
-    workspace?.projects.find((workspaceProject) => workspaceProject.id === props.projectId) || null;
-
-  const routeKind = editorMetaByType[resourceDetail.type]?.routeKind;
-  if (routeKind && props.resourceKind !== routeKind) {
-    window.history.replaceState(null, "", canonicalResourcePath.value);
-  }
-
-  isLoading.value = false;
-  void nextTick(() => {
-    scheduleImageCanvasRender();
-    scheduleImagePreviewViewportUpdate();
-    renderImageColorTriangleCanvas();
-  });
+  scheduleImageCanvasRender();
+  scheduleImagePreviewViewportUpdate();
+  renderImageColorTriangleCanvas();
 };
 
 onMounted(() => {
-  window.addEventListener("pointerup", stopPaintingImage);
+  window.addEventListener("pointerup", finishImagePointerInteractionFromPointer);
   window.addEventListener("keydown", handleResourceEditorKeydown);
+  window.addEventListener("keyup", handleResourceEditorKeyup);
+  window.addEventListener("blur", clearImageTemporaryKeys);
+  window.addEventListener("beforeunload", warnBeforeImageUnload);
+  window.addEventListener("pagehide", flushImageBeforePageHide);
   window.addEventListener("resize", updateImageViewportSize);
   updateImageViewportSize();
   void loadEditor();
-  void nextTick(renderImageColorTriangleCanvas);
 });
 
 onUnmounted(() => {
-  window.removeEventListener("pointerup", stopPaintingImage);
+  window.removeEventListener("pointerup", finishImagePointerInteractionFromPointer);
   window.removeEventListener("keydown", handleResourceEditorKeydown);
+  window.removeEventListener("keyup", handleResourceEditorKeyup);
+  window.removeEventListener("blur", clearImageTemporaryKeys);
+  window.removeEventListener("beforeunload", warnBeforeImageUnload);
+  window.removeEventListener("pagehide", flushImageBeforePageHide);
   window.removeEventListener("resize", updateImageViewportSize);
+  imageStageResizeObserver?.disconnect();
+  imageStageResizeObserver = null;
+  if (imageFitFrame !== null) {
+    window.cancelAnimationFrame(imageFitFrame);
+    imageFitFrame = null;
+  }
   if (imagePreviewViewportFrame !== null) {
     window.cancelAnimationFrame(imagePreviewViewportFrame);
     imagePreviewViewportFrame = null;
@@ -1751,11 +3836,7 @@ onUnmounted(() => {
     window.cancelAnimationFrame(imageCanvasRenderFrame);
     imageCanvasRenderFrame = null;
   }
-  if (imageAutosaveTimeout.value !== null) {
-    window.clearTimeout(imageAutosaveTimeout.value);
-    imageAutosaveTimeout.value = null;
-    void saveImagePixels(imageAutosaveVersion.value);
-  }
+  void imageAutosave.flush().finally(imageAutosave.dispose);
 });
 </script>
 
@@ -1787,8 +3868,38 @@ onUnmounted(() => {
           <span class="resource-editor-title__icon" aria-hidden="true">
             <Icon :icon="editorMeta.icon" width="22" height="22" />
           </span>
-          <span class="resource-editor-title__name">{{ resourceName }}</span>
+          <input
+            v-if="isRenamingResource"
+            v-model="resourceNameDraft"
+            class="resource-editor-title__name-input"
+            type="text"
+            maxlength="120"
+            aria-label="Image name"
+            autofocus
+            @blur="commitResourceName"
+            @keydown.enter.prevent="($event.currentTarget as HTMLInputElement).blur()"
+            @keydown.escape.prevent="cancelRenamingResource"
+          />
+          <button
+            v-else
+            type="button"
+            class="resource-editor-title__name"
+            :disabled="!canEditImage"
+            :aria-label="canEditImage ? `Rename ${resourceName}` : resourceName"
+            :title="canEditImage ? 'Rename image' : resourceName"
+            @click="startRenamingResource"
+          >
+            {{ resourceName }}
+          </button>
           <span class="resource-editor-title__kind">{{ editorMeta.label }}</span>
+          <div v-if="isImageEditor && !isLoading" class="resource-editor-title__save-cluster">
+            <ImageSaveStatus
+              :status="displayedImageSaveStatus"
+              :error="displayedImageSaveError"
+              :last-saved-at="effectiveImageLastSavedAt"
+              @retry="retryImageSave"
+            />
+          </div>
         </div>
       </template>
     </StudioTopbar>
@@ -1800,70 +3911,56 @@ onUnmounted(() => {
 
       <div v-else-if="errorMessage" class="resource-editor-error">
         <p>{{ errorMessage }}</p>
+        <button type="button" @click="loadEditor">Try again</button>
         <button type="button" @click="returnToProject">Back to project</button>
       </div>
 
       <div
         v-else
-        ref="imageStageRef"
         class="resource-editor-canvas"
         :aria-label="`${editorMeta.label} editor in progress for ${resourceName}`"
-        @wheel.prevent="zoomImageFromWheel"
       >
-        <div v-if="isImageEditor" class="image-editor-toolbar" aria-label="Image tools">
-          <button
-            type="button"
-            class="image-editor-tool"
-            :class="{ 'is-active': activeImageTool === 'pencil' }"
-            aria-label="Pencil"
-            :aria-pressed="activeImageTool === 'pencil'"
-            title="Pencil"
-            @click="activeImageTool = 'pencil'"
-          >
-            <Pencil :size="19" :stroke-width="2.2" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="image-editor-tool"
-            :class="{ 'is-active': activeImageTool === 'fill' }"
-            aria-label="Fill"
-            :aria-pressed="activeImageTool === 'fill'"
-            title="Fill"
-            @click="activeImageTool = 'fill'"
-          >
-            <PaintBucket :size="19" :stroke-width="2.2" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="image-editor-tool"
-            :class="{ 'is-active': activeImageTool === 'erase' }"
-            aria-label="Eraser"
-            :aria-pressed="activeImageTool === 'erase'"
-            title="Eraser"
-            @click="activeImageTool = 'erase'"
-          >
-            <Eraser :size="19" :stroke-width="2.2" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="image-editor-tool"
-            :class="{ 'is-active': activeImageTool === 'picker' }"
-            aria-label="Color picker"
-            :aria-pressed="activeImageTool === 'picker'"
-            title="Color picker"
-            @click="activeImageTool = 'picker'"
-          >
-            <Pipette :size="19" :stroke-width="2.2" aria-hidden="true" />
-          </button>
-        </div>
-        <section
+        <aside v-if="isImageEditor" class="image-editor-left-dock" aria-label="Drawing tools">
+          <ImageToolbar
+            class="image-editor-toolbar"
+            :active-tool="activeImageTool"
+            :can-edit="canEditImage"
+            @select-tool="activeImageTool = $event"
+          />
+        </aside>
+
+        <aside
           v-if="isImageEditor"
-          ref="imageColorPickerRef"
-          class="image-editor-color-panel"
-          :style="imageColorPickerStyle"
-          aria-label="Drawing color picker"
+          class="image-editor-right-dock"
+          :class="{ 'has-active-inspector': activeImageInspectorPanel }"
+          aria-label="Image properties"
         >
-          <div class="image-editor-color-picker-stage">
+          <div class="image-editor-layers-host">
+            <ImageLayersPanel
+              :layers="imageLayers"
+              :active-layer-id="activeImageLayerId"
+              :can-edit="canEditImage"
+              :max-layers="MAX_IMAGE_LAYERS"
+              @select="selectImageLayer"
+              @add="addImageLayer"
+              @duplicate="duplicateImageLayer"
+              @remove="removeImageLayer"
+              @rename="renameImageLayer"
+              @toggle-visible="toggleImageLayerVisibility"
+              @toggle-lock="toggleImageLayerLock"
+              @preview-opacity="previewImageLayerOpacity"
+              @set-opacity="setImageLayerOpacity"
+              @move="moveImageLayer"
+            />
+          </div>
+
+          <section
+            ref="imageColorPickerRef"
+            class="image-editor-color-panel"
+            :style="imageColorPickerStyle"
+            aria-label="Drawing colors"
+          >
+            <div class="image-editor-color-picker-stage">
               <div
                 class="image-editor-color-wheel"
                 aria-label="Hue"
@@ -1884,10 +3981,7 @@ onUnmounted(() => {
               >
                 <canvas ref="imageColorTriangleCanvasRef" aria-hidden="true"></canvas>
                 <svg viewBox="0 0 196 184" aria-hidden="true" focusable="false">
-                  <polygon
-                    points="98 0 0 184 196 184"
-                    fill="transparent"
-                  />
+                  <polygon points="98 0 0 184 196 184" fill="transparent" />
                 </svg>
                 <span
                   class="image-editor-color-triangle-handle"
@@ -1895,68 +3989,61 @@ onUnmounted(() => {
                   aria-hidden="true"
                 ></span>
               </div>
-          </div>
-          <div class="image-editor-color-value" aria-label="Selected color">
-            <span aria-hidden="true"></span>
-            <input
-              :value="selectedImageColorDraft"
-              aria-label="Selected color hex value"
-              inputmode="text"
-              maxlength="7"
-              spellcheck="false"
-              @blur="commitSelectedImageColorInput"
-              @input="updateSelectedImageColorFromInput"
+            </div>
+
+            <div class="image-editor-color-value" aria-label="Selected color">
+              <span aria-hidden="true"></span>
+              <input
+                :value="selectedImageColorDraft"
+                aria-label="Selected color hex value"
+                inputmode="text"
+                maxlength="9"
+                spellcheck="false"
+                :disabled="!canEditImage"
+                @blur="commitSelectedImageColorInput"
+                @input="updateSelectedImageColorFromInput"
+              />
+              <button
+                type="button"
+                class="image-editor-color-add"
+                aria-label="Add selected color to palette"
+                title="Pin color to your personal palette"
+                :disabled="!canManagePersonalImagePalette"
+                @click="pinImagePaletteColor()"
+              >
+                <Plus :size="15" :stroke-width="2.2" aria-hidden="true" />
+              </button>
+            </div>
+
+            <ImageColorSwatches
+              class="image-editor-color-swatches-host"
+              :primary-color="selectedImageColor"
+              :secondary-color="secondaryImageColor"
+              :can-edit="canEditImage"
+              @swap="swapImageColors"
+              @reset="resetImageColors"
+              @update:primary-color="setSelectedImageColor"
+              @update:secondary-color="setSecondaryImageColor"
             />
-            <button
-              type="button"
-              class="image-editor-color-add"
-              aria-label="Add selected color to palette"
-              title="Add color to palette"
-              @click="addImagePaletteColor()"
-            >
-              <Plus :size="15" :stroke-width="2.4" aria-hidden="true" />
-            </button>
-          </div>
-        </section>
-        <div
-          v-if="isImageEditor && imageColorPalette.length"
-          class="image-editor-color-palette"
-          aria-label="Drawing color palette"
-        >
-          <span class="image-editor-color-palette__title">
-            <Palette :size="13" :stroke-width="2.3" aria-hidden="true" />
-            Palette
-          </span>
-          <div class="image-editor-color-palette__swatches">
-            <button
-              v-for="color in imageColorPalette"
-              :key="color"
-              type="button"
-              class="image-editor-color-swatch"
-              :class="{ 'is-active': selectedImageColor.toUpperCase() === color }"
-              :style="{ '--palette-color': color }"
-              :aria-label="`Use ${color}`"
-              :title="`${color} - right click to remove`"
-              @click="selectImagePaletteColor(color)"
-              @contextmenu.prevent="removeImagePaletteColor(color)"
-            ></button>
-          </div>
-        </div>
-        <aside v-if="isImageEditor" class="image-editor-preview" aria-label="Image preview">
-          <div
-            class="image-editor-preview__grid"
-            :style="imagePreviewGridStyle"
-            aria-hidden="true"
-          >
-            <canvas ref="imagePreviewCanvasRef"></canvas>
-            <span
-              v-if="imagePreviewViewport.visible"
-              class="image-editor-preview__viewport"
-              :style="imagePreviewViewportStyle"
-            ></span>
-          </div>
-        </aside>
-        <div v-if="isImageEditor" class="image-editor-side-inspector" aria-label="Image options">
+
+            <div class="image-editor-color-palette">
+              <ImagePalettePanel
+                :swatches="usedImagePaletteColors"
+                :pinned-colors="personalImagePalette"
+                :primary-color="selectedImageColor"
+                :secondary-color="secondaryImageColor"
+                :can-select="canEditImage"
+                :can-manage="canManagePersonalImagePalette"
+                @select-primary="selectImagePaletteColor"
+                @select-secondary="selectSecondaryImagePaletteColor"
+                @pin="pinImagePaletteColor"
+                @edit="editImagePaletteColor"
+                @remove="unpinImagePaletteColor"
+              />
+            </div>
+          </section>
+
+          <div class="image-editor-side-inspector" aria-label="Image options">
           <section
             v-if="activeImageInspectorPanel"
             class="image-editor-inspector-panel"
@@ -1966,6 +4053,18 @@ onUnmounted(() => {
               <div class="image-editor-inspector-title">
                 <Scaling
                   v-if="activeImageInspectorPanel === 'resize'"
+                  :size="15"
+                  :stroke-width="2.2"
+                  aria-hidden="true"
+                />
+                <MousePointer2
+                  v-else-if="activeImageInspectorPanel === 'transform'"
+                  :size="15"
+                  :stroke-width="2.2"
+                  aria-hidden="true"
+                />
+                <Download
+                  v-else-if="activeImageInspectorPanel === 'transfer'"
                   :size="15"
                   :stroke-width="2.2"
                   aria-hidden="true"
@@ -2010,7 +4109,7 @@ onUnmounted(() => {
                     aria-label="Workspace width"
                     @input="updateImageWidthDraft"
                     @keydown.enter.prevent="applyImageWidthDraft"
-                    @blur="syncImageDimensionDrafts"
+                    @blur="applyImageWidthDraft"
                   />
                 </div>
                 <div class="image-editor-size-row">
@@ -2027,7 +4126,7 @@ onUnmounted(() => {
                     aria-label="Workspace height"
                     @input="updateImageHeightDraft"
                     @keydown.enter.prevent="applyImageHeightDraft"
-                    @blur="syncImageDimensionDrafts"
+                    @blur="applyImageHeightDraft"
                   />
                 </div>
                 <div class="image-editor-dimension-link-row">
@@ -2083,7 +4182,7 @@ onUnmounted(() => {
             </div>
 
             <div
-              v-else
+              v-else-if="activeImageInspectorPanel === 'preferences'"
               class="image-editor-settings-page image-editor-preferences"
               aria-label="Preference options"
             >
@@ -2177,17 +4276,17 @@ onUnmounted(() => {
                   />
                 </div>
                 <div class="image-editor-preference-row">
-                  <span class="image-editor-preference-label">Spacing</span>
-                  <div class="image-editor-gap-list" aria-label="Grid spacing">
+                  <span class="image-editor-preference-label">Thickness</span>
+                  <div class="image-editor-gap-list" aria-label="Grid line thickness">
                     <button
                       v-for="gap in IMAGE_GRID_GAP_OPTIONS"
                       :key="gap"
                       type="button"
                       class="image-editor-gap-button"
                       :class="{ 'is-active': imageGridGap === gap }"
-                      :aria-label="`${gap} pixel grid spacing`"
+                      :aria-label="`${gap} pixel grid line thickness`"
                       :aria-pressed="imageGridGap === gap"
-                      :disabled="!isImageGridVisible || imageGridLineStyle !== 'solid'"
+                      :disabled="!isImageGridVisible"
                       @click="selectImageGridGap(gap)"
                     >
                       {{ gap }}
@@ -2249,9 +4348,40 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
+
+            <ImageTransformPanel
+              v-else-if="activeImageInspectorPanel === 'transform'"
+              class="image-editor-transform-host"
+              :selection="imageSelection"
+              :can-edit="canMutateActiveImageLayerPixels"
+              :has-clipboard="Boolean(imageClipboard)"
+              @select-all="selectAllImagePixels"
+              @deselect="deselectImagePixels"
+              @delete="deleteImageSelection"
+              @copy="copyImageSelection"
+              @cut="cutImageSelection"
+              @paste="pasteImageSelection"
+              @flip-horizontal="flipImageHorizontally"
+              @flip-vertical="flipImageVertically"
+              @rotate-clockwise="rotateImageClockwise"
+              @rotate-counterclockwise="rotateImageCounterclockwise"
+              @nudge="nudgeImageSelection"
+            />
+
+            <ImageImportExportPanel
+              v-else
+              class="image-editor-transfer-host"
+              :can-edit="canEditImage"
+              :default-background-color="customImageBackground"
+              :is-busy="isImageTransferBusy"
+              @import-file="importImageFile"
+              @create-animation="openGifAnimationCreation"
+              @export-png="exportImagePng"
+              @export-json="exportImageJson"
+            />
           </section>
 
-          <div class="image-editor-inspector-rail" role="toolbar" aria-label="Image option panels">
+          <div class="image-editor-inspector-rail" role="group" aria-label="Image option panels">
             <button
               type="button"
               class="image-editor-inspector-button"
@@ -2274,46 +4404,228 @@ onUnmounted(() => {
             >
               <SlidersHorizontal :size="19" :stroke-width="2.1" aria-hidden="true" />
             </button>
+            <button
+              type="button"
+              class="image-editor-inspector-button"
+              :class="{ 'is-active': activeImageInspectorPanel === 'transform' }"
+              :aria-pressed="activeImageInspectorPanel === 'transform'"
+              aria-label="Selection and transform options"
+              title="Transform"
+              @click="toggleImageInspectorPanel('transform')"
+            >
+              <MousePointer2 :size="19" :stroke-width="2.1" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="image-editor-inspector-button"
+              :class="{ 'is-active': activeImageInspectorPanel === 'transfer' }"
+              :aria-pressed="activeImageInspectorPanel === 'transfer'"
+              aria-label="Import and export"
+              title="Import & export"
+              @click="toggleImageInspectorPanel('transfer')"
+            >
+              <Download :size="19" :stroke-width="2.1" aria-hidden="true" />
+            </button>
           </div>
         </div>
-        <div
+        </aside>
+
+        <ImageToolOptions
           v-if="isImageEditor"
-          ref="imageArtboardRef"
-          class="image-editor-artboard"
-          :class="{ 'is-panning': isPanningImage }"
-          :style="imageCanvasGridStyle"
-          aria-label="Pixel art drawing grid"
-          tabindex="0"
-          @pointerdown.prevent="startPaintingImageFromPointer"
-          @pointermove.prevent="continuePaintingImageFromPointer"
-          @pointerup="stopPaintingImage"
-          @pointercancel="cancelImageInteraction"
-          @pointerleave="leaveImageCanvas"
-          @auxclick.prevent
-          @contextmenu.prevent
+          class="image-editor-context-host"
+          :active-tool="activeImageTool"
+          :brush-size="imageBrushSize"
+          :shape-filled="isImageShapeFilled"
+          :can-undo="canUndoImage"
+          :can-redo="canRedoImage"
+          :can-edit="canEditImage"
+          @update:brush-size="imageBrushSize = $event"
+          @update:shape-filled="isImageShapeFilled = $event"
+          @undo="undoImage"
+          @redo="redoImage"
+        />
+
+        <section
+          v-if="isImageEditor"
+          ref="imageStageRef"
+          class="image-editor-viewport"
+          :class="{
+            'is-pan-ready':
+              isImageSpacePressed &&
+              !isPaintingImage &&
+              imageInteractionKind === null &&
+              imageViewportPaintPointerId === null,
+            'is-panning': isPanningImage,
+            'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
+          }"
+          :aria-label="imageViewportAriaLabel"
+          tabindex="-1"
+          @pointerdown.self.prevent="startImageViewportInteractionFromPointer"
+          @pointermove.self.prevent="continueImageViewportInteractionFromPointer"
+          @pointerup.self="finishImagePointerInteractionFromPointer"
+          @pointercancel.self="cancelImageInteraction"
+          @lostpointercapture.self="cancelImageInteraction"
+          @wheel.stop.prevent="zoomImageFromWheel"
+          @auxclick.self.prevent
+          @contextmenu.self.prevent
         >
-          <canvas ref="imageCanvasRef" class="image-editor-canvas-bitmap"></canvas>
-          <span
-            v-for="line in imageSubdivisionVerticalLines"
-            :key="`image-subdivision-column-${line.index}`"
-            class="image-editor-subdivision-line is-vertical"
-            :style="line.style"
+          <div
+            class="image-editor-preview"
+            :style="imageFloatingPreviewStyle"
             aria-hidden="true"
-          ></span>
-          <span
-            v-for="line in imageSubdivisionHorizontalLines"
-            :key="`image-subdivision-row-${line.index}`"
-            class="image-editor-subdivision-line is-horizontal"
-            :style="line.style"
-            aria-hidden="true"
-          ></span>
-          <span
-            v-if="hoveredImagePixelIndex !== null"
-            class="image-editor-hover-cell"
-            :style="imageHoverCellStyle"
-            aria-hidden="true"
-          ></span>
-        </div>
+          >
+            <div
+              class="image-editor-preview__grid"
+              :style="imagePreviewGridStyle"
+              aria-hidden="true"
+            >
+              <canvas ref="imagePreviewCanvasRef"></canvas>
+              <span
+                v-if="imagePreviewViewport.visible"
+                class="image-editor-preview__viewport"
+                :style="imagePreviewViewportStyle"
+              ></span>
+            </div>
+          </div>
+          <ImageEditorNotice
+            class="image-editor-notice-host"
+            :message="imageTransferNotice"
+            :tone="imageTransferNoticeTone"
+            @dismiss="imageTransferNotice = ''"
+          />
+          <div
+            ref="imageArtboardRef"
+            class="image-editor-artboard"
+            :class="{
+              'is-panning': isPanningImage,
+              'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
+            }"
+            :style="imageCanvasGridStyle"
+            :aria-label="imageArtboardAriaLabel"
+            tabindex="0"
+            @pointerdown.prevent="startImageArtboardInteractionFromPointer"
+            @pointermove.prevent="continueImageViewportInteractionFromPointer"
+            @pointerup="finishImagePointerInteractionFromPointer"
+            @pointercancel="cancelImageInteraction"
+            @lostpointercapture="cancelImageInteraction"
+            @pointerleave="leaveImageCanvas"
+            @auxclick.prevent
+            @contextmenu.prevent
+          >
+            <canvas ref="imageCanvasRef" class="image-editor-canvas-bitmap">
+              Pixel art preview. Use the editor tools and keyboard shortcuts to modify the image.
+            </canvas>
+            <svg
+              v-if="imageGridOverlayOpacity > 0"
+              class="image-editor-grid-overlay"
+              :width="imageGridOverlayPlan.cssWidth"
+              :height="imageGridOverlayPlan.cssHeight"
+              :viewBox="`0 0 ${imageGridOverlayPlan.cssWidth} ${imageGridOverlayPlan.cssHeight}`"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <template v-if="imageGridLineStyle !== 'dots'">
+                <path
+                  v-if="imageGridOverlayPath"
+                  :d="imageGridOverlayPath"
+                  :stroke="customImageGridColor"
+                  :stroke-width="imageGridStrokeWidth"
+                  :stroke-opacity="imageGridOverlayOpacity"
+                  :stroke-dasharray="imageGridLineStyle === 'dashed' ? imageGridDashArray : undefined"
+                  fill="none"
+                  shape-rendering="crispEdges"
+                  stroke-linecap="butt"
+                  vector-effect="non-scaling-stroke"
+                />
+              </template>
+              <template v-else-if="hasImageGridDotIntersections">
+                <defs>
+                  <pattern
+                    :id="imageGridDotPatternId"
+                    :x="-imageGridOverlayPlan.step / 2"
+                    :y="-imageGridOverlayPlan.step / 2"
+                    :width="imageGridOverlayPlan.step"
+                    :height="imageGridOverlayPlan.step"
+                    patternUnits="userSpaceOnUse"
+                    patternContentUnits="userSpaceOnUse"
+                  >
+                    <circle
+                      :cx="imageGridOverlayPlan.step / 2"
+                      :cy="imageGridOverlayPlan.step / 2"
+                      :r="imageGridDotRadius"
+                      :fill="customImageGridColor"
+                      :fill-opacity="imageGridOverlayOpacity"
+                    />
+                  </pattern>
+                </defs>
+                <rect
+                  :x="imageGridDotClipRect.x"
+                  :y="imageGridDotClipRect.y"
+                  :width="imageGridDotClipRect.width"
+                  :height="imageGridDotClipRect.height"
+                  :fill="`url(#${imageGridDotPatternId})`"
+                />
+              </template>
+            </svg>
+            <span
+              v-for="line in imageSubdivisionVerticalLines"
+              :key="`image-subdivision-column-${line.index}`"
+              class="image-editor-subdivision-line is-vertical"
+              :style="line.style"
+              aria-hidden="true"
+            ></span>
+            <span
+              v-for="line in imageSubdivisionHorizontalLines"
+              :key="`image-subdivision-row-${line.index}`"
+              class="image-editor-subdivision-line is-horizontal"
+              :style="line.style"
+              aria-hidden="true"
+            ></span>
+            <span
+              v-if="
+                hoveredImagePixelIndex !== null &&
+                !isImageGraffitiHoverPreview &&
+                (!isActiveImagePixelMutationTool || canMutateActiveImageLayerPixels)
+              "
+              class="image-editor-hover-cell"
+              :style="imageHoverCellStyle"
+              aria-hidden="true"
+            ></span>
+            <span
+              v-for="cell in imageGraffitiHoverCells"
+              :key="`image-graffiti-hover-${cell.key}`"
+              class="image-editor-hover-cell is-graffiti"
+              :style="cell.style"
+              aria-hidden="true"
+            ></span>
+            <span
+              v-if="imageSelection"
+              class="image-editor-selection"
+              :style="imageSelectionStyle"
+              aria-hidden="true"
+            ></span>
+          </div>
+        </section>
+
+        <footer v-if="isImageEditor" class="image-editor-statusbar" aria-label="Canvas status">
+          <span class="image-editor-statusbar__document">
+            {{ imageGridWidth }} × {{ imageGridHeight }} px
+          </span>
+          <ImageZoomControls
+            class="image-editor-zoom-host"
+            :class="{
+              'is-fit': imageZoomMode === 'fit',
+              'is-actual': imageZoomMode === 'actual',
+            }"
+            :zoom="imageZoom"
+            :min="MIN_IMAGE_ZOOM"
+            :max="MAX_IMAGE_ZOOM"
+            @zoom-in="zoomImageIn"
+            @zoom-out="zoomImageOut"
+            @fit="fitImageToScreen"
+            @actual-size="showImageAtActualSize"
+          />
+        </footer>
       </div>
     </main>
 
@@ -2327,18 +4639,44 @@ onUnmounted(() => {
       @close="isProfileDialogOpen = false"
       @saved="updateProfile"
     />
+    <ImageConflictNotice
+      :open="isImageConflictOpen"
+      :local-revision="resource?.revision ?? null"
+      :remote-revision="imageConflictRemoteRevision"
+      :operation="imageConflictOperation?.kind || 'document'"
+      :busy="isImageConflictResolving"
+      @reload="reloadImageAfterConflict"
+      @keep-local="keepLocalImageAfterConflict"
+      @close="isImageConflictOpen = false"
+    />
   </section>
 </template>
 
 <style scoped>
   .resource-editor {
-    --surface: rgba(12, 13, 13, 0.88);
-    --surface-soft: rgba(255, 252, 244, 0.055);
-    --line: rgba(255, 252, 244, 0.14);
-    --line-strong: rgba(255, 252, 244, 0.22);
-    --text: #f7f1e7;
-    --muted: rgba(247, 241, 231, 0.62);
-    --quiet: rgba(247, 241, 231, 0.42);
+    --editor-bg: #080808;
+    --editor-panel: #111111;
+    --editor-surface: #1c1c1c;
+    --editor-hover: #242424;
+    --editor-selected: #f2f2f2;
+    --editor-selected-ink: #0a0a0a;
+    --editor-border: #2b2b2b;
+    --editor-border-strong: #666666;
+    --editor-text: #f2f2f2;
+    --editor-muted: #b8b8b8;
+    --editor-quiet: #8a8a8a;
+    --editor-focus: #ffffff;
+    --editor-radius-xs: 4px;
+    --editor-radius-sm: 6px;
+    --editor-radius-md: 8px;
+    --editor-radius-pill: 999px;
+    --surface: var(--editor-panel);
+    --surface-soft: var(--editor-surface);
+    --line: var(--editor-border);
+    --line-strong: var(--editor-border-strong);
+    --text: var(--editor-text);
+    --muted: var(--editor-muted);
+    --quiet: var(--editor-quiet);
     position: relative;
     z-index: 5;
     display: flex;
@@ -2353,31 +4691,35 @@ onUnmounted(() => {
     color: inherit;
   }
 
+  /* Pixel editor workbench --------------------------------------------------
+     Static chrome is flat and neutral. Color is reserved for document content,
+     the user-selected file icon, and genuine semantic states. */
   .resource-editor-title {
-    display: inline-grid;
-    grid-template-columns: auto minmax(0, auto) auto;
-    gap: 10px;
+    display: inline-flex;
+    gap: 8px;
     align-items: center;
     justify-content: center;
     min-width: 0;
     max-width: 100%;
-    height: 38px;
-    padding: 0 12px;
-    color: var(--text);
-    background: rgba(255, 252, 244, 0.045);
-    border: 1px solid rgba(255, 252, 244, 0.12);
-    border-radius: 8px;
+    height: 36px;
+    padding: 0 10px;
+    color: var(--editor-text);
+    background: var(--editor-panel);
+    border: 1px solid var(--editor-border);
+    border-radius: var(--editor-radius-md);
+    box-shadow: none;
   }
 
   .resource-editor-title.is-loading {
-    opacity: 0.72;
+    opacity: 0.66;
   }
 
   .resource-editor-title__icon {
     display: grid;
+    flex: 0 0 auto;
     place-items: center;
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     color: var(--resource-editor-color);
   }
 
@@ -2388,115 +4730,371 @@ onUnmounted(() => {
 
   .resource-editor-title__name {
     min-width: 0;
+    max-width: min(240px, 24vw);
+    padding: 4px;
     overflow: hidden;
-    font-size: 0.86rem;
-    font-weight: 760;
+    color: var(--editor-text);
+    font-size: 13px;
+    font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--editor-radius-sm);
+    outline: none;
+  }
+
+  .resource-editor-title__name:hover:not(:disabled) {
+    background: var(--editor-surface);
+  }
+
+  .resource-editor-title__name:focus-visible {
+    border-color: var(--editor-focus);
+  }
+
+  .resource-editor-title__name:disabled {
+    cursor: default;
+  }
+
+  .resource-editor-title__name-input {
+    width: min(220px, 23vw);
+    height: 28px;
+    padding: 0 6px;
+    box-sizing: border-box;
+    color: var(--editor-text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    background: var(--editor-surface);
+    border: 1px solid var(--editor-border-strong);
+    border-radius: var(--editor-radius-sm);
+    outline: 1px solid var(--editor-focus);
+    outline-offset: 1px;
   }
 
   .resource-editor-title__kind {
     flex: 0 0 auto;
-    color: var(--quiet);
-    font-size: 0.68rem;
-    font-weight: 760;
+    color: var(--editor-quiet);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .resource-editor-title__save-cluster {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    padding-left: 8px;
+    border-left: 1px solid var(--editor-border);
+  }
+
+  .resource-editor :deep(.studio-topbar) {
+    min-height: 56px;
+    padding: 6px 16px;
+    background: #0b0b0b;
+    border-bottom-color: var(--editor-border);
+    backdrop-filter: none;
+  }
+
+  .resource-editor :deep(.studio-topbar__logo) {
+    width: 26px;
+    height: 26px;
+    filter: none;
+  }
+
+  .resource-editor :deep(.studio-topbar__project-logo),
+  .resource-editor :deep(.studio-topbar__project-logo-loader) {
+    width: 34px;
+    height: 34px;
+    border-color: var(--editor-border-strong);
+    border-radius: var(--editor-radius-md);
+  }
+
+  .resource-editor :deep(.studio-topbar__brand-trail.has-logo) {
+    width: 36px;
+    height: 36px;
+  }
+
+  .resource-editor :deep(.studio-topbar__avatar) {
+    width: 34px;
+    height: 34px;
+    border-color: var(--editor-border-strong);
+  }
+
+  .resource-editor :deep(.studio-topbar__user-label) {
+    color: var(--editor-muted);
+    font-size: 12px;
+    font-weight: 550;
   }
 
   .resource-editor-stage {
     position: relative;
     flex: 1;
     min-height: 0;
+    background: var(--editor-bg);
   }
 
   .resource-editor-canvas {
+    --editor-left-dock: 48px;
+    --editor-right-dock: clamp(360px, 24vw, 400px);
     position: absolute;
     inset: 0;
     display: grid;
-    place-items: center;
+    grid-template-columns: var(--editor-left-dock) minmax(0, 1fr) var(--editor-right-dock);
+    grid-template-rows: 36px minmax(0, 1fr) 30px;
+    place-items: stretch;
+    min-width: 0;
+    min-height: 0;
     overflow: hidden;
-    background:
-      linear-gradient(rgba(247, 241, 231, 0.055) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(247, 241, 231, 0.055) 1px, transparent 1px),
-      #020303;
-    background-size: 28px 28px;
+    isolation: isolate;
+    background: var(--editor-bg);
   }
 
   .resource-editor-canvas::after {
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    content: "";
-    background:
-      radial-gradient(circle at 50% 44%, transparent 0, rgba(0, 0, 0, 0.18) 54%, rgba(0, 0, 0, 0.5) 100%),
-      linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.34));
-    pointer-events: none;
+    display: none;
+    content: none;
+  }
+
+  .image-editor-left-dock {
+    position: relative;
+    z-index: 4;
+    grid-column: 1;
+    grid-row: 1 / 4;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+    padding: 6px 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background: var(--editor-panel);
+    border-right: 1px solid var(--editor-border);
+    box-shadow: none;
+    scrollbar-color: var(--editor-border-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  .image-editor-left-dock::before,
+  .image-editor-left-dock::after {
+    display: none;
+    content: none;
   }
 
   .image-editor-toolbar {
-    position: absolute;
-    top: 18px;
-    left: 22px;
-    z-index: 3;
-    display: grid;
-    grid-template-columns: repeat(2, 40px);
-    gap: 8px;
+    position: static;
+    width: 32px;
+    min-width: 32px;
   }
 
-  .image-editor-tool {
-    display: inline-grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    color: rgba(247, 241, 231, 0.74);
-    cursor: pointer;
-    background: rgba(16, 17, 17, 0.72);
-    border: 1px solid rgba(247, 241, 231, 0.16);
-    border-radius: 8px;
+  .image-editor-context-host {
+    position: relative;
+    z-index: 3;
+    grid-column: 2;
+    grid-row: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .image-editor-viewport {
+    position: relative;
+    z-index: 1;
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    cursor: crosshair;
+    background: var(--editor-bg);
     outline: none;
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease,
-      transform 160ms ease;
+    touch-action: none;
+    user-select: none;
   }
 
-  .image-editor-tool:hover,
-  .image-editor-tool:focus-visible,
-  .image-editor-tool.is-active {
-    color: #101111;
-    background: #f7f1e7;
-    border-color: #f7f1e7;
+  .image-editor-viewport.is-pixel-mutation-blocked,
+  .image-editor-viewport.is-pixel-mutation-blocked .image-editor-artboard,
+  .image-editor-artboard.is-pixel-mutation-blocked {
+    cursor: not-allowed;
   }
 
-  .image-editor-tool:hover,
-  .image-editor-tool:focus-visible {
-    transform: translateY(-1px);
+  .image-editor-viewport.is-pan-ready {
+    cursor: grab;
   }
 
-  .image-editor-color-panel {
-    position: absolute;
-    bottom: 28px;
-    left: 22px;
+  .image-editor-viewport.is-panning {
+    cursor: grabbing;
+  }
+
+  .image-editor-viewport.is-pan-ready .image-editor-artboard {
+    cursor: grab;
+  }
+
+  .image-editor-viewport.is-panning .image-editor-artboard {
+    cursor: grabbing;
+  }
+
+  .image-editor-viewport::before,
+  .image-editor-viewport::after {
+    display: none;
+    content: none;
+  }
+
+  .image-editor-statusbar {
+    position: relative;
     z-index: 3;
+    grid-column: 2;
+    grid-row: 3;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+    min-height: 30px;
+    padding: 0 6px 0 10px;
+    box-sizing: border-box;
+    color: var(--editor-quiet);
+    background: var(--editor-panel);
+    border-top: 1px solid var(--editor-border);
+  }
+
+  .image-editor-statusbar__document {
+    min-width: 0;
+    overflow: hidden;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .image-editor-zoom-host {
+    position: static;
+    flex: 0 0 auto;
+    transform: none;
+  }
+
+  .image-editor-notice-host {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    z-index: 7;
+    max-width: min(460px, calc(100% - 28px));
+    transform: translateX(-50%);
+  }
+
+  .image-editor-right-dock {
+    position: relative;
+    z-index: 4;
+    grid-column: 3;
+    grid-row: 1 / 4;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    box-sizing: border-box;
+    background: var(--editor-panel);
+    border-left: 1px solid var(--editor-border);
+    box-shadow: none;
+  }
+
+  .image-editor-preview {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 6;
     display: grid;
-    place-items: center;
-    width: 292px;
+    place-items: start end;
+    width: var(--image-preview-size, 176px);
+    height: var(--image-preview-size, 176px);
     padding: 0;
     box-sizing: border-box;
     background: transparent;
     border: 0;
+    border-radius: 0;
     box-shadow: none;
-    backdrop-filter: none;
-    transform: scale(0.82);
-    transform-origin: bottom left;
+    pointer-events: none;
+  }
+
+  .image-editor-preview__grid {
+    position: relative;
+    display: block;
+    align-self: start;
+    justify-self: end;
+    max-width: 100%;
+    max-height: 100%;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: var(--image-preview-empty-pixel, #101010);
+    border: 0;
+    border-radius: var(--editor-radius-sm);
+    box-shadow: inset 0 0 0 1px var(--editor-border-strong);
+  }
+
+  .image-editor-preview__grid canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .image-editor-preview__viewport {
+    position: absolute;
+    z-index: 2;
+    min-width: 6px;
+    min-height: 6px;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.14);
+    border: 1px solid var(--editor-text);
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--editor-selected-ink);
+    pointer-events: none;
+  }
+
+  .image-editor-layers-host {
+    position: static;
+    flex: 0 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    max-height: min(250px, 28vh);
+    overflow: hidden;
+    border-bottom: 1px solid var(--editor-border);
+  }
+
+  .image-editor-color-panel {
+    position: static;
+    display: grid;
+    flex: 0 0 auto;
+    grid-template-areas:
+      "picker value"
+      "picker swatches"
+      "palette palette";
+    grid-template-columns: 144px minmax(0, 1fr);
+    gap: 7px 12px;
+    align-items: start;
+    width: 100%;
+    min-width: 0;
+    padding: 12px;
+    box-sizing: border-box;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--editor-border);
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
   }
 
   .image-editor-color-picker-stage {
     position: relative;
+    grid-area: picker;
     width: 292px;
     height: 292px;
+    margin-right: -148px;
+    margin-bottom: -148px;
+    transform: scale(0.493);
+    transform-origin: top left;
   }
 
   .image-editor-color-wheel {
@@ -2504,7 +5102,6 @@ onUnmounted(() => {
     inset: 0;
     width: 292px;
     height: 292px;
-    border-radius: 50%;
     cursor: crosshair;
     background: conic-gradient(
       from -90deg,
@@ -2516,20 +5113,19 @@ onUnmounted(() => {
       #f0f,
       #f00
     );
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.6),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+    border: 1px solid #565656;
+    border-radius: 50%;
+    box-shadow: none;
   }
 
   .image-editor-color-wheel::after {
     position: absolute;
     inset: 28px;
     content: "";
-    background: rgba(16, 17, 17, 0.96);
+    background: #101010;
+    border: 1px solid #3a3a3a;
     border-radius: 50%;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.6),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    box-shadow: none;
     pointer-events: none;
   }
 
@@ -2540,11 +5136,10 @@ onUnmounted(() => {
     width: 12px;
     height: 12px;
     box-sizing: border-box;
-    border: 2px solid #f7f1e7;
-    border-radius: 999px;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.72),
-      0 2px 8px rgba(0, 0, 0, 0.42);
+    background: transparent;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    outline: 1px solid #000000;
     pointer-events: none;
     transform: translate(-50%, -50%);
   }
@@ -2552,12 +5147,10 @@ onUnmounted(() => {
   .image-editor-color-hue-handle {
     width: 28px;
     height: 8px;
-    background: #f7f1e7;
-    border: 1px solid rgba(16, 17, 17, 0.72);
-    border-radius: 999px;
-    box-shadow:
-      0 0 0 1px rgba(247, 241, 231, 0.78),
-      0 2px 8px rgba(0, 0, 0, 0.44);
+    background: #ffffff;
+    border: 1px solid #000000;
+    border-radius: 4px;
+    outline: 1px solid #ffffff;
   }
 
   .image-editor-color-triangle {
@@ -2567,23 +5160,15 @@ onUnmounted(() => {
     z-index: 2;
     width: 196px;
     height: 184px;
-    cursor: crosshair;
     overflow: visible;
-    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.34));
+    cursor: crosshair;
+    filter: none;
     pointer-events: none;
   }
 
   .image-editor-color-triangle::after {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    content: "";
-    background:
-      linear-gradient(145deg, rgba(255, 255, 255, 0.22), transparent 34%),
-      radial-gradient(circle at 50% 62%, transparent 0 48%, rgba(0, 0, 0, 0.2) 78%);
-    clip-path: polygon(50% 0, 0 100%, 100% 100%);
-    mix-blend-mode: soft-light;
-    pointer-events: none;
+    display: none;
+    content: none;
   }
 
   .image-editor-color-triangle canvas,
@@ -2616,252 +5201,219 @@ onUnmounted(() => {
 
   .image-editor-color-value {
     display: grid;
-    grid-template-columns: 32px 118px 34px;
-    gap: 9px;
+    grid-area: value;
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 6px;
     align-items: center;
-    width: max-content;
-    margin-top: 14px;
-    transform: scale(1.16);
-    transform-origin: top center;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    transform: none;
   }
 
-  .image-editor-color-value span {
-    width: 32px;
-    height: 32px;
+  .image-editor-color-value > span {
+    width: 34px;
+    height: 34px;
+    box-sizing: border-box;
     background: var(--selected-image-color, #ffffff);
-    border: 1px solid rgba(247, 241, 231, 0.58);
-    border-radius: 6px;
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.38);
+    border: 1px solid var(--editor-border-strong);
+    border-radius: var(--editor-radius-sm);
+    box-shadow: none;
   }
 
   .image-editor-color-value input {
-    min-width: 0;
     width: 100%;
+    min-width: 0;
     height: 34px;
     padding: 0 8px;
-    background: rgba(5, 5, 5, 0.42);
-    border: 1px solid transparent;
-    border-radius: 6px;
-    outline: none;
-    color: rgba(247, 241, 231, 0.76);
+    box-sizing: border-box;
+    color: var(--editor-muted);
     font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-    font-size: 0.82rem;
-    font-weight: 760;
-    line-height: 1;
+    font-size: 12px;
+    font-weight: 550;
     text-transform: uppercase;
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease;
+    background: var(--editor-surface);
+    border: 1px solid var(--editor-border);
+    border-radius: var(--editor-radius-sm);
+    outline: none;
   }
 
-  .image-editor-color-value input:hover,
+  .image-editor-color-value input:hover {
+    border-color: var(--editor-border-strong);
+  }
+
   .image-editor-color-value input:focus-visible {
-    background: rgba(5, 5, 5, 0.64);
-    border-color: rgba(247, 241, 231, 0.36);
-    color: rgba(247, 241, 231, 0.96);
+    border-color: var(--editor-focus);
   }
 
   .image-editor-color-add {
     display: grid;
     place-items: center;
     width: 34px;
+    min-width: 34px;
     height: 34px;
     padding: 0;
-    color: rgba(247, 241, 231, 0.82);
-    background: rgba(5, 5, 5, 0.42);
-    border: 1px solid rgba(247, 241, 231, 0.22);
-    border-radius: 6px;
+    color: var(--editor-muted);
     cursor: pointer;
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease,
-      transform 160ms ease;
+    background: transparent;
+    border: 1px solid var(--editor-border);
+    border-radius: var(--editor-radius-sm);
+    box-shadow: none;
+    outline: none;
   }
 
-  .image-editor-color-add:hover,
+  .image-editor-color-add:hover:not(:disabled) {
+    color: var(--editor-text);
+    background: var(--editor-hover);
+    border-color: var(--editor-border-strong);
+  }
+
   .image-editor-color-add:focus-visible {
-    color: rgba(247, 241, 231, 0.98);
-    background: rgba(5, 5, 5, 0.66);
-    border-color: rgba(247, 241, 231, 0.42);
-    outline: none;
-    transform: translateY(-1px);
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
+  }
+
+  .image-editor-color-add:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+  }
+
+  .image-editor-color-swatches-host {
+    grid-area: swatches;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    transform: none;
   }
 
   .image-editor-color-palette {
-    position: absolute;
-    right: 22px;
-    bottom: 22px;
-    z-index: 3;
+    position: static;
     display: grid;
-    gap: 10px;
-    width: 260px;
-    max-width: min(260px, calc(100vw - 360px));
-    padding: 12px;
-    background: rgba(12, 13, 13, 0.82);
-    border: 1px solid rgba(247, 241, 231, 0.14);
-    border-radius: 8px;
-    box-shadow:
-      0 18px 40px rgba(0, 0, 0, 0.34),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(12px);
-  }
-
-  .image-editor-color-palette__title {
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    color: rgba(247, 241, 231, 0.72);
-    font-size: 0.72rem;
-    font-weight: 760;
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  .image-editor-color-palette__swatches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    justify-content: flex-start;
-    width: 210px;
-    justify-self: center;
-  }
-
-  .image-editor-color-swatch {
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    background: var(--palette-color, #ffffff);
-    border: 1px solid rgba(247, 241, 231, 0.28);
-    border-radius: 6px;
-    box-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.3),
-      0 4px 12px rgba(0, 0, 0, 0.24);
-    cursor: pointer;
-    transition:
-      border-color 160ms ease,
-      box-shadow 160ms ease,
-      transform 160ms ease;
-  }
-
-  .image-editor-color-swatch:hover,
-  .image-editor-color-swatch:focus-visible {
-    border-color: rgba(247, 241, 231, 0.72);
-    outline: none;
-    transform: translateY(-1px);
-  }
-
-  .image-editor-color-swatch.is-active {
-    border-color: rgba(247, 241, 231, 0.92);
-    box-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.38),
-      0 0 0 2px rgba(247, 241, 231, 0.18),
-      0 4px 12px rgba(0, 0, 0, 0.26);
-  }
-
-  .image-editor-preview {
-    position: absolute;
-    top: 18px;
-    right: 22px;
-    z-index: 3;
-    width: clamp(138px, 13vw, 204px);
-    aspect-ratio: 1;
-    display: grid;
+    grid-area: palette;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
-    box-sizing: border-box;
-    justify-items: end;
-    pointer-events: none;
-  }
-
-  .image-editor-preview__grid {
-    position: relative;
-    display: block;
     width: 100%;
-    overflow: hidden;
-    background: var(--image-preview-empty-pixel, #101111);
-    border: 1px solid rgba(247, 241, 231, 0.34);
-    border-radius: 5px;
-    box-shadow:
-      0 14px 34px rgba(0, 0, 0, 0.28),
-      0 0 0 1px rgba(0, 0, 0, 0.5);
-    image-rendering: pixelated;
-  }
-
-  .image-editor-preview__grid canvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-    image-rendering: pixelated;
-  }
-
-  .image-editor-preview__grid .image-editor-preview__viewport {
-    position: absolute;
-    z-index: 2;
+    max-width: none;
+    padding: 8px 0 0;
     box-sizing: border-box;
-    min-width: 8px;
-    min-height: 8px;
-    background: rgba(247, 241, 231, 0.08);
-    border: 2px solid #f7f1e7;
-    border-radius: 3px;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.68),
-      0 0 12px rgba(247, 241, 231, 0.24);
-    pointer-events: none;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--editor-border);
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
   }
 
   .image-editor-side-inspector {
-    position: absolute;
-    top: 50%;
-    right: 14px;
-    z-index: 4;
-    width: 40px;
-    pointer-events: none;
-    transform: translateY(-50%);
+    position: static;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    overflow: hidden;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .image-editor-inspector-rail {
+    position: static;
+    z-index: 2;
+    order: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px;
+    width: 100%;
+    min-height: 42px;
+    padding: 3px;
+    box-sizing: border-box;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--editor-border);
+    border-radius: 0;
+    pointer-events: auto;
+  }
+
+  .image-editor-inspector-button {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    padding: 0;
+    color: var(--editor-quiet);
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-right: 0;
+    border-radius: var(--editor-radius-sm);
+    box-shadow: none;
+    outline: none;
+  }
+
+  .image-editor-inspector-button:last-child {
+    border-right: 0;
+  }
+
+  .image-editor-inspector-button:hover {
+    color: var(--editor-text);
+    background: var(--editor-hover);
+  }
+
+  .image-editor-inspector-button:focus-visible {
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
+  }
+
+  .image-editor-inspector-button.is-active {
+    color: var(--editor-selected-ink);
+    background: var(--editor-selected);
   }
 
   .image-editor-inspector-panel {
-    position: absolute;
-    top: 50%;
-    right: calc(100% + 8px);
-    display: block;
-    gap: 14px;
-    width: 284px;
-    max-height: calc(100dvh - 118px);
-    padding: 13px;
+    position: static;
+    order: 1;
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
     overflow-x: hidden;
     overflow-y: auto;
     box-sizing: border-box;
-    background:
-      linear-gradient(180deg, rgba(255, 252, 244, 0.045), rgba(255, 252, 244, 0.015)),
-      rgba(16, 17, 17, 0.92);
-    border: 1px solid rgba(247, 241, 231, 0.18);
-    border-radius: 8px;
-    box-shadow:
-      0 18px 42px rgba(0, 0, 0, 0.34),
-      inset 0 1px 0 rgba(255, 252, 244, 0.06);
+    color: var(--editor-text);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
     pointer-events: auto;
-    transform: translateY(-50%);
+    transform: none;
+    scrollbar-color: var(--editor-border-strong) transparent;
+    scrollbar-width: thin;
   }
 
   .image-editor-inspector-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
+    min-height: 40px;
+    padding: 7px 12px;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--editor-border);
   }
 
   .image-editor-inspector-title {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: 16px minmax(0, 1fr);
     gap: 7px;
     align-items: center;
     min-width: 0;
-    color: #f7f1e7;
-    font-size: 0.72rem;
-    font-weight: 820;
-    letter-spacing: 0;
-    line-height: 1;
+    color: var(--editor-text);
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .image-editor-inspector-title span {
@@ -2873,333 +5425,325 @@ onUnmounted(() => {
   .image-editor-inspector-close {
     display: grid;
     place-items: center;
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
     padding: 0;
-    color: rgba(247, 241, 231, 0.54);
+    color: var(--editor-quiet);
     cursor: pointer;
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 5px;
+    border: 0;
+    border-radius: var(--editor-radius-sm);
     outline: none;
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease;
   }
 
-  .image-editor-inspector-close:hover,
+  .image-editor-inspector-close:hover {
+    color: var(--editor-text);
+    background: var(--editor-hover);
+  }
+
   .image-editor-inspector-close:focus-visible {
-    color: #f7f1e7;
-    background: rgba(255, 252, 244, 0.055);
-    border-color: rgba(247, 241, 231, 0.14);
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
   }
 
-  .image-editor-inspector-rail {
+  .image-editor-settings-page,
+  .image-editor-dimensions,
+  .image-editor-anchor-field,
+  .image-editor-preference-group {
     display: grid;
-    gap: 8px;
-    width: 40px;
-    box-sizing: border-box;
-    justify-items: center;
-    pointer-events: auto;
-  }
-
-  .image-editor-inspector-button {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    color: rgba(247, 241, 231, 0.58);
-    cursor: pointer;
-    background:
-      linear-gradient(180deg, rgba(255, 252, 244, 0.055), rgba(255, 252, 244, 0.018)),
-      rgba(16, 17, 17, 0.9);
-    border: 1px solid rgba(247, 241, 231, 0.16);
-    border-radius: 8px;
-    outline: none;
-    box-shadow:
-      0 12px 28px rgba(0, 0, 0, 0.3),
-      inset 0 1px 0 rgba(255, 252, 244, 0.055);
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease,
-      transform 160ms ease;
-  }
-
-  .image-editor-inspector-button:hover,
-  .image-editor-inspector-button:focus-visible {
-    color: rgba(247, 241, 231, 0.9);
-    background:
-      linear-gradient(180deg, rgba(255, 252, 244, 0.09), rgba(255, 252, 244, 0.035)),
-      rgba(16, 17, 17, 0.94);
-    border-color: rgba(247, 241, 231, 0.2);
-  }
-
-  .image-editor-inspector-button.is-active {
-    color: #101111;
-    background: #f7f1e7;
-    border-color: #f7f1e7;
-    box-shadow: 0 0 0 1px rgba(247, 241, 231, 0.2);
-  }
-
-  .image-editor-settings-page {
-    display: grid;
-    gap: 15px;
     min-width: 0;
   }
 
-  .image-editor-dimensions {
-    display: grid;
+  .image-editor-settings-page {
+    gap: 16px;
+    padding: 12px;
+  }
+
+  .image-editor-dimensions,
+  .image-editor-anchor-field {
+    gap: 8px;
+  }
+
+  .image-editor-preference-group {
     gap: 9px;
-    justify-items: stretch;
-    width: 100%;
+  }
+
+  .image-editor-preference-group + .image-editor-preference-group {
+    padding-top: 14px;
+    border-top: 1px solid var(--editor-border);
   }
 
   .image-editor-control-heading {
-    width: 100%;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 9px;
-    align-items: center;
-    color: rgba(247, 241, 231, 0.48);
-    font-size: 0.65rem;
-    font-weight: 820;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    text-transform: uppercase;
+    color: var(--editor-muted);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: none;
   }
 
   .image-editor-control-heading::after {
-    display: block;
-    height: 1px;
-    content: "";
-    background: linear-gradient(90deg, rgba(247, 241, 231, 0.16), transparent);
+    display: none;
+    content: none;
+  }
+
+  .image-editor-grid-subheading {
+    padding-top: 3px;
+    color: var(--editor-quiet);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .image-editor-size-row,
+  .image-editor-preference-row,
+  .image-editor-range-row,
+  .image-editor-toggle-row {
+    display: grid;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+    min-height: 34px;
   }
 
   .image-editor-size-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 62px;
-    gap: 10px;
-    align-items: center;
-    width: 100%;
+    grid-template-columns: minmax(0, 1fr) 84px;
   }
 
-  .image-editor-size-field {
-    justify-self: start;
-    color: rgba(247, 241, 231, 0.68);
-    font-size: 0.74rem;
-    font-weight: 760;
-    line-height: 1;
+  .image-editor-preference-row {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+
+  .image-editor-range-row {
+    grid-template-columns: 84px minmax(72px, 1fr) 64px;
+  }
+
+  .image-editor-toggle-row {
+    grid-template-columns: minmax(0, 1fr) 32px;
+  }
+
+  .image-editor-size-field,
+  .image-editor-preference-label,
+  .image-editor-range-row > label,
+  .image-editor-toggle-row > span {
+    color: var(--editor-muted);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .image-editor-size-input,
+  .image-editor-opacity-input,
+  .image-editor-preference-number-input {
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    color: var(--editor-text);
+    font: inherit;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    background: var(--editor-surface);
+    border: 1px solid var(--editor-border);
+    border-radius: 5px;
+    outline: none;
+  }
+
+  .image-editor-size-input:hover,
+  .image-editor-opacity-input:hover,
+  .image-editor-preference-number-input:hover {
+    border-color: var(--editor-border-strong);
+  }
+
+  .image-editor-size-input:focus-visible,
+  .image-editor-opacity-input:focus-visible,
+  .image-editor-preference-number-input:focus-visible {
+    border-color: var(--editor-focus);
+  }
+
+  .image-editor-size-input:disabled,
+  .image-editor-opacity-input:disabled,
+  .image-editor-preference-number-input:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
   }
 
   .image-editor-dimension-link-row {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
-    gap: 8px;
+    display: flex;
+    gap: 7px;
     align-items: center;
-    width: 100%;
-    min-height: 22px;
-    padding: 1px 0 0;
-    box-sizing: border-box;
+    min-height: 34px;
   }
 
   .image-editor-dimension-link {
     display: grid;
-    justify-self: start;
     place-items: center;
-    width: 20px;
-    height: 20px;
+    width: 32px;
+    height: 32px;
     padding: 0;
-    color: rgba(247, 241, 231, 0.52);
+    color: var(--editor-quiet);
     cursor: pointer;
-    background: rgba(255, 252, 244, 0.035);
-    border: 1px solid rgba(247, 241, 231, 0.14);
+    background: transparent;
+    border: 1px solid var(--editor-border);
     border-radius: 5px;
     outline: none;
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-    color 160ms ease;
   }
 
-  .image-editor-dimension-link-label {
-    justify-self: start;
-    min-width: 0;
-    color: rgba(247, 241, 231, 0.68);
-    font-size: 0.72rem;
-    font-weight: 760;
-    line-height: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .image-editor-dimension-link:hover {
+    color: var(--editor-text);
+    background: var(--editor-hover);
+    border-color: var(--editor-border-strong);
   }
 
-  .image-editor-dimension-link:hover,
   .image-editor-dimension-link:focus-visible {
-    color: rgba(247, 241, 231, 0.86);
-    background: rgba(255, 252, 244, 0.08);
-    border-color: rgba(247, 241, 231, 0.24);
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
   }
 
   .image-editor-dimension-link.is-active {
-    color: #101111;
-    background: #f7f1e7;
-    border-color: #f7f1e7;
+    color: var(--editor-selected-ink);
+    background: var(--editor-selected);
+    border-color: var(--editor-selected);
   }
 
-  .image-editor-size-input {
-    width: 62px;
-    height: 34px;
-    padding: 0 7px;
-    box-sizing: border-box;
-    color: #f7f1e7;
-    background: rgba(255, 252, 244, 0.045);
-    border: 1px solid rgba(247, 241, 231, 0.18);
-    border-radius: 7px;
-    outline: none;
-    font: inherit;
-    font-size: 0.82rem;
-    text-align: center;
+  .image-editor-dimension-link-label {
+    color: var(--editor-quiet);
+    font-size: 12px;
   }
 
-  .image-editor-size-input:focus {
-    border-color: rgba(247, 241, 231, 0.36);
-    background: rgba(255, 252, 244, 0.075);
-  }
-
-  .image-editor-preferences {
-    gap: 16px;
-  }
-
-  .image-editor-preference-group {
+  .image-editor-anchor-grid {
     display: grid;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .image-editor-preference-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
-    gap: 10px;
-    align-items: center;
-    min-width: 0;
-  }
-
-  .image-editor-preferences .image-editor-preference-row {
-    grid-template-columns: 92px minmax(136px, 1fr);
-    min-height: 34px;
-  }
-
-  .image-editor-grid-subheading {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 8px;
-    align-items: center;
-    padding-top: 4px;
-    color: rgba(247, 241, 231, 0.46);
-    font-size: 0.62rem;
-    font-weight: 820;
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  .image-editor-grid-subheading::after {
-    height: 1px;
-    content: "";
-    background: rgba(247, 241, 231, 0.09);
-  }
-
-  .image-editor-preference-label,
-  .image-editor-toggle-row span,
-  .image-editor-range-row label {
-    color: rgba(247, 241, 231, 0.72);
-    font-size: 0.74rem;
-    font-weight: 760;
-    line-height: 1;
-  }
-
-  .image-editor-gap-list,
-  .image-editor-grid-color-list,
-  .image-editor-segment-list {
-    display: flex;
-    flex-wrap: wrap;
+    grid-template-columns: repeat(3, 32px);
     gap: 6px;
-    align-items: center;
-    justify-content: end;
-    min-width: 0;
   }
 
-  .image-editor-preferences .image-editor-gap-list,
-  .image-editor-preferences .image-editor-grid-color-list,
-  .image-editor-preferences .image-editor-segment-list {
-    justify-content: end;
-  }
-
-  .image-editor-preferences .image-editor-segment-list {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    justify-self: end;
-    width: 136px;
-  }
-
-  .image-editor-background-color-picker,
-  .image-editor-grid-color-picker,
-  .image-editor-subdivision-color-picker,
+  .image-editor-anchor-grid button,
   .image-editor-gap-button,
   .image-editor-segment-button {
     display: grid;
     place-items: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    color: rgba(247, 241, 231, 0.72);
+    min-width: 32px;
+    height: 32px;
+    padding: 0 7px;
+    color: var(--editor-muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
-    border: 1px solid rgba(247, 241, 231, 0.18);
-    border-radius: 6px;
+    background: transparent;
+    border: 1px solid var(--editor-border);
+    border-radius: 5px;
+    box-shadow: none;
     outline: none;
-    box-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.3),
-      0 1px 0 rgba(255, 252, 244, 0.04);
-    transition:
-      border-color 160ms ease,
-      box-shadow 160ms ease,
-      color 160ms ease,
-      transform 160ms ease;
   }
 
-  .image-editor-background-color-picker {
-    position: relative;
-    overflow: hidden;
-    background: var(--custom-background-color, #101111);
+  .image-editor-anchor-grid button {
+    width: 32px;
   }
 
+  .image-editor-anchor-grid button:hover:not(:disabled),
+  .image-editor-gap-button:hover:not(:disabled),
+  .image-editor-segment-button:hover:not(:disabled) {
+    color: var(--editor-text);
+    background: var(--editor-hover);
+    border-color: var(--editor-border-strong);
+  }
+
+  .image-editor-anchor-grid button:focus-visible,
+  .image-editor-gap-button:focus-visible,
+  .image-editor-segment-button:focus-visible {
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
+  }
+
+  .image-editor-anchor-grid button.is-active,
+  .image-editor-gap-button.is-active,
+  .image-editor-segment-button.is-active {
+    color: var(--editor-selected-ink);
+    background: var(--editor-selected);
+    border-color: var(--editor-selected);
+  }
+
+  .image-editor-anchor-grid button:disabled,
+  .image-editor-gap-button:disabled,
+  .image-editor-segment-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.35;
+  }
+
+  .image-editor-anchor-grid button span {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+  }
+
+  .image-editor-anchor-grid button i {
+    display: block;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .image-editor-anchor-grid button i.is-anchor {
+    width: 6px;
+    height: 6px;
+    background: var(--editor-selected-ink);
+    border-radius: 50%;
+  }
+
+  .image-editor-anchor-grid button i.is-up {
+    border-right: 4px solid transparent;
+    border-bottom: 6px solid currentColor;
+    border-left: 4px solid transparent;
+  }
+
+  .image-editor-anchor-grid button i.is-right {
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 6px solid currentColor;
+  }
+
+  .image-editor-anchor-grid button i.is-down {
+    border-top: 6px solid currentColor;
+    border-right: 4px solid transparent;
+    border-left: 4px solid transparent;
+  }
+
+  .image-editor-anchor-grid button i.is-left {
+    border-top: 4px solid transparent;
+    border-right: 6px solid currentColor;
+    border-bottom: 4px solid transparent;
+  }
+
+  .image-editor-gap-list,
+  .image-editor-segment-list,
+  .image-editor-grid-color-list {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .image-editor-segment-list {
+    flex-wrap: wrap;
+  }
+
+  .image-editor-background-color-picker,
   .image-editor-grid-color-picker,
   .image-editor-subdivision-color-picker {
     position: relative;
+    display: block;
+    width: 32px;
+    height: 32px;
     overflow: hidden;
-    background: var(--custom-grid-color, #f7f1e7);
-  }
-
-  .image-editor-subdivision-color-picker {
-    margin-left: 3px;
-    background: var(--custom-subdivision-color, #ff4d4d);
-  }
-
-  .image-editor-background-color-picker::after,
-  .image-editor-grid-color-picker::after,
-  .image-editor-subdivision-color-picker::after {
-    position: absolute;
-    right: 3px;
-    bottom: 3px;
-    width: 6px;
-    height: 6px;
-    content: "";
-    background: #f7f1e7;
-    border-radius: 50%;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.56);
-    pointer-events: none;
+    background: var(--custom-background-color, var(--custom-grid-color, var(--custom-subdivision-color, #ffffff)));
+    border: 1px solid var(--editor-border-strong);
+    border-radius: 5px;
+    cursor: pointer;
+    outline: none;
   }
 
   .image-editor-background-color-picker input,
@@ -3214,276 +5758,43 @@ onUnmounted(() => {
     opacity: 0;
   }
 
+  .image-editor-background-color-picker:focus-within,
+  .image-editor-grid-color-picker:focus-within,
+  .image-editor-subdivision-color-picker:focus-within {
+    outline: 1px solid var(--editor-focus);
+    outline-offset: 1px;
+  }
+
   .image-editor-grid-color-picker:has(input:disabled),
   .image-editor-subdivision-color-picker:has(input:disabled) {
-    cursor: default;
-    opacity: 0.46;
-  }
-
-  .image-editor-background-color-picker:hover,
-  .image-editor-background-color-picker:focus-within,
-  .image-editor-grid-color-picker:hover,
-  .image-editor-grid-color-picker:focus-within,
-  .image-editor-subdivision-color-picker:hover,
-  .image-editor-subdivision-color-picker:focus-within,
-  .image-editor-gap-button:hover,
-  .image-editor-gap-button:focus-visible,
-  .image-editor-segment-button:hover,
-  .image-editor-segment-button:focus-visible {
-    border-color: rgba(247, 241, 231, 0.48);
-    transform: translateY(-1px);
-  }
-
-  .image-editor-grid-color-picker:focus-within,
-  .image-editor-subdivision-color-picker:focus-within,
-  .image-editor-gap-button.is-active,
-  .image-editor-segment-button.is-active {
-    color: #101111;
-    border-color: #f7f1e7;
-    box-shadow:
-      0 0 0 1px rgba(247, 241, 231, 0.24),
-      0 6px 14px rgba(0, 0, 0, 0.22),
-      inset 0 0 0 1px rgba(0, 0, 0, 0.36);
-  }
-
-  .image-editor-gap-button {
-    width: 24px;
-    height: 24px;
-    background: rgba(255, 252, 244, 0.045);
-    font: inherit;
-    font-size: 0.7rem;
-    font-weight: 800;
-  }
-
-  .image-editor-gap-button.is-active {
-    background: #f7f1e7;
-  }
-
-  .image-editor-preference-number-input {
-    justify-self: end;
-    width: 62px;
-    height: 34px;
-    padding: 0 8px;
-    box-sizing: border-box;
-    color: #f7f1e7;
-    background: rgba(255, 252, 244, 0.045);
-    border: 1px solid rgba(247, 241, 231, 0.18);
-    border-radius: 7px;
-    outline: none;
-    font: inherit;
-    font-size: 0.82rem;
-    font-weight: 800;
-    text-align: center;
-  }
-
-  .image-editor-preference-number-input:focus {
-    border-color: rgba(247, 241, 231, 0.36);
-    background: rgba(255, 252, 244, 0.075);
-  }
-
-  .image-editor-preference-number-input:disabled {
-    cursor: default;
-    opacity: 0.42;
-  }
-
-  .image-editor-segment-button {
-    width: auto;
-    min-width: 0;
-    padding: 0 5px;
-    background: rgba(255, 252, 244, 0.045);
-    font: inherit;
-    font-size: 0.66rem;
-    font-weight: 800;
-  }
-
-  .image-editor-segment-button.is-active {
-    color: #101111;
-    background: #f7f1e7;
-  }
-
-  .image-editor-gap-button:disabled,
-  .image-editor-segment-button:disabled {
-    cursor: default;
-    opacity: 0.42;
-    transform: none;
-  }
-
-  .image-editor-toggle-row {
-    display: grid;
-    grid-template-columns: 92px minmax(136px, 1fr);
-    gap: 10px;
-    align-items: center;
-    min-height: 26px;
+    cursor: not-allowed;
+    opacity: 0.4;
   }
 
   .image-editor-toggle-row input {
     justify-self: end;
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     margin: 0;
-    cursor: pointer;
-    appearance: none;
-    background: rgba(255, 252, 244, 0.04);
-    border: 1px solid rgba(247, 241, 231, 0.2);
-    border-radius: 5px;
-    outline: none;
+    accent-color: var(--editor-selected);
   }
 
-  .image-editor-toggle-row input:checked {
-    background:
-      radial-gradient(circle at center, #101111 0 3px, transparent 4px),
-      #f7f1e7;
-    border-color: #f7f1e7;
-  }
-
-  .image-editor-toggle-row input:focus-visible {
-    border-color: rgba(247, 241, 231, 0.48);
-  }
-
-  .image-editor-range-row {
-    display: grid;
-    grid-template-columns: 92px minmax(76px, 1fr) 58px;
-    gap: 8px;
-    align-items: center;
-    min-width: 0;
-    min-height: 26px;
-  }
-
-  .image-editor-range-row input {
+  .image-editor-range-row input[type="range"] {
     width: 100%;
     min-width: 0;
-    accent-color: #f7f1e7;
-  }
-
-  .image-editor-range-row input:disabled {
-    opacity: 0.36;
-  }
-
-  .image-editor-opacity-input {
-    min-width: 0;
-    width: 100%;
-    height: 24px;
-    padding: 0 8px;
-    box-sizing: border-box;
-    color: rgba(247, 241, 231, 0.78);
-    background: rgba(255, 252, 244, 0.04);
-    border: 1px solid rgba(247, 241, 231, 0.16);
-    border-radius: 5px;
-    outline: none;
-    font: inherit;
-    font-size: 0.7rem;
-    font-weight: 780;
-    line-height: 1;
-    text-align: center;
-  }
-
-  .image-editor-opacity-input::-webkit-outer-spin-button,
-  .image-editor-opacity-input::-webkit-inner-spin-button {
+    min-height: 32px;
     margin: 0;
-    appearance: none;
+    accent-color: var(--editor-selected);
   }
 
-  .image-editor-opacity-input[type="number"] {
-    appearance: textfield;
-  }
-
-  .image-editor-opacity-input:focus {
-    border-color: rgba(247, 241, 231, 0.42);
-    background: rgba(255, 252, 244, 0.075);
-  }
-
-  .image-editor-anchor-field {
-    display: grid;
+  .image-editor-transform-host,
+  .image-editor-transfer-host {
     width: 100%;
-    gap: 11px;
-    justify-items: start;
-    align-content: center;
-  }
-
-  .image-editor-anchor-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 22px);
-    gap: 5px;
-    justify-self: center;
-  }
-
-  .image-editor-anchor-grid button {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    cursor: pointer;
-    background: rgba(247, 241, 231, 0.05);
-    border: 1px solid rgba(247, 241, 231, 0.14);
-    border-radius: 5px;
-    outline: none;
-  }
-
-  .image-editor-anchor-grid button:hover,
-  .image-editor-anchor-grid button:focus-visible {
-    background: rgba(247, 241, 231, 0.14);
-    border-color: rgba(247, 241, 231, 0.3);
-  }
-
-  .image-editor-anchor-grid button.is-active {
-    background: #f7f1e7;
-    border-color: #f7f1e7;
-  }
-
-  .image-editor-anchor-grid button.has-expansion-arrow {
-    background: rgba(247, 241, 231, 0.1);
-    border-color: rgba(247, 241, 231, 0.24);
-  }
-
-  .image-editor-anchor-grid button span {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    height: 100%;
-  }
-
-  .image-editor-anchor-grid button.is-active span {
+    margin-top: 0;
     background: transparent;
-  }
-
-  .image-editor-anchor-grid button i {
-    display: block;
-    width: 0;
-    height: 0;
-    pointer-events: none;
-  }
-
-  .image-editor-anchor-grid button i.is-anchor {
-    width: 6px;
-    height: 6px;
-    background: #101111;
-    border-radius: 999px;
-  }
-
-  .image-editor-anchor-grid button i.is-up {
-    border-right: 4px solid transparent;
-    border-bottom: 6px solid #f7f1e7;
-    border-left: 4px solid transparent;
-  }
-
-  .image-editor-anchor-grid button i.is-right {
-    border-top: 4px solid transparent;
-    border-bottom: 4px solid transparent;
-    border-left: 6px solid #f7f1e7;
-  }
-
-  .image-editor-anchor-grid button i.is-down {
-    border-top: 6px solid #f7f1e7;
-    border-right: 4px solid transparent;
-    border-left: 4px solid transparent;
-  }
-
-  .image-editor-anchor-grid button i.is-left {
-    border-top: 4px solid transparent;
-    border-right: 6px solid #f7f1e7;
-    border-bottom: 4px solid transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .image-editor-artboard {
@@ -3492,18 +5803,21 @@ onUnmounted(() => {
     left: calc(var(--image-artboard-center-x, 50%) - var(--image-artboard-half-width, 0px) + var(--image-pan-x, 0px));
     z-index: 2;
     display: grid;
-    box-sizing: border-box;
     overflow: hidden;
-    border: 1px solid rgba(247, 241, 231, 0.36);
-    border-radius: 8px;
+    box-sizing: border-box;
     cursor: crosshair;
+    background-color: var(--image-pixel-background, #101010);
+    border: 1px solid var(--editor-border-strong);
+    border-radius: var(--editor-radius-md);
+    box-shadow: none;
     outline: none;
-    box-shadow:
-      0 32px 90px rgba(0, 0, 0, 0.62),
-      0 0 0 1px rgba(0, 0, 0, 0.72),
-      inset 0 0 0 1px rgba(255, 252, 244, 0.035);
     touch-action: none;
     user-select: none;
+  }
+
+  .image-editor-artboard:focus-visible {
+    outline: 1px solid var(--editor-focus);
+    outline-offset: 1px;
   }
 
   .image-editor-artboard.is-panning {
@@ -3512,62 +5826,71 @@ onUnmounted(() => {
 
   .image-editor-canvas-bitmap {
     position: absolute;
-    inset: 1px;
+    top: 0;
+    left: 0;
     z-index: 1;
     display: block;
     image-rendering: pixelated;
     pointer-events: none;
   }
 
-  .image-editor-artboard::before {
+  .image-editor-grid-overlay {
     position: absolute;
-    inset: 1px;
-    content: "";
-    pointer-events: none;
-  }
-
-  .image-editor-artboard::before {
+    top: 0;
+    left: 0;
     z-index: 2;
-    background-image:
-      var(--image-grid-dash-image, none),
-      radial-gradient(
-        circle at 0 0,
-        var(--image-grid-dot-color, rgba(247, 241, 231, 0.18)) 0 var(--image-grid-dot-size, 2px),
-        transparent calc(var(--image-grid-dot-size, 2px) + 0.45px)
-      );
-    background-position: 0 0;
-    background-size:
-      var(--image-grid-step, 16px) var(--image-grid-step, 16px),
-      var(--image-grid-step, 16px) var(--image-grid-step, 16px);
-    opacity: max(var(--image-grid-dot-opacity, 0), var(--image-grid-dash-opacity, 0));
+    display: block;
+    overflow: hidden;
+    pointer-events: none;
   }
 
   .image-editor-subdivision-line {
     position: absolute;
     z-index: 3;
-    background: var(--image-grid-subdivision-color, rgba(247, 241, 231, 0.18));
+    background: var(--image-grid-subdivision-color, rgba(242, 242, 242, 0.18));
     pointer-events: none;
   }
 
   .image-editor-subdivision-line.is-vertical {
-    top: 1px;
-    bottom: 1px;
+    top: 0;
+    bottom: 0;
   }
 
   .image-editor-subdivision-line.is-horizontal {
-    right: 1px;
-    left: 1px;
+    right: 0;
+    left: 0;
   }
 
   .image-editor-hover-cell {
     position: absolute;
     z-index: 4;
     box-sizing: border-box;
-    border: 2px solid rgba(255, 255, 255, 0.92);
-    box-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.54),
-      0 0 0 1px rgba(0, 0, 0, 0.32);
+    border: 1px solid #ffffff;
+    outline: 1px solid #000000;
     pointer-events: none;
+  }
+
+  .image-editor-hover-cell.is-graffiti {
+    border-width: 1px;
+    outline: 0;
+    opacity: 0.72;
+  }
+
+  .image-editor-selection {
+    position: absolute;
+    z-index: 5;
+    box-sizing: border-box;
+    border: 1px solid #ffffff;
+    outline: 1px dashed #111111;
+    pointer-events: none;
+    animation: image-selection-pulse 900ms steps(2, end) infinite;
+  }
+
+  @keyframes image-selection-pulse {
+    50% {
+      border-color: #111111;
+      outline-color: #ffffff;
+    }
   }
 
   .resource-editor-loader,
@@ -3581,33 +5904,33 @@ onUnmounted(() => {
   .resource-editor-loader span {
     width: 26px;
     height: 26px;
-    border: 2px solid rgba(247, 241, 231, 0.18);
-    border-top-color: rgba(247, 241, 231, 0.84);
-    border-radius: 999px;
+    border: 2px solid #3a3a3a;
+    border-top-color: var(--editor-text);
+    border-radius: 50%;
     animation: resource-editor-loader 820ms linear infinite;
   }
 
   .resource-editor-error {
-    gap: 14px;
+    gap: 12px;
     align-content: center;
   }
 
   .resource-editor-error p {
     margin: 0;
-    color: var(--muted);
-    font-weight: 700;
+    color: var(--editor-muted);
+    font-weight: 600;
   }
 
   .resource-editor-error button {
-    min-height: 40px;
-    padding: 0 16px;
+    min-height: 32px;
+    padding: 0 12px;
+    color: var(--editor-selected-ink);
+    font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
-    background: #f7f1e7;
-    border: 1px solid #f7f1e7;
-    border-radius: 8px;
-    color: #111;
-    font-size: 0.84rem;
-    font-weight: 760;
+    background: var(--editor-selected);
+    border: 1px solid var(--editor-selected);
+    border-radius: var(--editor-radius-sm);
   }
 
   @keyframes resource-editor-loader {
@@ -3616,168 +5939,126 @@ onUnmounted(() => {
     }
   }
 
-  @media (max-width: 760px) {
-    .resource-editor-title {
-      max-width: min(100%, 270px);
-      padding: 0 10px;
+  @media (max-width: 1120px) {
+    .resource-editor-canvas {
+      --editor-right-dock: 320px;
+    }
+
+    .image-editor-color-panel {
+      grid-template-areas:
+        "picker value"
+        "picker swatches"
+        "palette palette";
+      grid-template-columns: 124px minmax(0, 1fr);
+      column-gap: 10px;
+    }
+
+    .image-editor-color-picker-stage {
+      margin-right: -168px;
+      margin-bottom: -168px;
+      transform: scale(0.425);
+    }
+  }
+
+  @media (max-width: 820px) {
+    .resource-editor-canvas {
+      --editor-left-dock: 44px;
+      --editor-right-dock: 292px;
+    }
+
+    .image-editor-left-dock {
+      padding-right: 4px;
+      padding-left: 4px;
+    }
+
+    .image-editor-color-panel {
+      grid-template-areas:
+        "picker value"
+        "picker swatches"
+        "palette palette";
+      grid-template-columns: 112px minmax(0, 1fr);
+    }
+
+    .image-editor-color-picker-stage {
+      margin-right: -180px;
+      margin-bottom: -180px;
+      transform: scale(0.384);
+    }
+  }
+
+  @media (max-width: 620px) {
+    .resource-editor :deep(.studio-topbar) {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      padding-right: 8px;
+      padding-left: 8px;
+    }
+
+    .resource-editor :deep(.studio-topbar__brand-name),
+    .resource-editor :deep(.studio-topbar__brand-separator),
+    .resource-editor :deep(.studio-topbar__user-label),
+    .resource-editor :deep(.studio-topbar__brand-trail) {
+      display: none;
     }
 
     .resource-editor-title__kind {
       display: none;
     }
-  }
 
-  @media (max-width: 520px) {
-    .resource-editor {
-      min-height: 100dvh;
+    .resource-editor-title__name {
+      max-width: 132px;
     }
 
-    .resource-editor :deep(.studio-topbar) {
-      gap: 11px 10px;
-      padding: 12px 10px 10px;
-    }
-
-    .resource-editor :deep(.studio-topbar__brand-name) {
-      max-width: 142px;
-    }
-
-    .resource-editor-title {
-      justify-self: center;
-      width: min(100%, 270px);
-      height: 36px;
-      border-radius: 7px;
-    }
-
-    .resource-editor-stage {
-      min-height: 0;
+    .resource-editor-title__save-cluster {
+      padding-left: 5px;
     }
 
     .resource-editor-canvas {
-      place-items: start center;
-      overflow: hidden;
-      padding: 128px 12px 226px;
-      box-sizing: border-box;
+      grid-template-columns: 44px minmax(0, 1fr);
     }
 
-    .image-editor-toolbar {
-      top: 18px;
-      left: 20px;
-      grid-template-columns: repeat(2, 38px);
+    .image-editor-right-dock {
+      display: none;
     }
 
-    .image-editor-tool,
-    .image-editor-inspector-button {
-      width: 38px;
-      height: 38px;
-      border-radius: 8px;
-    }
-
-    .image-editor-color-panel {
-      bottom: 16px;
-      left: 20px;
-      width: 292px;
-      padding: 0;
-      transform: scale(0.5);
-      transform-origin: bottom left;
-    }
-
-    .image-editor-preview {
-      top: 18px;
-      right: 20px;
-      width: clamp(82px, 24vw, 100px);
-    }
-
-    .image-editor-color-palette {
-      bottom: 16px;
-      right: 20px;
-      width: 124px;
-      max-width: 124px;
-      padding: 9px;
-    }
-
-    .image-editor-color-palette__swatches {
-      width: 86px;
-    }
-
-    .image-editor-preview__grid {
-      border-radius: 4px;
-      box-shadow:
-        0 10px 24px rgba(0, 0, 0, 0.34),
-        0 0 0 1px rgba(0, 0, 0, 0.54);
-    }
-
-    .image-editor-preview__grid .image-editor-preview__viewport {
-      min-width: 6px;
-      min-height: 6px;
-      border-width: 2px;
-      border-radius: 2px;
-    }
-
-    .image-editor-side-inspector {
-      top: auto;
-      right: 20px;
-      bottom: 142px;
-      width: 38px;
-      transform: none;
-    }
-
-    .image-editor-inspector-rail {
-      gap: 7px;
-      width: 38px;
-    }
-
-    .image-editor-inspector-panel {
-      right: 0;
-      bottom: calc(100% + 8px);
-      top: auto;
-      width: min(284px, calc(100vw - 72px));
-      max-height: calc(100dvh - 220px);
-      padding: 12px;
-      border-radius: 8px;
-      transform: none;
-    }
-
-    .image-editor-artboard {
-      border-radius: 6px;
+    .image-editor-context-host,
+    .image-editor-viewport,
+    .image-editor-statusbar {
+      grid-column: 2;
     }
   }
 
-  @media (max-width: 380px) {
-    .resource-editor :deep(.studio-topbar__brand-name) {
-      max-width: 118px;
+  @media (prefers-reduced-motion: reduce) {
+    .image-editor-selection,
+    .resource-editor-loader span {
+      animation: none;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .image-editor-artboard,
+    .image-editor-preview__grid,
+    .image-editor-color-value input,
+    .image-editor-color-add,
+    .image-editor-inspector-button,
+    .image-editor-inspector-close,
+    .image-editor-size-input,
+    .image-editor-opacity-input,
+    .image-editor-preference-number-input,
+    .image-editor-dimension-link,
+    .image-editor-anchor-grid button,
+    .image-editor-gap-button,
+    .image-editor-segment-button {
+      border-color: ButtonBorder;
     }
 
-    .image-editor-toolbar {
-      left: 14px;
-    }
-
-    .resource-editor-canvas {
-      padding-right: 10px;
-      padding-left: 10px;
-    }
-
-    .image-editor-color-panel {
-      left: 14px;
-      transform: scale(0.46);
-    }
-
-    .image-editor-preview {
-      right: 14px;
-      width: 82px;
-    }
-
-    .image-editor-color-palette {
-      right: 14px;
-      width: 98px;
-      max-width: 98px;
-    }
-
-    .image-editor-color-palette__swatches {
-      width: 55px;
-    }
-
-    .image-editor-side-inspector {
-      right: 14px;
+    .image-editor-inspector-button.is-active,
+    .image-editor-dimension-link.is-active,
+    .image-editor-anchor-grid button.is-active,
+    .image-editor-gap-button.is-active,
+    .image-editor-segment-button.is-active {
+      color: HighlightText;
+      background: Highlight;
     }
   }
 </style>
