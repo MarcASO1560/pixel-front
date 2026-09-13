@@ -44,6 +44,19 @@ export const getImagePinchZoom = ({
   return Math.min(maximumZoom, Math.max(minimumZoom, requestedZoom));
 };
 
+export const getImagePinchStageCenterRatio = ({
+  artboard,
+  pan,
+  stage,
+}: Readonly<{
+  artboard: ImageRect;
+  pan: ImageClientPoint;
+  stage: ImageRect;
+}>): ImageClientPoint => ({
+  x: (artboard.left + artboard.width / 2 - pan.x - stage.left) / stage.width,
+  y: (artboard.top + artboard.height / 2 - pan.y - stage.top) / stage.height,
+});
+
 /**
  * Keeps the same logical point of the image beneath the live pinch midpoint.
  * The midpoint may move while the gesture scales, which makes two-finger pan
@@ -53,15 +66,15 @@ export const getAnchoredImagePinchPan = ({
   anchor,
   artboardSize,
   midpoint,
-  stage,
+  stageCenter,
 }: Readonly<{
   anchor: ImageClientPoint;
   artboardSize: Readonly<{ height: number; width: number }>;
   midpoint: ImageClientPoint;
-  stage: ImageRect;
+  stageCenter: ImageClientPoint;
 }>): ImageClientPoint => {
-  const centeredLeft = stage.left + (stage.width - artboardSize.width) / 2;
-  const centeredTop = stage.top + (stage.height - artboardSize.height) / 2;
+  const centeredLeft = stageCenter.x - artboardSize.width / 2;
+  const centeredTop = stageCenter.y - artboardSize.height / 2;
 
   return {
     x: midpoint.x - centeredLeft - anchor.x * artboardSize.width,

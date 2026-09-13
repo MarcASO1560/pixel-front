@@ -79,6 +79,7 @@ import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
 import {
   getAnchoredImagePinchPan,
   getImagePinchGeometry,
+  getImagePinchStageCenterRatio,
   getImagePinchZoom,
 } from "../../pixel-art/lib/pinchZoom";
 import {
@@ -209,6 +210,8 @@ type ImagePinchGesture = {
   initialDistance: number;
   initialZoom: number;
   secondPointerId: number;
+  stageCenterXRatio: number;
+  stageCenterYRatio: number;
 };
 
 const props = defineProps<{
@@ -408,6 +411,7 @@ let imageViewportPaintClientY = 0;
 const imageTouchPointers = new Map<number, ImageTouchPointer>();
 let imagePendingTouchPointerId: number | null = null;
 let imagePinchGesture: ImagePinchGesture | null = null;
+let imagePinchFrame: number | null = null;
 let imagePreferencesController: ReturnType<typeof useImagePreferences> | null = null;
 let isApplyingImagePreferences = false;
 let imageAutosaveSequence = 0;
@@ -2066,20 +2070,26 @@ const zoomImageFromWheel = (event: WheelEvent) => {
 
   const stage = imageStageRef.value;
   const artboard = imageArtboardRef.value;
-  const stageRect = stage?.getBoundingClientRect();
   const artboardRect = artboard?.getBoundingClientRect();
 
-  if (stageRect && artboardRect && artboardRect.width > 0 && artboardRect.height > 0) {
+  if (stage && artboardRect && artboardRect.width > 0 && artboardRect.height > 0) {
     const anchorClientX = event.clientX;
     const anchorClientY = event.clientY;
     const relativeX = (anchorClientX - artboardRect.left) / artboardRect.width;
     const relativeY = (anchorClientY - artboardRect.top) / artboardRect.height;
     const nextMetrics = imageArtboardMetricsForZoom(nextZoom);
-    const centeredLeft = stageRect.left + (stageRect.width - nextMetrics.width) / 2;
-    const centeredTop = stageRect.top + (stageRect.height - nextMetrics.height) / 2;
+    const pan = getAnchoredImagePinchPan({
+      anchor: { x: relativeX, y: relativeY },
+      artboardSize: { height: nextMetrics.height, width: nextMetrics.width },
+      midpoint: { x: anchorClientX, y: anchorClientY },
+      stageCenter: {
+        x: artboardRect.left + artboardRect.width / 2 - imagePanX.value,
+        y: artboardRect.top + artboardRect.height / 2 - imagePanY.value,
+      },
+    });
 
-    imagePanX.value = anchorClientX - centeredLeft - relativeX * nextMetrics.width;
-    imagePanY.value = anchorClientY - centeredTop - relativeY * nextMetrics.height;
+    imagePanX.value = pan.x;
+    imagePanY.value = pan.y;
   }
 
   imageZoomMode.value = "custom";
@@ -2357,7 +2367,14 @@ const finishImagePointerInteractionFromPointer = (event: PointerEvent) => {
   stopPaintingImage(event);
 };
 
+const cancelScheduledImagePinchUpdate = () => {
+  if (imagePinchFrame === null || typeof window === "undefined") return;
+  window.cancelAnimationFrame(imagePinchFrame);
+  imagePinchFrame = null;
+};
+
 const resetImageTouchPointers = () => {
+  cancelScheduledImagePinchUpdate();
   imageTouchPointers.clear();
   imagePendingTouchPointerId = null;
   imagePinchGesture = null;
@@ -2382,7 +2399,13 @@ const startImagePinchGesture = () => {
   }
 
   const artboardRect = artboard.getBoundingClientRect();
-  if (artboardRect.width <= 0 || artboardRect.height <= 0) {
+  const stageRect = stage.getBoundingClientRect();
+  if (
+    artboardRect.width <= 0 ||
+    artboardRect.height <= 0 ||
+    stageRect.width <= 0 ||
+    stageRect.height <= 0
+  ) {
     return false;
   }
 
@@ -2390,6 +2413,21 @@ const startImagePinchGesture = () => {
     { x: first.clientX, y: first.clientY },
     { x: second.clientX, y: second.clientY },
   );
+  const stageCenterRatio = getImagePinchStageCenterRatio({
+    artboard: {
+      height: artboardRect.height,
+      left: artboardRect.left,
+      top: artboardRect.top,
+      width: artboardRect.width,
+    },
+    pan: { x: imagePanX.value, y: imagePanY.value },
+    stage: {
+      height: stageRect.height,
+      left: stageRect.left,
+      top: stageRect.top,
+      width: stageRect.width,
+    },
+  });
   imagePinchGesture = {
     anchorX: (geometry.midpoint.x - artboardRect.left) / artboardRect.width,
     anchorY: (geometry.midpoint.y - artboardRect.top) / artboardRect.height,
@@ -2397,8 +2435,11 @@ const startImagePinchGesture = () => {
     initialDistance: Math.max(1, geometry.distance),
     initialZoom: imageZoom.value,
     secondPointerId: second.pointerId,
+    stageCenterXRatio: stageCenterRatio.x,
+    stageCenterYRatio: stageCenterRatio.y,
   };
   imagePendingTouchPointerId = null;
+  imageZoomMode.value = "custom";
   isImagePinching.value = true;
   hoveredImagePixelIndex.value = null;
   return true;
@@ -2430,11 +2471,9 @@ const updateImagePinchGesture = () => {
     anchor: { x: pinch.anchorX, y: pinch.anchorY },
     artboardSize: { height: nextMetrics.height, width: nextMetrics.width },
     midpoint: geometry.midpoint,
-    stage: {
-      height: stageRect.height,
-      left: stageRect.left,
-      top: stageRect.top,
-      width: stageRect.width,
+    stageCenter: {
+      x: stageRect.left + stageRect.width * pinch.stageCenterXRatio,
+      y: stageRect.top + stageRect.height * pinch.stageCenterYRatio,
     },
   });
 
@@ -2444,6 +2483,14 @@ const updateImagePinchGesture = () => {
   imagePanY.value = pan.y;
   scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
+};
+
+const scheduleImagePinchGestureUpdate = () => {
+  if (imagePinchFrame !== null || typeof window === "undefined") return;
+  imagePinchFrame = window.requestAnimationFrame(() => {
+    imagePinchFrame = null;
+    updateImagePinchGesture();
+  });
 };
 
 const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) => {
@@ -2509,7 +2556,7 @@ const continueImageTouchPointer = (event: PointerEvent) => {
   touch.clientY = event.clientY;
 
   if (imagePinchGesture) {
-    updateImagePinchGesture();
+    scheduleImagePinchGestureUpdate();
     return;
   }
 
@@ -2538,6 +2585,7 @@ const finishImageTouchPointer = (event: PointerEvent) => {
     pinch &&
     (event.pointerId === pinch.firstPointerId || event.pointerId === pinch.secondPointerId)
   ) {
+    cancelScheduledImagePinchUpdate();
     updateImagePinchGesture();
     imageTouchPointers.delete(event.pointerId);
     imagePinchGesture = null;
