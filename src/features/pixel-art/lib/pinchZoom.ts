@@ -10,13 +10,6 @@ export type ImagePinchGeometry = Readonly<{
 
 export type ImageTwoFingerGestureIntent = "pan" | "zoom";
 
-type ImageRect = Readonly<{
-  height: number;
-  left: number;
-  top: number;
-  width: number;
-}>;
-
 export const getImagePinchGeometry = (
   first: ImageClientPoint,
   second: ImageClientPoint,
@@ -112,19 +105,6 @@ export const getImagePinchZoom = ({
   const requestedZoom = initialZoom * (Math.max(1, currentDistance) / safeInitialDistance);
   return Math.min(maximumZoom, Math.max(minimumZoom, requestedZoom));
 };
-
-export const getImagePinchStageCenterRatio = ({
-  artboard,
-  pan,
-  stage,
-}: Readonly<{
-  artboard: ImageRect;
-  pan: ImageClientPoint;
-  stage: ImageRect;
-}>): ImageClientPoint => ({
-  x: (artboard.left + artboard.width / 2 - pan.x - stage.left) / stage.width,
-  y: (artboard.top + artboard.height / 2 - pan.y - stage.top) / stage.height,
-});
 
 /**
  * Keeps the same logical point of the image beneath the live pinch midpoint.

@@ -79,7 +79,6 @@ import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
 import {
   getAnchoredImagePinchPan,
   getImagePinchGeometry,
-  getImagePinchStageCenterRatio,
   getImagePinchZoom,
   getImageTwoFingerGestureIntent,
   type ImageTwoFingerGestureIntent,
@@ -206,8 +205,6 @@ type ImageTouchPointer = {
   startsOnArtboard: boolean;
 };
 type ImagePinchGesture = {
-  anchorX: number;
-  anchorY: number;
   firstPointerId: number;
   initialDistance: number;
   initialFirstX: number;
@@ -221,8 +218,6 @@ type ImagePinchGesture = {
   initialZoom: number;
   intent: ImageTwoFingerGestureIntent | null;
   secondPointerId: number;
-  stageCenterXRatio: number;
-  stageCenterYRatio: number;
 };
 
 const props = defineProps<{
@@ -2403,20 +2398,7 @@ const startImagePinchGesture = () => {
   }
 
   const [first, second] = [...imageTouchPointers.values()].slice(0, 2);
-  const stage = imageStageRef.value;
-  const artboard = imageArtboardRef.value;
-  if (!first || !second || !stage || !artboard) {
-    return false;
-  }
-
-  const artboardRect = artboard.getBoundingClientRect();
-  const stageRect = stage.getBoundingClientRect();
-  if (
-    artboardRect.width <= 0 ||
-    artboardRect.height <= 0 ||
-    stageRect.width <= 0 ||
-    stageRect.height <= 0
-  ) {
+  if (!first || !second) {
     return false;
   }
 
@@ -2424,24 +2406,7 @@ const startImagePinchGesture = () => {
     { x: first.clientX, y: first.clientY },
     { x: second.clientX, y: second.clientY },
   );
-  const stageCenterRatio = getImagePinchStageCenterRatio({
-    artboard: {
-      height: artboardRect.height,
-      left: artboardRect.left,
-      top: artboardRect.top,
-      width: artboardRect.width,
-    },
-    pan: { x: imagePanX.value, y: imagePanY.value },
-    stage: {
-      height: stageRect.height,
-      left: stageRect.left,
-      top: stageRect.top,
-      width: stageRect.width,
-    },
-  });
   imagePinchGesture = {
-    anchorX: (geometry.midpoint.x - artboardRect.left) / artboardRect.width,
-    anchorY: (geometry.midpoint.y - artboardRect.top) / artboardRect.height,
     firstPointerId: first.pointerId,
     initialDistance: Math.max(1, geometry.distance),
     initialFirstX: first.clientX,
@@ -2455,8 +2420,6 @@ const startImagePinchGesture = () => {
     initialZoom: imageZoom.value,
     intent: null,
     secondPointerId: second.pointerId,
-    stageCenterXRatio: stageCenterRatio.x,
-    stageCenterYRatio: stageCenterRatio.y,
   };
   imagePendingTouchPointerId = null;
   imageZoomMode.value = "custom";
@@ -2471,8 +2434,7 @@ const updateImagePinchGesture = () => {
 
   const first = imageTouchPointers.get(pinch.firstPointerId);
   const second = imageTouchPointers.get(pinch.secondPointerId);
-  const stage = imageStageRef.value;
-  if (!first || !second || !stage) return;
+  if (!first || !second) return;
 
   const geometry = getImagePinchGeometry(
     { x: first.clientX, y: first.clientY },
@@ -2504,22 +2466,9 @@ const updateImagePinchGesture = () => {
     maximumZoom: MAX_IMAGE_ZOOM,
     minimumZoom: MIN_IMAGE_ZOOM,
   });
-  const nextMetrics = imageArtboardMetricsForZoom(nextZoom);
-  const stageRect = stage.getBoundingClientRect();
-  const pan = getAnchoredImagePinchPan({
-    anchor: { x: pinch.anchorX, y: pinch.anchorY },
-    artboardSize: { height: nextMetrics.height, width: nextMetrics.width },
-    midpoint: { x: pinch.initialMidpointX, y: pinch.initialMidpointY },
-    stageCenter: {
-      x: stageRect.left + stageRect.width * pinch.stageCenterXRatio,
-      y: stageRect.top + stageRect.height * pinch.stageCenterYRatio,
-    },
-  });
 
   imageZoomMode.value = "custom";
   imageZoom.value = nextZoom;
-  imagePanX.value = pan.x;
-  imagePanY.value = pan.y;
   scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
 };

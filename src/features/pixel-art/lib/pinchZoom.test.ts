@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   getAnchoredImagePinchPan,
   getImagePinchGeometry,
-  getImagePinchStageCenterRatio,
   getImagePinchZoom,
   getImageTwoFingerGestureIntent,
 } from "./pinchZoom";
@@ -101,39 +100,6 @@ describe("image pinch zoom", () => {
         stageCenter: { x: 260, y: 204 },
       }),
     ).toEqual({ x: 100, y: -64 });
-  });
-
-  it("recovers the unpanned 46% mobile stage center from the live artboard", () => {
-    expect(
-      getImagePinchStageCenterRatio({
-        artboard: { left: 192, top: 26, width: 160, height: 320 },
-        pan: { x: 12, y: -18 },
-        stage: { left: 10, top: 20, width: 500, height: 400 },
-      }),
-    ).toEqual({ x: 0.5, y: 0.46 });
-  });
-
-  it("does not jump when an offset mobile pinch starts without moving", () => {
-    const artboard = { left: 192, top: 26, width: 160, height: 320 };
-    const midpoint = { x: 250, y: 150 };
-    const pan = { x: 12, y: -18 };
-    const stage = { left: 10, top: 20, width: 500, height: 400 };
-    const centerRatio = getImagePinchStageCenterRatio({ artboard, pan, stage });
-
-    expect(
-      getAnchoredImagePinchPan({
-        anchor: {
-          x: (midpoint.x - artboard.left) / artboard.width,
-          y: (midpoint.y - artboard.top) / artboard.height,
-        },
-        artboardSize: { width: artboard.width, height: artboard.height },
-        midpoint,
-        stageCenter: {
-          x: stage.left + stage.width * centerRatio.x,
-          y: stage.top + stage.height * centerRatio.y,
-        },
-      }),
-    ).toEqual(pan);
   });
 
   it("turns movement of the pinch midpoint into the same amount of two-finger pan", () => {
