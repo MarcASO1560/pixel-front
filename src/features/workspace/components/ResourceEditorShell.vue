@@ -325,13 +325,13 @@ const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
 const isImageMobileDockOpen = ref(false);
 const isImageMobileColorControlsOpen = ref(false);
-const isImageTabletLayersDialogOpen = ref(false);
+const isImageLayersDialogOpen = ref(false);
 const imageMobileDockCloseRef = ref<HTMLButtonElement | null>(null);
 const imageMobileDockTriggerRef = ref<HTMLButtonElement | null>(null);
 const imageMobileColorCloseRef = ref<HTMLButtonElement | null>(null);
 const imageMobileColorTriggerRef = ref<HTMLButtonElement | null>(null);
-const imageTabletLayersCloseRef = ref<HTMLButtonElement | null>(null);
-const imageTabletLayersTriggerRef = ref<HTMLButtonElement | null>(null);
+const imageLayersCloseRef = ref<HTMLButtonElement | null>(null);
+const imageLayersTriggerRef = ref<HTMLButtonElement | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
 const isImageGridVisible = ref(true);
 const customImageGridColor = ref(DEFAULT_CUSTOM_IMAGE_GRID_COLOR);
@@ -353,20 +353,14 @@ const imagePanX = ref(0);
 const imagePanY = ref(0);
 const imageViewportWidth = ref(0);
 const imageViewportHeight = ref(0);
+const isImageCoarsePointer = ref(false);
 const isImageMobileViewport = computed(
   () => imageViewportWidth.value > 0 && imageViewportWidth.value <= 768,
 );
-const isImageTabletViewport = computed(
-  () => imageViewportWidth.value > 768 && imageViewportWidth.value <= 1120,
-);
 const isImageDockOverlayViewport = computed(
-  () => imageViewportWidth.value > 0 && imageViewportWidth.value <= 1120,
-);
-const areImageLayersFloating = computed(() => imageViewportWidth.value > 768);
-const imageLayersTeleportTarget = computed(() =>
-  isImageTabletViewport.value
-    ? "#image-editor-tablet-layers-dialog-host"
-    : "#image-editor-floating-layers",
+  () =>
+    imageViewportWidth.value > 0 &&
+    (imageViewportWidth.value <= 1120 || isImageCoarsePointer.value),
 );
 const imageStageWidth = ref(0);
 const imageStageHeight = ref(0);
@@ -2192,6 +2186,9 @@ const updateImageViewportSize = () => {
 
   imageViewportWidth.value = window.innerWidth;
   imageViewportHeight.value = window.innerHeight;
+  isImageCoarsePointer.value =
+    window.matchMedia("(pointer: coarse)").matches &&
+    window.matchMedia("(hover: none)").matches;
   syncImageStageSize();
 };
 
@@ -3919,23 +3916,23 @@ const closeImageInspectorPanel = () => {
   activeImageInspectorPanel.value = null;
 };
 
-const openImageTabletLayersDialog = () => {
+const openImageLayersDialog = () => {
   closeImageMobileColorControls(false);
   isImageMobileDockOpen.value = false;
-  isImageTabletLayersDialogOpen.value = true;
-  void nextTick(() => imageTabletLayersCloseRef.value?.focus({ preventScroll: true }));
+  isImageLayersDialogOpen.value = true;
+  void nextTick(() => imageLayersCloseRef.value?.focus({ preventScroll: true }));
 };
 
-const closeImageTabletLayersDialog = (restoreFocus = true) => {
-  isImageTabletLayersDialogOpen.value = false;
+const closeImageLayersDialog = (restoreFocus = true) => {
+  isImageLayersDialogOpen.value = false;
   if (restoreFocus) {
-    void nextTick(() => imageTabletLayersTriggerRef.value?.focus({ preventScroll: true }));
+    void nextTick(() => imageLayersTriggerRef.value?.focus({ preventScroll: true }));
   }
 };
 
 const openImageMobileDock = () => {
   closeImageMobileColorControls(false);
-  closeImageTabletLayersDialog(false);
+  closeImageLayersDialog(false);
   isImageMobileDockOpen.value = true;
   void nextTick(() => imageMobileDockCloseRef.value?.focus({ preventScroll: true }));
 };
@@ -3949,7 +3946,7 @@ const closeImageMobileDock = (restoreFocus = true) => {
 
 function openImageMobileColorControls() {
   closeImageMobileDock(false);
-  closeImageTabletLayersDialog(false);
+  closeImageLayersDialog(false);
   isImageMobileColorControlsOpen.value = true;
   void nextTick(() => imageMobileColorCloseRef.value?.focus({ preventScroll: true }));
 }
@@ -3960,12 +3957,6 @@ function closeImageMobileColorControls(restoreFocus = true) {
     void nextTick(() => imageMobileColorTriggerRef.value?.focus({ preventScroll: true }));
   }
 }
-
-watch(isImageTabletViewport, (isTablet) => {
-  if (!isTablet && isImageTabletLayersDialogOpen.value) {
-    closeImageTabletLayersDialog(false);
-  }
-});
 
 const selectCustomImageBackground = (event: Event) => {
   const input = event.currentTarget as HTMLInputElement;
@@ -4159,7 +4150,7 @@ const runImageKeyboardAction = (action: ImageKeyboardAction) => {
       nudgeImageSelection({ x: action.deltaX, y: action.deltaY });
       break;
     case "escape":
-      if (isImageTabletLayersDialogOpen.value) closeImageTabletLayersDialog();
+      if (isImageLayersDialogOpen.value) closeImageLayersDialog();
       else if (isImageMobileDockOpen.value) closeImageMobileDock();
       else if (isImageMobileColorControlsOpen.value) {
         closeImageMobileColorControls();
@@ -4542,14 +4533,13 @@ onUnmounted(() => {
           class="image-editor-floating-layers"
         >
           <button
-            v-if="isImageTabletViewport"
-            ref="imageTabletLayersTriggerRef"
+            ref="imageLayersTriggerRef"
             type="button"
-            class="image-editor-tablet-layers-trigger"
+            class="image-editor-layers-trigger"
             aria-haspopup="dialog"
-            :aria-expanded="isImageTabletLayersDialogOpen"
-            aria-controls="image-editor-tablet-layers-dialog"
-            @click="openImageTabletLayersDialog"
+            :aria-expanded="isImageLayersDialogOpen"
+            aria-controls="image-editor-layers-dialog"
+            @click="openImageLayersDialog"
           >
             <Layers3 :size="17" :stroke-width="2" aria-hidden="true" />
             <span>Layers</span>
@@ -4557,31 +4547,47 @@ onUnmounted(() => {
           </button>
 
           <div
-            v-if="isImageTabletViewport"
-            class="image-editor-tablet-layers-dialog-layer"
-            :class="{ 'is-open': isImageTabletLayersDialogOpen }"
-            :aria-hidden="!isImageTabletLayersDialogOpen"
-            :inert="!isImageTabletLayersDialogOpen"
-            @pointerdown.self="closeImageTabletLayersDialog()"
+            class="image-editor-layers-dialog-layer"
+            :class="{ 'is-open': isImageLayersDialogOpen }"
+            :aria-hidden="!isImageLayersDialogOpen"
+            :inert="!isImageLayersDialogOpen"
+            @pointerdown.self="closeImageLayersDialog()"
           >
             <section
-              id="image-editor-tablet-layers-dialog"
-              class="image-editor-tablet-layers-dialog"
+              id="image-editor-layers-dialog"
+              class="image-editor-layers-dialog"
               role="dialog"
               aria-modal="true"
               aria-label="Layers"
-              @keydown.esc.stop.prevent="closeImageTabletLayersDialog()"
+              @keydown.esc.stop.prevent="closeImageLayersDialog()"
             >
               <button
-                ref="imageTabletLayersCloseRef"
+                ref="imageLayersCloseRef"
                 type="button"
-                class="image-editor-tablet-layers-dialog__close"
+                class="image-editor-layers-dialog__close"
                 aria-label="Close layers"
-                @click="closeImageTabletLayersDialog()"
+                @click="closeImageLayersDialog()"
               >
                 <X :size="17" :stroke-width="2" aria-hidden="true" />
               </button>
-              <div id="image-editor-tablet-layers-dialog-host"></div>
+              <div class="image-editor-layers-host">
+                <ImageLayersPanel
+                  :layers="imageLayers"
+                  :active-layer-id="activeImageLayerId"
+                  :can-edit="canEditImage"
+                  :max-layers="MAX_IMAGE_LAYERS"
+                  @select="selectImageLayer"
+                  @add="addImageLayer"
+                  @duplicate="duplicateImageLayer"
+                  @remove="removeImageLayer"
+                  @rename="renameImageLayer"
+                  @toggle-visible="toggleImageLayerVisibility"
+                  @toggle-lock="toggleImageLayerLock"
+                  @preview-opacity="previewImageLayerOpacity"
+                  @set-opacity="setImageLayerOpacity"
+                  @move="moveImageLayer"
+                />
+              </div>
             </section>
           </div>
         </div>
@@ -4599,7 +4605,7 @@ onUnmounted(() => {
           aria-label="Image properties"
         >
           <div class="image-editor-mobile-dock-header">
-            <strong>{{ areImageLayersFloating ? "Image options" : "Layers & options" }}</strong>
+            <strong>Image options</strong>
             <button
               ref="imageMobileDockCloseRef"
               type="button"
@@ -4609,31 +4615,6 @@ onUnmounted(() => {
               <X :size="20" :stroke-width="2" aria-hidden="true" />
             </button>
           </div>
-
-          <Teleport
-            :to="imageLayersTeleportTarget"
-            :disabled="!areImageLayersFloating"
-            defer
-          >
-            <div class="image-editor-layers-host">
-              <ImageLayersPanel
-                :layers="imageLayers"
-                :active-layer-id="activeImageLayerId"
-                :can-edit="canEditImage"
-                :max-layers="MAX_IMAGE_LAYERS"
-                @select="selectImageLayer"
-                @add="addImageLayer"
-                @duplicate="duplicateImageLayer"
-                @remove="removeImageLayer"
-                @rename="renameImageLayer"
-                @toggle-visible="toggleImageLayerVisibility"
-                @toggle-lock="toggleImageLayerLock"
-                @preview-opacity="previewImageLayerOpacity"
-                @set-opacity="setImageLayerOpacity"
-                @move="moveImageLayer"
-              />
-            </div>
-          </Teleport>
 
           <section
             class="image-editor-color-panel"
@@ -5092,9 +5073,7 @@ onUnmounted(() => {
           class="image-editor-mobile-dock-trigger"
           aria-controls="image-editor-properties"
           :aria-expanded="isImageMobileDockOpen"
-          :aria-label="
-            areImageLayersFloating ? 'Open image options' : 'Open layers and image options'
-          "
+          aria-label="Open image options"
           @click="openImageMobileDock"
         >
           <PanelRightOpen :size="17" :stroke-width="2" aria-hidden="true" />
@@ -5487,8 +5466,8 @@ onUnmounted(() => {
     z-index: 5;
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
-    max-height: 100dvh;
+    height: 100%;
+    min-height: 0;
     color: var(--text);
   }
 
@@ -5698,7 +5677,7 @@ onUnmounted(() => {
     pointer-events: none;
   }
 
-  .image-editor-tablet-layers-trigger {
+  .image-editor-layers-trigger {
     position: absolute;
     right: 12px;
     bottom: 12px;
@@ -5720,29 +5699,29 @@ onUnmounted(() => {
     pointer-events: auto;
   }
 
-  .image-editor-tablet-layers-trigger small {
+  .image-editor-layers-trigger small {
     color: var(--editor-muted);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
   }
 
-  .image-editor-tablet-layers-trigger:hover,
-  .image-editor-tablet-layers-trigger:focus-visible,
-  .image-editor-tablet-layers-trigger[aria-expanded="true"] {
+  .image-editor-layers-trigger:hover,
+  .image-editor-layers-trigger:focus-visible,
+  .image-editor-layers-trigger[aria-expanded="true"] {
     color: var(--editor-selected-ink);
     background: var(--editor-selected);
     border-color: var(--editor-selected);
     outline: none;
   }
 
-  .image-editor-tablet-layers-trigger:hover small,
-  .image-editor-tablet-layers-trigger:focus-visible small,
-  .image-editor-tablet-layers-trigger[aria-expanded="true"] small {
+  .image-editor-layers-trigger:hover small,
+  .image-editor-layers-trigger:focus-visible small,
+  .image-editor-layers-trigger[aria-expanded="true"] small {
     color: currentColor;
     opacity: 0.66;
   }
 
-  .image-editor-tablet-layers-dialog-layer {
+  .image-editor-layers-dialog-layer {
     position: absolute;
     inset: 0;
     z-index: 18;
@@ -5759,14 +5738,14 @@ onUnmounted(() => {
       visibility 0s linear 180ms;
   }
 
-  .image-editor-tablet-layers-dialog-layer.is-open {
+  .image-editor-layers-dialog-layer.is-open {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
     transition-delay: 0s;
   }
 
-  .image-editor-tablet-layers-dialog {
+  .image-editor-layers-dialog {
     position: relative;
     width: min(430px, calc(100% - 32px));
     max-height: calc(100% - 32px);
@@ -5776,10 +5755,10 @@ onUnmounted(() => {
     pointer-events: auto;
   }
 
-  .image-editor-tablet-layers-dialog__close {
+  .image-editor-layers-dialog__close {
     position: absolute;
     top: 7px;
-    right: 48px;
+    right: 10px;
     z-index: 3;
     display: grid;
     place-items: center;
@@ -5793,15 +5772,19 @@ onUnmounted(() => {
     border-radius: var(--editor-radius-sm);
   }
 
-  .image-editor-tablet-layers-dialog__close:hover,
-  .image-editor-tablet-layers-dialog__close:focus-visible {
+  .image-editor-layers-dialog :deep(.layer-icon-button--add) {
+    margin-right: 38px;
+  }
+
+  .image-editor-layers-dialog__close:hover,
+  .image-editor-layers-dialog__close:focus-visible {
     color: var(--editor-text);
     background: var(--editor-hover);
     outline: 1px solid var(--editor-focus);
     outline-offset: 1px;
   }
 
-  #image-editor-tablet-layers-dialog-host .image-editor-layers-host {
+  .image-editor-layers-dialog .image-editor-layers-host {
     position: static;
     display: block;
     width: 100%;
@@ -5812,12 +5795,12 @@ onUnmounted(() => {
     pointer-events: auto;
   }
 
-  .image-editor-floating-layers .image-editor-tablet-layers-dialog :deep(.image-layers-panel) {
+  .image-editor-floating-layers .image-editor-layers-dialog :deep(.image-layers-panel) {
     max-height: calc(100dvh - 160px);
   }
 
   .image-editor-floating-layers
-    .image-editor-tablet-layers-dialog
+    .image-editor-layers-dialog
     :deep(.image-layers-panel__list) {
     max-height: min(46dvh, 328px);
   }
@@ -6155,20 +6138,6 @@ onUnmounted(() => {
     max-height: min(250px, 28vh);
     overflow: hidden;
     border-bottom: 1px solid var(--editor-border);
-  }
-
-  .image-editor-floating-layers > .image-editor-layers-host {
-    position: absolute;
-    right: 12px;
-    bottom: 12px;
-    display: flex;
-    align-items: flex-end;
-    width: min(420px, calc(100% - 244px));
-    height: min(360px, calc(100% - 220px));
-    max-height: none;
-    overflow: visible;
-    border: 0;
-    pointer-events: none;
   }
 
   .image-editor-floating-layers :deep(.image-layers-panel) {
@@ -7105,7 +7074,7 @@ onUnmounted(() => {
     }
   }
 
-  @media (max-width: 1120px) {
+  @media (max-width: 1120px), (hover: none) and (pointer: coarse) {
     .resource-editor-canvas {
       --editor-right-dock: 320px;
       grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
@@ -7248,10 +7217,6 @@ onUnmounted(() => {
       --editor-left-dock: 48px;
       grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
       grid-template-rows: 44px minmax(0, 1fr) 44px;
-    }
-
-    .image-editor-floating-layers {
-      display: none;
     }
 
     .image-editor-right-dock {
@@ -7544,7 +7509,7 @@ onUnmounted(() => {
 
   @media (prefers-reduced-motion: reduce) {
     .image-editor-right-dock,
-    .image-editor-tablet-layers-dialog-layer {
+    .image-editor-layers-dialog-layer {
       transition: none;
     }
 
