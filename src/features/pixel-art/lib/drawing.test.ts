@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  brushPoints,
   clearRect,
   constrainPointToEightDirections,
   ellipsePoints,
@@ -74,6 +75,30 @@ describe("line and brush rasterization", () => {
       { x: 1, y: 2 },
       { x: 2, y: 2 },
     ]);
+  });
+
+  it("rasterizes distinct hard-edged circle and diamond brush stamps", () => {
+    const circle = pointKeys(brushPoints({ x: 5, y: 5 }, 5, "circle"));
+    const diamond = pointKeys(brushPoints({ x: 5, y: 5 }, 5, "diamond"));
+
+    expect(circle.size).toBe(21);
+    expect(circle.has("3,3")).toBe(false);
+    expect(circle.has("5,3")).toBe(true);
+    expect(diamond.size).toBe(13);
+    expect(diamond.has("4,4")).toBe(true);
+    expect(diamond.has("3,4")).toBe(false);
+  });
+
+  it("keeps every brush shape anchored consistently at size one and two", () => {
+    for (const shape of ["circle", "diamond", "square"] as const) {
+      expect(brushPoints({ x: 2, y: 2 }, 1, shape)).toEqual([{ x: 2, y: 2 }]);
+      expect(brushPoints({ x: 2, y: 2 }, 2, shape)).toEqual([
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 1, y: 2 },
+        { x: 2, y: 2 },
+      ]);
+    }
   });
 
   it("clips brush stamps and interpolated strokes safely", () => {

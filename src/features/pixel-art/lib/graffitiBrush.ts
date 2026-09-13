@@ -1,6 +1,7 @@
 import {
+  brushPoints,
   linePoints,
-  squareBrushPoints,
+  type BrushShape,
   type PixelBounds,
   type Point,
 } from "./drawing";
@@ -12,8 +13,9 @@ export type GraffitiPixel = Readonly<
 >;
 
 export type GraffitiBrushOptions = Readonly<{
-  /** Square stamp size, following the same 1..8 rules as the pencil. */
+  /** Stamp size, following the same 1..8 rules as the pencil. */
   brushSize: number;
+  brushShape?: BrushShape;
   primaryColor: string;
   secondaryColor: string;
   /** Swaps the two checkerboard phases, for example on right-click. */
@@ -53,7 +55,7 @@ export const createGraffitiGestureState = (): GraffitiGestureState => ({
 });
 
 /**
- * Creates one square stamp filled with a canvas-anchored 1x1 checkerboard.
+ * Creates one shaped stamp filled with a canvas-anchored 1x1 checkerboard.
  * Its phase depends only on absolute pixel coordinates, so overlapping stamps
  * cannot make already-painted pixels change color.
  */
@@ -61,7 +63,7 @@ export const graffitiBrushStamp = (
   center: Point,
   options: GraffitiBrushOptions,
 ): GraffitiPixel[] =>
-  squareBrushPoints(center, options.brushSize, options.bounds).map((point) => ({
+  brushPoints(center, options.brushSize, options.brushShape, options.bounds).map((point) => ({
     ...point,
     color: checkerColor(point, options),
   }));

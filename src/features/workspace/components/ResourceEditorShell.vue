@@ -41,6 +41,7 @@ import {
 } from "../../pixel-art/lib/color";
 import { createImageCanvasRenderPlan } from "../../pixel-art/lib/canvasRendering";
 import {
+  brushPoints,
   clearRect,
   constrainPointToEightDirections,
   ellipsePoints,
@@ -54,8 +55,8 @@ import {
   placeBlock,
   rectanglePoints,
   rotateBlock90,
-  squareBrushPoints,
   strokePoints,
+  type BrushShape,
   type PixelBlock,
   type PixelBuffer,
   type Point,
@@ -317,6 +318,7 @@ const imagePaletteUserId = ref("");
 const isPersonalImagePaletteSaving = ref(false);
 const activeImageTool = ref<ImageTool>("pencil");
 const imageBrushSize = ref(1);
+const imageBrushShape = ref<BrushShape>("square");
 const isImageShapeFilled = ref(false);
 const imageShapePreviewPoints = shallowRef<Point[]>([]);
 const imagePointerStart = ref<Point | null>(null);
@@ -883,19 +885,56 @@ const imageSubdivisionVerticalLines = computed(() =>
 const imageSubdivisionHorizontalLines = computed(() =>
   createImageSubdivisionLines(imageGridHeight.value, "horizontal"),
 );
-const imageHoverCellStyle = computed(() => {
-  if (hoveredImagePixelIndex.value === null) {
-    return {};
+const imageBrushPreviewTools: ReadonlySet<ImageTool> = new Set([
+  "pencil",
+  "erase",
+  "line",
+  "rectangle",
+  "ellipse",
+]);
+const isImageBrushHoverPreview = computed(
+  () =>
+    hoveredImagePixelIndex.value !== null &&
+    imageBrushPreviewTools.has(activeImageTool.value),
+);
+const imageBrushHoverCells = computed(() => {
+  const hoveredIndex = hoveredImagePixelIndex.value;
+  if (
+    hoveredIndex === null ||
+    !isImageBrushHoverPreview.value ||
+    !canMutateActiveImageLayerPixels.value
+  ) {
+    return [];
   }
 
-  const column = hoveredImagePixelIndex.value % imageGridWidth.value;
-  const row = Math.floor(hoveredImagePixelIndex.value / imageGridWidth.value);
   const cellSize = imageArtboardMetrics.value.cellSize;
+  return brushPoints(
+    {
+      x: hoveredIndex % imageGridWidth.value,
+      y: Math.floor(hoveredIndex / imageGridWidth.value),
+    },
+    imageBrushSize.value,
+    imageBrushShape.value,
+    { width: imageGridWidth.value, height: imageGridHeight.value },
+  ).map((point) => ({
+    key: `${point.x}-${point.y}`,
+    style: {
+      height: `${cellSize}px`,
+      left: `${point.x * cellSize}px`,
+      top: `${point.y * cellSize}px`,
+      width: `${cellSize}px`,
+    },
+  }));
+});
+const imageSingleHoverCellStyle = computed(() => {
+  const hoveredIndex = hoveredImagePixelIndex.value;
+  if (hoveredIndex === null) return {};
 
+  const cellSize = imageArtboardMetrics.value.cellSize;
   return {
     height: `${cellSize}px`,
-    left: `${column * cellSize}px`,
-    top: `${row * cellSize}px`,
+    left: `${(hoveredIndex % imageGridWidth.value) * cellSize}px`,
+    top: `${Math.floor(hoveredIndex / imageGridWidth.value) * cellSize}px`,
     width: `${cellSize}px`,
   };
 });
@@ -924,6 +963,7 @@ const imageGraffitiHoverCells = computed(() => {
     {
       bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
       brushSize: imageBrushSize.value,
+      brushShape: imageBrushShape.value,
       inverted: gesture?.inverted ?? false,
       primaryColor: gesture?.primaryColor ?? selectedImageColor.value,
       secondaryColor: gesture?.secondaryColor ?? secondaryImageColor.value,
@@ -2838,7 +2878,7 @@ const paintImagePixels = (indexes: number[], color: PixelColor) => {
       y: Math.floor(index / imageGridWidth.value),
     }));
   const points = centers.flatMap((point) =>
-    squareBrushPoints(point, imageBrushSize.value, {
+    brushPoints(point, imageBrushSize.value, imageBrushShape.value, {
       width: imageGridWidth.value,
       height: imageGridHeight.value,
     }),
@@ -2872,6 +2912,7 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
   const brushOptions = {
     bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
     brushSize: imageBrushSize.value,
+    brushShape: imageBrushShape.value,
     inverted: imageInteractionGraffitiInverted,
     primaryColor: imageInteractionPrimaryColor,
     secondaryColor: imageInteractionSecondaryColor,
@@ -3058,11 +3099,17 @@ const updateImageShapePreview = (end: Point, event: PointerEvent) => {
   const options = {
     bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
     brushSize: imageBrushSize.value,
+    brushShape: imageBrushShape.value,
     filled: isImageShapeFilled.value,
   };
   imageShapePreviewPoints.value =
     tool === "line"
-      ? strokePoints(linePoints(start, constrainedEnd), imageBrushSize.value, options.bounds)
+      ? strokePoints(
+          linePoints(start, constrainedEnd),
+          imageBrushSize.value,
+          options.bounds,
+          imageBrushShape.value,
+        )
       : tool === "rectangle"
         ? rectanglePoints(start, constrainedEnd, options)
         : ellipsePoints(start, constrainedEnd, options);
@@ -4640,50 +4687,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <section
-            class="image-editor-color-panel"
-            :style="imageColorPickerStyle"
-            aria-label="Drawing colors"
-          >
-            <h2 class="image-editor-color-heading">Colors</h2>
-
-            <div class="image-editor-color-value" aria-label="Selected color">
-              <span aria-hidden="true"></span>
-              <input
-                :value="selectedImageColorDraft"
-                aria-label="Selected color hex value"
-                inputmode="text"
-                maxlength="9"
-                spellcheck="false"
-                :disabled="!canEditImage"
-                @blur="commitSelectedImageColorInput"
-                @input="updateSelectedImageColorFromInput"
-              />
-              <button
-                type="button"
-                class="image-editor-color-add"
-                aria-label="Add selected color to palette"
-                title="Pin color to your personal palette"
-                :disabled="!canManagePersonalImagePalette"
-                @click="pinImagePaletteColor()"
-              >
-                <Plus :size="15" :stroke-width="2.2" aria-hidden="true" />
-              </button>
-            </div>
-
-            <ImageColorSwatches
-              class="image-editor-color-swatches-host"
-              :primary-color="selectedImageColor"
-              :secondary-color="secondaryImageColor"
-              :can-edit="canEditImage"
-              @swap="swapImageColors"
-              @reset="resetImageColors"
-              @update:primary-color="setSelectedImageColor"
-              @update:secondary-color="setSecondaryImageColor"
-            />
-
-          </section>
-
           <div class="image-editor-side-inspector" aria-label="Image options">
           <section
             v-if="activeImageInspectorPanel"
@@ -5080,11 +5083,13 @@ onUnmounted(() => {
           class="image-editor-context-host"
           :active-tool="activeImageTool"
           :brush-size="imageBrushSize"
+          :brush-shape="imageBrushShape"
           :shape-filled="isImageShapeFilled"
           :can-undo="canUndoImage"
           :can-redo="canRedoImage"
           :can-edit="canEditImage"
           @update:brush-size="imageBrushSize = $event"
+          @update:brush-shape="imageBrushShape = $event"
           @update:shape-filled="isImageShapeFilled = $event"
           @undo="undoImage"
           @redo="redoImage"
@@ -5381,11 +5386,19 @@ onUnmounted(() => {
             <span
               v-if="
                 hoveredImagePixelIndex !== null &&
+                !isImageBrushHoverPreview &&
                 !isImageGraffitiHoverPreview &&
                 (!isActiveImagePixelMutationTool || canMutateActiveImageLayerPixels)
               "
               class="image-editor-hover-cell"
-              :style="imageHoverCellStyle"
+              :style="imageSingleHoverCellStyle"
+              aria-hidden="true"
+            ></span>
+            <span
+              v-for="cell in imageBrushHoverCells"
+              :key="`image-brush-hover-${cell.key}`"
+              class="image-editor-hover-cell is-brush"
+              :style="cell.style"
               aria-hidden="true"
             ></span>
             <span
@@ -6099,8 +6112,7 @@ onUnmounted(() => {
   }
 
   .image-editor-mobile-color-backdrop,
-  .image-editor-mobile-color-header,
-  .image-editor-mobile-color-panel {
+  .image-editor-mobile-color-header {
     display: none;
   }
 
@@ -6216,29 +6228,30 @@ onUnmounted(() => {
     max-height: none;
   }
 
-  .image-editor-color-panel {
-    position: static;
+  .image-editor-mobile-color-panel {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 6;
     display: grid;
-    flex: 0 0 auto;
     grid-template-areas:
       "value"
       "swatches";
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     align-items: start;
-    width: 100%;
+    width: 196px;
     min-width: 0;
-    padding: 12px;
+    padding: 0;
     box-sizing: border-box;
     background: transparent;
     border: 0;
-    border-bottom: 1px solid var(--editor-border);
     border-radius: 0;
     box-shadow: none;
+    pointer-events: auto;
     transform: none;
   }
 
-  .image-editor-color-heading,
   .image-editor-inspector-button span {
     display: none;
   }
@@ -6254,7 +6267,7 @@ onUnmounted(() => {
   .image-editor-floating-color-picker {
     --image-color-picker-scale: 0.67;
     position: absolute;
-    bottom: 12px;
+    bottom: 164px;
     left: 12px;
     z-index: 6;
     width: 196px;
@@ -6265,7 +6278,7 @@ onUnmounted(() => {
   }
 
   .image-editor-floating-palette {
-    --image-palette-safe-bottom: 220px;
+    --image-palette-safe-bottom: 372px;
     --image-palette-safe-right: 220px;
     position: absolute;
     top: 12px;
@@ -7070,6 +7083,10 @@ onUnmounted(() => {
     opacity: 0.72;
   }
 
+  .image-editor-hover-cell.is-brush {
+    opacity: 0.82;
+  }
+
   .image-editor-selection {
     position: absolute;
     z-index: 5;
@@ -7151,13 +7168,6 @@ onUnmounted(() => {
       box-sizing: border-box;
     }
 
-    .image-editor-color-panel {
-      grid-template-areas:
-        "value"
-        "swatches";
-      grid-template-columns: minmax(0, 1fr);
-    }
-
     .image-editor-right-dock {
       position: absolute;
       inset: 0 0 0 auto;
@@ -7214,12 +7224,6 @@ onUnmounted(() => {
       padding-left: 4px;
     }
 
-    .image-editor-color-panel {
-      grid-template-areas:
-        "value"
-        "swatches";
-      grid-template-columns: minmax(0, 1fr);
-    }
   }
 
   @media (max-width: 768px) {
@@ -7298,10 +7302,6 @@ onUnmounted(() => {
 
     .image-editor-layers-host :deep(.image-layers-panel__list) {
       max-height: clamp(96px, 24dvh, 180px);
-    }
-
-    .image-editor-right-dock > .image-editor-color-panel {
-      display: none;
     }
 
     .image-editor-mobile-color-layer {
@@ -7420,11 +7420,15 @@ onUnmounted(() => {
     }
 
     .image-editor-mobile-color-panel {
+      position: static;
+      z-index: auto;
       display: grid;
       grid-area: controls;
       gap: 10px;
       align-content: start;
+      width: 100%;
       min-width: 0;
+      pointer-events: auto;
     }
 
     .image-editor-mobile-color-panel .image-editor-color-value {

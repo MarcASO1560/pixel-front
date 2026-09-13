@@ -72,6 +72,18 @@ describe("graffiti checkerboard stamps", () => {
     ]);
   });
 
+  it("preserves the checker pattern inside non-square brush shapes", () => {
+    const pixels = graffitiBrushStamp(
+      { x: 4, y: 4 },
+      options({ brushSize: 5, brushShape: "diamond" }),
+    );
+
+    expect(pixels).toHaveLength(13);
+    expect(pixels.every((pixel) =>
+      pixel.color === ((pixel.x + pixel.y) % 2 === 0 ? "#112233" : "#AABBCC"),
+    )).toBe(true);
+  });
+
   it("gives the same canvas pixel one stable color across overlapping stamps", () => {
     const leftStamp = pixelMap(graffitiBrushStamp({ x: 4, y: 4 }, options()));
     const rightStamp = pixelMap(graffitiBrushStamp({ x: 5, y: 4 }, options()));

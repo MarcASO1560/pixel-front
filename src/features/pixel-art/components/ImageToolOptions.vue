@@ -2,11 +2,13 @@
 import { Redo2, Undo2 } from "@lucide/vue";
 import { computed } from "vue";
 
+import type { BrushShape } from "../lib/drawing";
 import type { ImageTool } from "../types";
 
 const props = defineProps<{
   activeTool: ImageTool;
   brushSize: number;
+  brushShape: BrushShape;
   shapeFilled: boolean;
   canEdit: boolean;
   canUndo: boolean;
@@ -15,6 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:brushSize": [size: number];
+  "update:brushShape": [shape: BrushShape];
   "update:shapeFilled": [filled: boolean];
   undo: [];
   redo: [];
@@ -41,6 +44,12 @@ const brushTools: ReadonlySet<ImageTool> = new Set([
   "rectangle",
   "ellipse",
 ]);
+
+const brushShapes: ReadonlyArray<Readonly<{ label: string; value: BrushShape }>> = [
+  { label: "Square", value: "square" },
+  { label: "Circle", value: "circle" },
+  { label: "Diamond", value: "diamond" },
+];
 
 const normalizedBrushSize = computed(() =>
   Math.min(8, Math.max(1, Math.round(props.brushSize))),
@@ -101,6 +110,31 @@ const updateBrushSize = (event: Event) => {
       />
       <output>{{ normalizedBrushSize }} px</output>
     </label>
+
+    <div
+      v-if="supportsBrushSize"
+      class="image-tool-options__shape"
+      role="group"
+      aria-label="Brush shape"
+    >
+      <button
+        v-for="shape in brushShapes"
+        :key="shape.value"
+        type="button"
+        :class="{ 'is-active': brushShape === shape.value }"
+        :disabled="!canEdit"
+        :aria-label="`${shape.label} brush`"
+        :aria-pressed="brushShape === shape.value"
+        :title="`${shape.label} brush`"
+        @click="emit('update:brushShape', shape.value)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect v-if="shape.value === 'square'" x="5" y="5" width="14" height="14" rx="1" />
+          <circle v-else-if="shape.value === 'circle'" cx="12" cy="12" r="7" />
+          <path v-else d="m12 4 8 8-8 8-8-8Z" />
+        </svg>
+      </button>
+    </div>
 
     <label v-if="supportsFilledShape" class="image-tool-options__filled">
       <input
@@ -276,6 +310,54 @@ const updateBrushSize = (event: Event) => {
     text-align: right;
   }
 
+  .image-tool-options__shape {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    align-items: center;
+  }
+
+  .image-tool-options__shape button {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: #8f8f8f;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    outline: none;
+  }
+
+  .image-tool-options__shape button:hover:not(:disabled) {
+    color: #ffffff;
+    background: #1c1c1c;
+  }
+
+  .image-tool-options__shape button.is-active {
+    color: #111111;
+    background: #eeeeee;
+  }
+
+  .image-tool-options__shape button:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 1px;
+  }
+
+  .image-tool-options__shape button:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+  }
+
+  .image-tool-options__shape svg {
+    width: 13px;
+    height: 13px;
+    fill: currentColor;
+    stroke: none;
+  }
+
   .image-tool-options__filled {
     min-width: 66px;
     padding: 0 4px;
@@ -319,7 +401,8 @@ const updateBrushSize = (event: Event) => {
     .image-tool-options__history,
     .image-tool-options__tool,
     .image-tool-options__size,
-    .image-tool-options__filled {
+    .image-tool-options__filled,
+    .image-tool-options__shape {
       flex-shrink: 0;
     }
 
@@ -340,11 +423,20 @@ const updateBrushSize = (event: Event) => {
     }
 
     .image-tool-options__size input[type="range"] {
-      width: 66px;
+      width: 52px;
     }
 
     .image-tool-options__size output {
-      min-width: 34px;
+      min-width: 30px;
+    }
+
+    .image-tool-options__shape {
+      gap: 1px;
+    }
+
+    .image-tool-options__shape button {
+      width: 27px;
+      height: 30px;
     }
   }
 
@@ -358,7 +450,8 @@ const updateBrushSize = (event: Event) => {
   @media (forced-colors: active) {
     .image-tool-options,
     .image-tool-options__button,
-    .image-tool-options__separator {
+    .image-tool-options__separator,
+    .image-tool-options__shape button {
       border-color: ButtonBorder;
     }
   }

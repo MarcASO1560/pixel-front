@@ -42,9 +42,12 @@ export type PixelBounds = Readonly<{
   height: number;
 }>;
 
+export type BrushShape = "circle" | "diamond" | "square";
+
 export type ShapeOptions = Readonly<{
   filled?: boolean;
   brushSize?: number;
+  brushShape?: BrushShape;
   bounds?: PixelBounds;
 }>;
 
@@ -295,6 +298,39 @@ export const constrainPointToEightDirections = (origin: Point, target: Point): P
   };
 };
 
+/** Returns a hard-edged pixel brush stamp with a stable anchor for every shape. */
+export const brushPoints = (
+  center: Point,
+  size = 1,
+  shape: BrushShape = "square",
+  bounds?: PixelBounds,
+): Point[] => {
+  const point = normalizePoint(center);
+  const brushSize = normalizeBrushSize(size);
+  const offset = Math.floor(brushSize / 2);
+  const localCenter = (brushSize - 1) / 2;
+  const circleRadius = Math.max(0.5, brushSize / 2 - 0.1);
+  const diamondRadius = brushSize / 2;
+  const points: Point[] = [];
+
+  for (let y = point.y - offset; y < point.y - offset + brushSize; y += 1) {
+    for (let x = point.x - offset; x < point.x - offset + brushSize; x += 1) {
+      const localX = x - (point.x - offset);
+      const localY = y - (point.y - offset);
+      const deltaX = Math.abs(localX - localCenter);
+      const deltaY = Math.abs(localY - localCenter);
+      const isIncluded =
+        shape === "square" ||
+        (shape === "circle" && Math.hypot(deltaX, deltaY) <= circleRadius) ||
+        (shape === "diamond" && deltaX + deltaY <= diamondRadius);
+      if (!isIncluded) continue;
+      points.push({ x, y });
+    }
+  }
+
+  return uniquePoints(points, bounds);
+};
+
 /**
  * Returns a square brush stamp. Even brushes are biased towards the negative
  * axes: a size-2 brush at (x, y) covers x-1..x and y-1..y.
@@ -303,26 +339,14 @@ export const squareBrushPoints = (
   center: Point,
   size = 1,
   bounds?: PixelBounds,
-): Point[] => {
-  const point = normalizePoint(center);
-  const brushSize = normalizeBrushSize(size);
-  const offset = Math.floor(brushSize / 2);
-  const points: Point[] = [];
+): Point[] => brushPoints(center, size, "square", bounds);
 
-  for (let y = point.y - offset; y < point.y - offset + brushSize; y += 1) {
-    for (let x = point.x - offset; x < point.x - offset + brushSize; x += 1) {
-      points.push({ x, y });
-    }
-  }
-
-  return uniquePoints(points, bounds);
-};
-
-/** Joins sampled pointer positions and stamps a square brush along the path. */
+/** Joins sampled pointer positions and stamps a brush along the path. */
 export const strokePoints = (
   path: ReadonlyArray<Point>,
   brushSize = 1,
   bounds?: PixelBounds,
+  brushShape: BrushShape = "square",
 ): Point[] => {
   if (path.length === 0) {
     return [];
@@ -338,7 +362,7 @@ export const strokePoints = (
   }
 
   return uniquePoints(
-    centers.flatMap((point) => squareBrushPoints(point, brushSize)),
+    centers.flatMap((point) => brushPoints(point, brushSize, brushShape)),
     bounds,
   );
 };
@@ -426,7 +450,9 @@ export const rectanglePoints = (
   }
 
   return uniquePoints(
-    outline.flatMap((point) => squareBrushPoints(point, options.brushSize ?? 1)),
+    outline.flatMap((point) =>
+      brushPoints(point, options.brushSize ?? 1, options.brushShape),
+    ),
     options.bounds,
   );
 };
@@ -470,7 +496,9 @@ export const ellipsePoints = (
   );
 
   return uniquePoints(
-    outline.flatMap((point) => squareBrushPoints(point, options.brushSize ?? 1)),
+    outline.flatMap((point) =>
+      brushPoints(point, options.brushSize ?? 1, options.brushShape),
+    ),
     options.bounds,
   );
 };
