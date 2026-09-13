@@ -461,16 +461,20 @@ onUnmounted(() => {
   }
 
   .image-palette-panel__swatches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
+    display: grid;
+    grid-template-columns: repeat(6, var(--image-palette-swatch-size, 32px));
+    gap: var(--image-palette-swatch-gap, 5px);
     align-items: center;
+    justify-content: start;
+    width: max-content;
+    max-width: 100%;
+    margin-inline: auto;
   }
 
   .image-palette-panel__swatch {
     position: relative;
-    width: 32px;
-    height: 32px;
+    width: var(--image-palette-swatch-size, 32px);
+    height: var(--image-palette-swatch-size, 32px);
     padding: 0;
     overflow: hidden;
     cursor: pointer;

@@ -238,7 +238,10 @@ const updateBrushSize = (event: Event) => {
 
   @media (max-width: 768px) {
     .image-tool-options {
+      gap: 6px;
       min-height: 44px;
+      padding-right: 4px;
+      padding-left: 4px;
       overflow-x: auto;
       overflow-y: hidden;
       scrollbar-width: none;
@@ -263,27 +266,11 @@ const updateBrushSize = (event: Event) => {
     }
 
     .image-tool-options__tool {
-      min-width: 0;
-    }
-
-    .image-tool-options__size input[type="range"] {
-      width: 72px;
-    }
-  }
-
-  @media (max-width: 380px) {
-    .image-tool-options {
-      gap: 6px;
-      padding-right: 4px;
-      padding-left: 4px;
+      display: none;
     }
 
     .image-tool-options__size input[type="range"] {
       width: 60px;
-    }
-
-    .image-tool-options__tool {
-      display: none;
     }
   }
 

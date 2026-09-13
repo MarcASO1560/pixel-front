@@ -321,8 +321,11 @@ const imageClipboard = ref<PixelBlock | null>(null);
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
 const isImageMobileDockOpen = ref(false);
+const isImageMobileColorControlsOpen = ref(false);
 const imageMobileDockCloseRef = ref<HTMLButtonElement | null>(null);
 const imageMobileDockTriggerRef = ref<HTMLButtonElement | null>(null);
+const imageMobileColorCloseRef = ref<HTMLButtonElement | null>(null);
+const imageMobileColorTriggerRef = ref<HTMLButtonElement | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
 const isImageGridVisible = ref(true);
 const customImageGridColor = ref(DEFAULT_CUSTOM_IMAGE_GRID_COLOR);
@@ -3680,6 +3683,7 @@ const closeImageInspectorPanel = () => {
 };
 
 const openImageMobileDock = () => {
+  closeImageMobileColorControls(false);
   isImageMobileDockOpen.value = true;
   void nextTick(() => imageMobileDockCloseRef.value?.focus({ preventScroll: true }));
 };
@@ -3690,6 +3694,19 @@ const closeImageMobileDock = (restoreFocus = true) => {
     void nextTick(() => imageMobileDockTriggerRef.value?.focus({ preventScroll: true }));
   }
 };
+
+function openImageMobileColorControls() {
+  closeImageMobileDock(false);
+  isImageMobileColorControlsOpen.value = true;
+  void nextTick(() => imageMobileColorCloseRef.value?.focus({ preventScroll: true }));
+}
+
+function closeImageMobileColorControls(restoreFocus = true) {
+  isImageMobileColorControlsOpen.value = false;
+  if (restoreFocus) {
+    void nextTick(() => imageMobileColorTriggerRef.value?.focus({ preventScroll: true }));
+  }
+}
 
 const selectCustomImageBackground = (event: Event) => {
   const input = event.currentTarget as HTMLInputElement;
@@ -3884,7 +3901,9 @@ const runImageKeyboardAction = (action: ImageKeyboardAction) => {
       break;
     case "escape":
       if (isImageMobileDockOpen.value) closeImageMobileDock();
-      else if (imageSelection.value) deselectImagePixels();
+      else if (isImageMobileColorControlsOpen.value) {
+        closeImageMobileColorControls();
+      } else if (imageSelection.value) deselectImagePixels();
       else closeImageInspectorPanel();
       break;
   }
@@ -4265,7 +4284,7 @@ onUnmounted(() => {
           aria-label="Image properties"
         >
           <div class="image-editor-mobile-dock-header">
-            <strong>Layers, colors &amp; options</strong>
+            <strong>Layers &amp; options</strong>
             <button
               ref="imageMobileDockCloseRef"
               type="button"
@@ -4296,43 +4315,11 @@ onUnmounted(() => {
           </div>
 
           <section
-            ref="imageColorPickerRef"
             class="image-editor-color-panel"
             :style="imageColorPickerStyle"
             aria-label="Drawing colors"
           >
             <h2 class="image-editor-color-heading">Colors</h2>
-
-            <div class="image-editor-color-picker-stage">
-              <div
-                class="image-editor-color-wheel"
-                aria-label="Hue"
-                @pointerdown.prevent="startImageHueSelection"
-                @pointermove.prevent="updateImageHueFromPointer"
-              >
-                <span
-                  class="image-editor-color-hue-handle"
-                  :style="imageColorHueHandleStyle"
-                  aria-hidden="true"
-                ></span>
-              </div>
-              <div
-                class="image-editor-color-triangle"
-                aria-label="Saturation and brightness"
-                @pointerdown.prevent="startImageColorTriangleSelection"
-                @pointermove.prevent="updateImageColorTriangleFromPointer"
-              >
-                <canvas ref="imageColorTriangleCanvasRef" aria-hidden="true"></canvas>
-                <svg viewBox="0 0 196 184" aria-hidden="true" focusable="false">
-                  <polygon points="98 0 0 184 196 184" fill="transparent" />
-                </svg>
-                <span
-                  class="image-editor-color-triangle-handle"
-                  :style="imageColorTriangleHandleStyle"
-                  aria-hidden="true"
-                ></span>
-              </div>
-            </div>
 
             <div class="image-editor-color-value" aria-label="Selected color">
               <span aria-hidden="true"></span>
@@ -4369,22 +4356,6 @@ onUnmounted(() => {
               @update:secondary-color="setSecondaryImageColor"
             />
 
-            <div class="image-editor-color-palette">
-              <div class="image-editor-color-palette-heading">Palette</div>
-              <ImagePalettePanel
-                :swatches="usedImagePaletteColors"
-                :pinned-colors="personalImagePalette"
-                :primary-color="selectedImageColor"
-                :secondary-color="secondaryImageColor"
-                :can-select="canEditImage"
-                :can-manage="canManagePersonalImagePalette"
-                @select-primary="selectImagePaletteColor"
-                @select-secondary="selectSecondaryImagePaletteColor"
-                @pin="pinImagePaletteColor"
-                @edit="editImagePaletteColor"
-                @remove="unpinImagePaletteColor"
-              />
-            </div>
           </section>
 
           <div class="image-editor-side-inspector" aria-label="Image options">
@@ -4800,7 +4771,7 @@ onUnmounted(() => {
           class="image-editor-mobile-dock-trigger"
           aria-controls="image-editor-properties"
           :aria-expanded="isImageMobileDockOpen"
-          aria-label="Open layers, colors and image options"
+          aria-label="Open layers and image options"
           @click="openImageMobileDock"
         >
           <PanelRightOpen :size="17" :stroke-width="2" aria-hidden="true" />
@@ -4833,6 +4804,137 @@ onUnmounted(() => {
           @auxclick.self.prevent
           @contextmenu.self.prevent
         >
+          <div
+            class="image-editor-mobile-color-layer"
+            :class="{ 'is-mobile-open': isImageMobileColorControlsOpen }"
+            :aria-hidden="isImageMobileViewport && !isImageMobileColorControlsOpen"
+            :inert="isImageMobileViewport && !isImageMobileColorControlsOpen"
+          >
+            <button
+              type="button"
+              class="image-editor-mobile-color-backdrop"
+              aria-label="Close colors and palette"
+              @click="closeImageMobileColorControls()"
+            ></button>
+            <section
+              id="image-editor-mobile-colors"
+              class="image-editor-mobile-color-sheet"
+              :role="isImageMobileViewport ? 'dialog' : undefined"
+              :aria-modal="isImageMobileViewport ? 'true' : undefined"
+              aria-labelledby="image-editor-mobile-color-title"
+              @keydown.esc.stop.prevent="closeImageMobileColorControls()"
+            >
+              <header class="image-editor-mobile-color-header">
+                <strong id="image-editor-mobile-color-title">Colors &amp; palette</strong>
+                <button
+                  ref="imageMobileColorCloseRef"
+                  type="button"
+                  aria-label="Close colors and palette"
+                  @click="closeImageMobileColorControls()"
+                >
+                  <X :size="20" :stroke-width="2" aria-hidden="true" />
+                </button>
+              </header>
+
+              <div class="image-editor-mobile-color-content">
+                <div
+                  ref="imageColorPickerRef"
+                  class="image-editor-floating-color-picker"
+                  :style="imageColorPickerStyle"
+                  role="group"
+                  aria-label="Color picker"
+                >
+                  <div class="image-editor-color-picker-stage">
+                    <div
+                      class="image-editor-color-wheel"
+                      aria-label="Hue"
+                      @pointerdown.prevent="startImageHueSelection"
+                      @pointermove.prevent="updateImageHueFromPointer"
+                    >
+                      <span
+                        class="image-editor-color-hue-handle"
+                        :style="imageColorHueHandleStyle"
+                        aria-hidden="true"
+                      ></span>
+                    </div>
+                    <div
+                      class="image-editor-color-triangle"
+                      aria-label="Saturation and brightness"
+                      @pointerdown.prevent="startImageColorTriangleSelection"
+                      @pointermove.prevent="updateImageColorTriangleFromPointer"
+                    >
+                      <canvas ref="imageColorTriangleCanvasRef" aria-hidden="true"></canvas>
+                      <svg viewBox="0 0 196 184" aria-hidden="true" focusable="false">
+                        <polygon points="98 0 0 184 196 184" fill="transparent" />
+                      </svg>
+                      <span
+                        class="image-editor-color-triangle-handle"
+                        :style="imageColorTriangleHandleStyle"
+                        aria-hidden="true"
+                      ></span>
+                    </div>
+                  </div>
+                </div>
+
+                <section
+                  class="image-editor-mobile-color-panel"
+                  :style="imageColorPickerStyle"
+                  aria-label="Drawing colors"
+                >
+                  <div class="image-editor-color-value" aria-label="Selected color">
+                    <span aria-hidden="true"></span>
+                    <input
+                      :value="selectedImageColorDraft"
+                      aria-label="Selected color hex value"
+                      inputmode="text"
+                      maxlength="9"
+                      spellcheck="false"
+                      :disabled="!canEditImage"
+                      @blur="commitSelectedImageColorInput"
+                      @input="updateSelectedImageColorFromInput"
+                    />
+                    <button
+                      type="button"
+                      class="image-editor-color-add"
+                      aria-label="Add selected color to palette"
+                      title="Pin color to your personal palette"
+                      :disabled="!canManagePersonalImagePalette"
+                      @click="pinImagePaletteColor()"
+                    >
+                      <Plus :size="15" :stroke-width="2.2" aria-hidden="true" />
+                    </button>
+                  </div>
+
+                  <ImageColorSwatches
+                    class="image-editor-color-swatches-host"
+                    :primary-color="selectedImageColor"
+                    :secondary-color="secondaryImageColor"
+                    :can-edit="canEditImage"
+                    @swap="swapImageColors"
+                    @reset="resetImageColors"
+                    @update:primary-color="setSelectedImageColor"
+                    @update:secondary-color="setSecondaryImageColor"
+                  />
+                </section>
+
+                <div class="image-editor-floating-palette">
+                  <ImagePalettePanel
+                    :swatches="usedImagePaletteColors"
+                    :pinned-colors="personalImagePalette"
+                    :primary-color="selectedImageColor"
+                    :secondary-color="secondaryImageColor"
+                    :can-select="canEditImage"
+                    :can-manage="canManagePersonalImagePalette"
+                    @select-primary="selectImagePaletteColor"
+                    @select-secondary="selectSecondaryImagePaletteColor"
+                    @pin="pinImagePaletteColor"
+                    @edit="editImagePaletteColor"
+                    @remove="unpinImagePaletteColor"
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
           <div
             class="image-editor-preview"
             :style="imageFloatingPreviewStyle"
@@ -4976,6 +5078,18 @@ onUnmounted(() => {
           <span class="image-editor-statusbar__document">
             {{ imageGridWidth }} × {{ imageGridHeight }} px
           </span>
+          <button
+            ref="imageMobileColorTriggerRef"
+            type="button"
+            class="image-editor-mobile-color-trigger"
+            aria-controls="image-editor-mobile-colors"
+            :aria-expanded="isImageMobileColorControlsOpen"
+            aria-label="Open colors and palette"
+            title="Colors and palette"
+            @click="openImageMobileColorControls"
+          >
+            <span class="image-editor-mobile-color-trigger__swatch" aria-hidden="true"></span>
+          </button>
           <ImageZoomControls
             class="image-editor-zoom-host"
             :class="{
@@ -5336,7 +5450,83 @@ onUnmounted(() => {
   }
 
   .image-editor-mobile-dock-trigger,
-  .image-editor-mobile-dock-header {
+  .image-editor-mobile-dock-header,
+  .image-editor-mobile-color-trigger {
+    display: none;
+  }
+
+  .image-editor-mobile-color-trigger {
+    flex: 0 0 auto;
+    place-items: center;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: var(--editor-radius-sm);
+    outline: none;
+  }
+
+  .image-editor-mobile-color-trigger__swatch {
+    display: block;
+    width: 26px;
+    height: 26px;
+    background:
+      radial-gradient(
+        circle at center,
+        rgba(255, 255, 255, 0.78) 0,
+        rgba(255, 255, 255, 0.48) 32%,
+        rgba(255, 255, 255, 0.14) 56%,
+        rgba(255, 255, 255, 0) 72%
+      ),
+      conic-gradient(
+        from 45deg,
+        #ff453a 0deg,
+        #ff9f0a 45deg,
+        #ffd60a 90deg,
+        #32d74b 145deg,
+        #64d2ff 200deg,
+        #0a84ff 245deg,
+        #5e5ce6 285deg,
+        #bf5af2 325deg,
+        #ff453a 360deg
+      );
+    border: 1px solid #777777;
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px #080808;
+  }
+
+  .image-editor-mobile-color-trigger:hover,
+  .image-editor-mobile-color-trigger:focus-visible,
+  .image-editor-mobile-color-trigger[aria-expanded="true"] {
+    background: var(--editor-hover);
+  }
+
+  .image-editor-mobile-color-trigger:focus-visible {
+    outline: 1px solid var(--editor-focus);
+    outline-offset: -2px;
+  }
+
+  .image-editor-mobile-color-trigger[aria-expanded="true"]
+    .image-editor-mobile-color-trigger__swatch {
+    border-color: #ffffff;
+    box-shadow:
+      0 0 0 1px #080808,
+      0 0 0 2px #ffffff;
+  }
+
+  .image-editor-mobile-color-layer,
+  .image-editor-mobile-color-sheet,
+  .image-editor-mobile-color-content {
+    display: contents;
+  }
+
+  .image-editor-mobile-color-backdrop,
+  .image-editor-mobile-color-header,
+  .image-editor-mobile-color-panel {
     display: none;
   }
 
@@ -5440,11 +5630,10 @@ onUnmounted(() => {
     display: grid;
     flex: 0 0 auto;
     grid-template-areas:
-      "picker value"
-      "picker swatches"
-      "palette palette";
-    grid-template-columns: 144px minmax(0, 1fr);
-    gap: 7px 12px;
+      "value"
+      "swatches";
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
     align-items: start;
     width: 100%;
     min-width: 0;
@@ -5459,20 +5648,40 @@ onUnmounted(() => {
   }
 
   .image-editor-color-heading,
-  .image-editor-color-palette-heading,
   .image-editor-inspector-button span {
     display: none;
   }
 
   .image-editor-color-picker-stage {
     position: relative;
-    grid-area: picker;
     width: 292px;
     height: 292px;
-    margin-right: -148px;
-    margin-bottom: -148px;
-    transform: scale(0.493);
+    transform: scale(var(--image-color-picker-scale, 0.5));
     transform-origin: top left;
+  }
+
+  .image-editor-floating-color-picker {
+    --image-color-picker-scale: 0.67;
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 6;
+    width: 196px;
+    height: 196px;
+    overflow: hidden;
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  .image-editor-floating-palette {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 6;
+    width: min(365px, calc(100% - 220px));
+    min-width: 0;
+    pointer-events: auto;
+    touch-action: manipulation;
   }
 
   .image-editor-color-wheel {
@@ -5662,24 +5871,6 @@ onUnmounted(() => {
     min-width: 0;
     margin: 0;
     transform: none;
-  }
-
-  .image-editor-color-palette {
-    position: static;
-    display: grid;
-    grid-area: palette;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: start;
-    width: 100%;
-    max-width: none;
-    padding: 8px 0 0;
-    box-sizing: border-box;
-    background: transparent;
-    border: 0;
-    border-top: 1px solid var(--editor-border);
-    border-radius: 0;
-    box-shadow: none;
-    backdrop-filter: none;
   }
 
   .image-editor-side-inspector {
@@ -6325,17 +6516,9 @@ onUnmounted(() => {
 
     .image-editor-color-panel {
       grid-template-areas:
-        "picker value"
-        "picker swatches"
-        "palette palette";
-      grid-template-columns: 124px minmax(0, 1fr);
-      column-gap: 10px;
-    }
-
-    .image-editor-color-picker-stage {
-      margin-right: -168px;
-      margin-bottom: -168px;
-      transform: scale(0.425);
+        "value"
+        "swatches";
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 
@@ -6352,16 +6535,9 @@ onUnmounted(() => {
 
     .image-editor-color-panel {
       grid-template-areas:
-        "picker value"
-        "picker swatches"
-        "palette palette";
-      grid-template-columns: 112px minmax(0, 1fr);
-    }
-
-    .image-editor-color-picker-stage {
-      margin-right: -180px;
-      margin-bottom: -180px;
-      transform: scale(0.384);
+        "value"
+        "swatches";
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 
@@ -6377,9 +6553,9 @@ onUnmounted(() => {
       grid-template-areas: "brand center user";
       grid-template-columns: max-content minmax(0, 1fr) max-content;
       row-gap: 0;
-      column-gap: 10px;
-      padding-right: 10px;
-      padding-left: 10px;
+      column-gap: 6px;
+      padding-right: 6px;
+      padding-left: 6px;
     }
 
     .resource-editor :deep(.studio-topbar__center) {
@@ -6400,12 +6576,15 @@ onUnmounted(() => {
     }
 
     .resource-editor-title {
+      gap: 5px;
       width: 100%;
+      padding-right: 7px;
+      padding-left: 7px;
       box-sizing: border-box;
     }
 
     .resource-editor-title__name {
-      max-width: 132px;
+      max-width: 104px;
     }
 
     .resource-editor-title__save-cluster {
@@ -6415,7 +6594,7 @@ onUnmounted(() => {
     .resource-editor-canvas {
       --editor-left-dock: 48px;
       grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
-      grid-template-rows: 44px minmax(0, 1fr) 40px;
+      grid-template-rows: 44px minmax(0, 1fr) 44px;
     }
 
     .image-editor-right-dock {
@@ -6507,54 +6686,198 @@ onUnmounted(() => {
       max-height: clamp(96px, 24dvh, 180px);
     }
 
-    .image-editor-color-panel {
-      grid-template-areas:
-        "heading heading"
-        "picker value"
-        "picker swatches"
-        "palette palette";
-      grid-template-columns: 132px minmax(0, 1fr);
-      gap: 10px 12px;
-      padding: 0 12px 12px;
+    .image-editor-right-dock > .image-editor-color-panel {
+      display: none;
     }
 
-    .image-editor-color-heading {
+    .image-editor-mobile-color-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 16;
+      display: block;
+      visibility: hidden;
+      pointer-events: none;
+      transition: visibility 0s linear 280ms;
+    }
+
+    .image-editor-mobile-color-layer.is-mobile-open {
+      visibility: visible;
+      pointer-events: auto;
+      transition-delay: 0s;
+    }
+
+    .image-editor-mobile-color-backdrop {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      cursor: default;
+      background: rgba(0, 0, 0, 0.46);
+      border: 0;
+      opacity: 0;
+      transition: opacity 180ms ease-out;
+    }
+
+    .image-editor-mobile-color-layer.is-mobile-open .image-editor-mobile-color-backdrop {
+      opacity: 1;
+    }
+
+    .image-editor-mobile-color-sheet {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
       display: flex;
-      grid-area: heading;
-      align-items: center;
-      min-height: 42px;
-      padding: 0 12px;
-      margin: 0 -12px;
+      flex-direction: column;
+      height: 100%;
+      max-height: none;
+      overflow: hidden;
       color: var(--editor-text);
-      font-size: 12px;
-      font-weight: 760;
+      background: var(--editor-panel);
+      border-top: 0;
+      border-radius: 0;
+      box-shadow: 0 -14px 36px rgba(0, 0, 0, 0.34);
+      transform: translate3d(0, 100%, 0);
+      transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .image-editor-mobile-color-layer.is-mobile-open .image-editor-mobile-color-sheet {
+      transform: translate3d(0, 0, 0);
+    }
+
+    .image-editor-mobile-color-header {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 48px;
+      padding: 0 8px 0 14px;
+      box-sizing: border-box;
       border-bottom: 1px solid var(--editor-border);
     }
 
-    .image-editor-color-picker-stage {
-      margin-right: -160px;
-      margin-bottom: -160px;
-      transform: scale(0.452);
+    .image-editor-mobile-color-header strong {
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 680;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    .image-editor-color-palette {
-      padding-top: 0;
-    }
-
-    .image-editor-color-palette-heading {
-      display: flex;
-      align-items: center;
-      min-height: 34px;
+    .image-editor-mobile-color-header button {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
       color: var(--editor-muted);
-      font-size: 11px;
-      font-weight: 700;
+      cursor: pointer;
+      background: transparent;
+      border: 0;
+      border-radius: var(--editor-radius-sm);
+    }
+
+    .image-editor-mobile-color-header button:hover,
+    .image-editor-mobile-color-header button:focus-visible {
+      color: var(--editor-text);
+      background: var(--editor-hover);
+      outline: none;
+    }
+
+    .image-editor-mobile-color-content {
+      display: grid;
+      flex: 1 1 auto;
+      grid-template-areas:
+        "picker"
+        "controls"
+        "palette";
+      grid-template-columns: minmax(0, 1fr);
+      gap: 14px;
+      align-content: start;
+      min-height: 0;
+      padding: 12px 12px max(14px, env(safe-area-inset-bottom, 0px));
+      overflow-x: hidden;
+      overflow-y: auto;
+      box-sizing: border-box;
+      overscroll-behavior: contain;
+    }
+
+    .image-editor-mobile-color-panel {
+      display: grid;
+      grid-area: controls;
+      gap: 10px;
+      align-content: start;
+      min-width: 0;
+    }
+
+    .image-editor-mobile-color-panel .image-editor-color-value {
+      grid-area: auto;
+      grid-template-columns: 34px minmax(0, 1fr) 34px;
+    }
+
+    .image-editor-mobile-color-panel .image-editor-color-swatches-host {
+      grid-area: auto;
+    }
+
+    .image-editor-mobile-color-panel :deep(.image-color-swatches) {
+      grid-template-areas:
+        "primary primary-value secondary secondary-value"
+        "actions actions actions actions";
+      grid-template-columns: 34px minmax(0, 1fr) 34px minmax(0, 1fr);
+      column-gap: 8px;
+    }
+
+    .image-editor-floating-color-picker {
+      --image-color-picker-scale: 0.67;
+      position: static;
+      z-index: auto;
+      grid-area: picker;
+      justify-self: center;
+      width: 196px;
+      height: 196px;
+      overflow: hidden;
+      pointer-events: auto;
+      transform: none;
+    }
+
+    .image-editor-floating-palette {
+      --image-palette-swatch-gap: clamp(5px, 1.5vw, 7px);
+      position: static;
+      z-index: auto;
+      grid-area: palette;
+      width: 100%;
+      max-width: none;
+      min-width: 0;
+      padding-top: 10px;
+      overflow: visible;
+      border-top: 1px solid var(--editor-border);
+      pointer-events: auto;
+    }
+
+    .image-editor-floating-palette :deep(.image-palette-panel__swatches) {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      width: 100%;
+    }
+
+    .image-editor-floating-palette :deep(.image-palette-panel__swatch) {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1;
     }
 
     .image-editor-inspector-button {
       display: inline-flex;
-      gap: 5px;
-      font-size: 11px;
+      gap: 3px;
+      font-size: 10px;
       font-weight: 650;
+    }
+
+    .image-editor-inspector-button svg {
+      width: 16px;
+      height: 16px;
     }
 
     .image-editor-inspector-button span {
@@ -6590,7 +6913,7 @@ onUnmounted(() => {
     }
 
     .image-editor-context-host {
-      padding-right: 86px;
+      padding-right: 46px;
       box-sizing: border-box;
     }
 
@@ -6605,9 +6928,19 @@ onUnmounted(() => {
 
     .image-editor-statusbar {
       gap: 4px;
-      min-height: 40px;
+      justify-content: center;
+      min-height: 44px;
       padding-right: 4px;
       padding-left: 8px;
+    }
+
+    .image-editor-statusbar__document,
+    .image-editor-mobile-dock-trigger span {
+      display: none;
+    }
+
+    .image-editor-mobile-color-trigger {
+      display: inline-grid;
     }
 
     .image-editor-mobile-dock-trigger {
@@ -6622,7 +6955,7 @@ onUnmounted(() => {
       justify-content: center;
       min-width: 40px;
       height: 34px;
-      padding: 0 8px;
+      padding: 0;
       color: var(--editor-muted);
       font-size: 11px;
       font-weight: 600;
@@ -6641,73 +6974,14 @@ onUnmounted(() => {
     }
   }
 
-  @media (max-width: 380px) {
-    .resource-editor :deep(.studio-topbar) {
-      column-gap: 6px;
-      padding-right: 6px;
-      padding-left: 6px;
-    }
-
-    .resource-editor-title {
-      gap: 5px;
-      padding-right: 7px;
-      padding-left: 7px;
-    }
-
-    .resource-editor-title__name {
-      max-width: 104px;
-    }
-
-    .image-editor-statusbar__document,
-    .image-editor-mobile-dock-trigger span {
-      display: none;
-    }
-
-    .image-editor-statusbar {
-      justify-content: center;
-    }
-
-    .image-editor-context-host {
-      padding-right: 46px;
-    }
-
-    .image-editor-mobile-dock-trigger {
-      padding: 0;
-    }
-
-    .image-editor-color-panel {
-      grid-template-columns: 104px minmax(0, 1fr);
-      gap: 8px 10px;
-      padding-right: 10px;
-      padding-left: 10px;
-    }
-
-    .image-editor-color-heading {
-      padding-right: 10px;
-      padding-left: 10px;
-      margin-right: -10px;
-      margin-left: -10px;
-    }
-
-    .image-editor-color-picker-stage {
-      margin-right: -188px;
-      margin-bottom: -188px;
-      transform: scale(0.356);
-    }
-
-    .image-editor-inspector-button {
-      gap: 3px;
-      font-size: 10px;
-    }
-
-    .image-editor-inspector-button svg {
-      width: 16px;
-      height: 16px;
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .image-editor-right-dock {
+      transition: none;
+    }
+
+    .image-editor-mobile-color-layer,
+    .image-editor-mobile-color-backdrop,
+    .image-editor-mobile-color-sheet {
       transition: none;
     }
 
