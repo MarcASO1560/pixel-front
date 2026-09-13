@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  advanceImageGestureZoom,
+  advanceImageTransformChannelIntent,
   applyImageTwoFingerTransformDelta,
+  getImageTwoFingerFramePlan,
   getImageTwoFingerGeometry,
+  getImageTwoFingerIntentMotion,
   getImageTwoFingerTransformDelta,
   normalizeImageRotationRadians,
   rotateImageClientPoint,
+  type ImageTransformChannelIntent,
   type ImageTwoFingerTransformDelta,
   type ImageViewportTransform,
 } from "./pinchZoom";
@@ -105,6 +110,192 @@ describe("continuous image multitouch transforms", () => {
     expect(delta.pan).toEqual({ x: 1, y: 11 });
     expect(delta.zoomFactor).toBe(1);
     expect(delta.rotationRadians).toBe(0);
+  });
+
+  it("keeps sub-threshold scale and rotation noise below the shared touch slop", () => {
+    const motion = getImageTwoFingerIntentMotion({
+      initialFirst: { x: 0, y: 0 },
+      initialSecond: { x: 100, y: 0 },
+      currentFirst: { x: 0, y: 0 },
+      currentSecond: { x: 104, y: 4 },
+    });
+
+    expect(Math.abs(motion.zoomPixels)).toBeLessThan(5);
+    expect(Math.abs(motion.rotationPixels)).toBeLessThan(5);
+  });
+
+  it("does not mistake an almost-rigid two-finger pan for zoom or rotation intent", () => {
+    const initialFirst = { x: 0, y: 0 };
+    const initialSecond = { x: 100, y: 0 };
+    const currentFirst = { x: 20, y: 10 };
+    const currentSecond = { x: 120.8, y: 10.6 };
+    const delta = getImageTwoFingerTransformDelta({
+      currentFirst,
+      currentSecond,
+      previousFirst: initialFirst,
+      previousSecond: initialSecond,
+    });
+    const motion = getImageTwoFingerIntentMotion({
+      currentFirst,
+      currentSecond,
+      initialFirst,
+      initialSecond,
+    });
+
+    expect(delta.pan.x).toBeCloseTo(20.4);
+    expect(delta.pan.y).toBeCloseTo(10.3);
+    expect(Math.abs(motion.zoomPixels)).toBeLessThan(1);
+    expect(Math.abs(motion.rotationPixels)).toBeLessThan(1);
+  });
+
+  it("activates a transform channel after two consistent above-slop samples", () => {
+    let intent: ImageTransformChannelIntent = {
+      active: false,
+      direction: 0,
+      samples: 0,
+    };
+
+    intent = advanceImageTransformChannelIntent({
+      activationDistance: 5,
+      motion: 6,
+      requiredSamples: 2,
+      state: intent,
+    });
+    expect(intent).toEqual({ active: false, direction: 1, samples: 1 });
+
+    intent = advanceImageTransformChannelIntent({
+      activationDistance: 5,
+      motion: 8,
+      requiredSamples: 2,
+      state: intent,
+    });
+    expect(intent).toEqual({ active: true, direction: 1, samples: 2 });
+  });
+
+  it("restarts transform-channel evidence when motion reverses direction", () => {
+    const positiveSample = advanceImageTransformChannelIntent({
+      activationDistance: 5,
+      motion: 7,
+      requiredSamples: 2,
+      state: { active: false, direction: 0, samples: 0 },
+    });
+    const reversedSample = advanceImageTransformChannelIntent({
+      activationDistance: 5,
+      motion: -7,
+      requiredSamples: 2,
+      state: positiveSample,
+    });
+
+    expect(positiveSample).toEqual({ active: false, direction: 1, samples: 1 });
+    expect(reversedSample).toEqual({ active: false, direction: -1, samples: 1 });
+  });
+
+  it("preserves unclamped zoom overflow until the gesture re-enters its limits", () => {
+    const saturated = advanceImageGestureZoom({
+      currentZoom: 60,
+      maximumZoom: 64,
+      minimumZoom: 0.25,
+      rawZoom: 60,
+      zoomFactor: 2,
+    });
+    const stillSaturated = advanceImageGestureZoom({
+      currentZoom: 64,
+      maximumZoom: 64,
+      minimumZoom: 0.25,
+      rawZoom: saturated.rawZoom,
+      zoomFactor: 0.95,
+    });
+    const backInRange = advanceImageGestureZoom({
+      currentZoom: 64,
+      maximumZoom: 64,
+      minimumZoom: 0.25,
+      rawZoom: stillSaturated.rawZoom,
+      zoomFactor: 0.5,
+    });
+
+    expect(saturated.rawZoom).toBe(120);
+    expect(saturated.zoomFactor).toBeCloseTo(64 / 60);
+    expect(stillSaturated.rawZoom).toBe(114);
+    expect(stillSaturated.zoomFactor).toBe(1);
+    expect(backInRange.rawZoom).toBe(57);
+    expect(backInRange.zoomFactor).toBeCloseTo(57 / 64);
+  });
+
+  it("defers contact A and then applies A and B together without a partial frame", () => {
+    const deferred = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: true,
+      coordination: { deferredPointerId: null, soloPointerId: null },
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: false,
+      secondPointerId: 22,
+    });
+    const paired = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: true,
+      coordination: deferred.coordination,
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: true,
+      secondPointerId: 22,
+    });
+
+    expect(deferred).toEqual({
+      action: "defer",
+      coordination: { deferredPointerId: 11, soloPointerId: null },
+    });
+    expect(paired).toEqual({
+      action: "apply",
+      coordination: { deferredPointerId: null, soloPointerId: null },
+    });
+  });
+
+  it("recognizes one moving contact after one deferred frame and then applies it immediately", () => {
+    const deferred = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: true,
+      coordination: { deferredPointerId: null, soloPointerId: null },
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: false,
+      secondPointerId: 22,
+    });
+    const recognized = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: true,
+      coordination: deferred.coordination,
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: false,
+      secondPointerId: 22,
+    });
+    const immediate = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: true,
+      coordination: recognized.coordination,
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: false,
+      secondPointerId: 22,
+    });
+
+    expect(recognized).toEqual({
+      action: "apply",
+      coordination: { deferredPointerId: null, soloPointerId: 11 },
+    });
+    expect(immediate).toEqual(recognized);
+  });
+
+  it("drops an unpaired pending contact when pointerup ends the gesture", () => {
+    const plan = getImageTwoFingerFramePlan({
+      allowUnpairedFrame: false,
+      coordination: { deferredPointerId: 11, soloPointerId: null },
+      firstMoved: true,
+      firstPointerId: 11,
+      secondMoved: false,
+      secondPointerId: 22,
+    });
+
+    expect(plan).toEqual({
+      action: "drop",
+      coordination: { deferredPointerId: 11, soloPointerId: null },
+    });
   });
 
   it("translates rigid two-finger motion exactly 1:1", () => {

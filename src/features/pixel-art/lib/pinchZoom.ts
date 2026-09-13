@@ -17,6 +17,38 @@ export type ImageTwoFingerTransformDelta = Readonly<{
   zoomFactor: number;
 }>;
 
+export type ImageTwoFingerIntentMotion = Readonly<{
+  /** Signed radial travel of either fingertip, expressed in CSS pixels. */
+  zoomPixels: number;
+  /** Signed tangential travel of either fingertip, expressed in CSS pixels. */
+  rotationPixels: number;
+}>;
+
+export type ImageTransformIntentDirection = -1 | 0 | 1;
+
+export type ImageTransformChannelIntent = Readonly<{
+  active: boolean;
+  direction: ImageTransformIntentDirection;
+  samples: number;
+}>;
+
+export type ImageGestureZoomStep = Readonly<{
+  /** Unclamped zoom used to preserve the gesture path while at a limit. */
+  rawZoom: number;
+  /** Effective factor that can be applied to the currently rendered view. */
+  zoomFactor: number;
+}>;
+
+export type ImageTwoFingerFrameCoordination = Readonly<{
+  deferredPointerId: number | null;
+  soloPointerId: number | null;
+}>;
+
+export type ImageTwoFingerFramePlan = Readonly<{
+  action: "apply" | "defer" | "drop";
+  coordination: ImageTwoFingerFrameCoordination;
+}>;
+
 export type ImageViewportTransform = Readonly<{
   panX: number;
   panY: number;
@@ -105,6 +137,166 @@ export const getImageTwoFingerTransformDelta = ({
       ? normalizeImageRotationRadians(current.angleRadians - previous.angleRadians)
       : 0,
     zoomFactor: hasStableDistance ? current.distance / previous.distance : 1,
+  };
+};
+
+/**
+ * Expresses scale and rotation intent in the same unit as pointer movement.
+ * Using per-finger CSS pixels makes one touch slop work consistently for
+ * closely and widely spaced contacts. Translation is deliberately excluded:
+ * two-finger pan should remain immediate and track the centroid 1:1.
+ */
+export const getImageTwoFingerIntentMotion = ({
+  currentFirst,
+  currentSecond,
+  initialFirst,
+  initialSecond,
+}: Readonly<{
+  currentFirst: ImageClientPoint;
+  currentSecond: ImageClientPoint;
+  initialFirst: ImageClientPoint;
+  initialSecond: ImageClientPoint;
+}>): ImageTwoFingerIntentMotion => {
+  const initial = getImageTwoFingerGeometry(initialFirst, initialSecond);
+  const current = getImageTwoFingerGeometry(currentFirst, currentSecond);
+  const hasStableDistance =
+    initial.distance >= MINIMUM_TWO_FINGER_DISTANCE &&
+    current.distance >= MINIMUM_TWO_FINGER_DISTANCE;
+
+  if (!hasStableDistance) {
+    return { rotationPixels: 0, zoomPixels: 0 };
+  }
+
+  const rotationRadians = normalizeImageRotationRadians(
+    current.angleRadians - initial.angleRadians,
+  );
+
+  return {
+    rotationPixels: rotationRadians * (initial.distance / 2),
+    zoomPixels: (current.distance - initial.distance) / 2,
+  };
+};
+
+/**
+ * Arms one transform channel only after sustained movement outside its slop.
+ * The caller rebases the channel on the activation sample, preventing the
+ * threshold itself from appearing as a sudden scale or rotation jump.
+ */
+export const advanceImageTransformChannelIntent = ({
+  activationDistance,
+  motion,
+  requiredSamples,
+  state,
+}: Readonly<{
+  activationDistance: number;
+  motion: number;
+  requiredSamples: number;
+  state: ImageTransformChannelIntent;
+}>): ImageTransformChannelIntent => {
+  if (state.active) return state;
+
+  if (!Number.isFinite(motion) || Math.abs(motion) < Math.max(0, activationDistance)) {
+    return { active: false, direction: 0, samples: 0 };
+  }
+
+  const direction: ImageTransformIntentDirection = motion < 0 ? -1 : 1;
+  const samples = state.direction === direction ? state.samples + 1 : 1;
+
+  return {
+    active: samples >= Math.max(1, Math.trunc(requiredSamples)),
+    direction,
+    samples,
+  };
+};
+
+/**
+ * Advances the unclamped zoom separately from the rendered zoom. Keeping the
+ * overflow means a tiny reversal after overshooting a limit cannot make the
+ * artboard jump away from the fingers before the gesture re-enters the range.
+ */
+export const advanceImageGestureZoom = ({
+  currentZoom,
+  maximumZoom,
+  minimumZoom,
+  rawZoom,
+  zoomFactor,
+}: Readonly<{
+  currentZoom: number;
+  maximumZoom: number;
+  minimumZoom: number;
+  rawZoom: number;
+  zoomFactor: number;
+}>): ImageGestureZoomStep => {
+  const safeRawZoom = Number.isFinite(rawZoom) && rawZoom > 0 ? rawZoom : currentZoom;
+  const safeZoomFactor =
+    Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
+  const nextRawZoom = safeRawZoom * safeZoomFactor;
+  const nextZoom = Math.min(maximumZoom, Math.max(minimumZoom, nextRawZoom));
+
+  return {
+    rawZoom: nextRawZoom,
+    zoomFactor:
+      Number.isFinite(currentZoom) && currentZoom > 0 ? nextZoom / currentZoom : 1,
+  };
+};
+
+/**
+ * Coalesces independently delivered Pointer Events. A newly moving contact
+ * gets one animation frame for its partner to arrive. If the partner really
+ * is stationary, that contact is then recognized as the solo mover and later
+ * frames apply immediately. A normal pointerup can request `drop` instead of
+ * committing half of a contact pair.
+ */
+export const getImageTwoFingerFramePlan = ({
+  allowUnpairedFrame,
+  coordination,
+  firstMoved,
+  firstPointerId,
+  secondMoved,
+  secondPointerId,
+}: Readonly<{
+  allowUnpairedFrame: boolean;
+  coordination: ImageTwoFingerFrameCoordination;
+  firstMoved: boolean;
+  firstPointerId: number;
+  secondMoved: boolean;
+  secondPointerId: number;
+}>): ImageTwoFingerFramePlan => {
+  if (firstMoved === secondMoved) {
+    return {
+      action: "apply",
+      coordination: {
+        deferredPointerId: null,
+        soloPointerId: firstMoved ? null : coordination.soloPointerId,
+      },
+    };
+  }
+
+  const movedPointerId = firstMoved ? firstPointerId : secondPointerId;
+  if (coordination.soloPointerId === movedPointerId) {
+    return {
+      action: "apply",
+      coordination: { deferredPointerId: null, soloPointerId: movedPointerId },
+    };
+  }
+
+  if (!allowUnpairedFrame) {
+    return { action: "drop", coordination };
+  }
+
+  if (coordination.deferredPointerId !== movedPointerId) {
+    return {
+      action: "defer",
+      coordination: {
+        deferredPointerId: movedPointerId,
+        soloPointerId: coordination.soloPointerId,
+      },
+    };
+  }
+
+  return {
+    action: "apply",
+    coordination: { deferredPointerId: null, soloPointerId: movedPointerId },
   };
 };
 

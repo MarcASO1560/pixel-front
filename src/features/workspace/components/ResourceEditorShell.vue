@@ -77,10 +77,15 @@ import {
 } from "../../pixel-art/lib/hitTesting";
 import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
 import {
+  advanceImageGestureZoom,
+  advanceImageTransformChannelIntent,
   applyImageTwoFingerTransformDelta,
+  getImageTwoFingerIntentMotion,
+  getImageTwoFingerFramePlan,
   getImageTwoFingerTransformDelta,
   normalizeImageRotationRadians,
   rotateImageClientPoint,
+  type ImageTransformIntentDirection,
   type ImageViewportTransform,
 } from "../../pixel-art/lib/pinchZoom";
 import {
@@ -201,20 +206,39 @@ type ImageTouchPointer = {
   clientX: number;
   clientY: number;
   pointerId: number;
+  revision: number;
   startClientX: number;
   startClientY: number;
   startsOnArtboard: boolean;
 };
 type ImageTransformGesture = {
+  deferredPointerId: number | null;
   firstPointerId: number;
-  previousFirstX: number;
-  previousFirstY: number;
-  previousSecondX: number;
-  previousSecondY: number;
+  initialFirstX: number;
+  initialFirstY: number;
+  initialSecondX: number;
+  initialSecondY: number;
+  lastFirstRevision: number;
+  lastSecondRevision: number;
+  previousPanFirstX: number;
+  previousPanFirstY: number;
+  previousPanSecondX: number;
+  previousPanSecondY: number;
+  previousStageCenterX: number;
+  previousStageCenterY: number;
+  previousTransformFirstX: number;
+  previousTransformFirstY: number;
+  previousTransformSecondX: number;
+  previousTransformSecondY: number;
   rawZoom: number;
+  rotationActive: boolean;
+  rotationIntentDirection: ImageTransformIntentDirection;
+  rotationIntentSamples: number;
   secondPointerId: number;
-  stageCenterX: number;
-  stageCenterY: number;
+  soloPointerId: number | null;
+  zoomActive: boolean;
+  zoomIntentDirection: ImageTransformIntentDirection;
+  zoomIntentSamples: number;
 };
 
 const props = defineProps<{
@@ -264,6 +288,8 @@ const MIN_IMAGE_ZOOM = 0.25;
 const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_TOUCH_COMMIT_THRESHOLD = 8;
+const IMAGE_TRANSFORM_CHANNEL_TOUCH_SLOP = 5;
+const IMAGE_TRANSFORM_INTENT_SAMPLE_COUNT = 2;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
@@ -768,8 +794,8 @@ const imageArtboardMetricsForZoom = (zoom: number) => {
 
   return {
     cellSize,
-    height: renderPlan.cssHeight + 2,
-    width: renderPlan.cssWidth + 2,
+    height: renderPlan.cssHeight,
+    width: renderPlan.cssWidth,
   };
 };
 const imageArtboardMetrics = computed(() => imageArtboardMetricsForZoom(imageZoom.value));
@@ -994,11 +1020,6 @@ const imageCanvasGridStyle = computed(() => {
     "--image-artboard-width": `${imageArtboardWidth.value}px`,
     "--image-artboard-center-x": "50%",
     "--image-artboard-center-y": `${imageArtboardCenterYRatio.value * 100}%`,
-    "--image-pan-x": `${imagePanX.value}px`,
-    "--image-pan-y": `${imagePanY.value}px`,
-    "--image-rotation": `${imageRotationRadians.value}rad`,
-    "--image-live-scale": "1",
-    "--image-zoom": `${imageZoom.value}`,
     "--image-pixel-background": customImageBackground.value,
     width: `${imageArtboardWidth.value}px`,
   };
@@ -1992,6 +2013,8 @@ const setImageZoom = (zoom: number, mode: ImageZoomMode = "custom") => {
 };
 
 const fitImageToScreen = () => {
+  if (imageTransformGesture) return;
+
   const stage = imageStageRef.value;
   const stageWidth = stage?.clientWidth || imageStageWidth.value || imageViewportWidth.value || 1024;
   const stageHeight = stage?.clientHeight || imageStageHeight.value || imageViewportHeight.value || 768;
@@ -2128,12 +2151,18 @@ const scheduleImagePreviewViewportUpdate = () => {
 let imageFitFrame: number | null = null;
 let imageStageResizeObserver: ResizeObserver | null = null;
 
+const cancelScheduledImageFitToScreen = () => {
+  if (imageFitFrame === null || typeof window === "undefined") return;
+  window.cancelAnimationFrame(imageFitFrame);
+  imageFitFrame = null;
+};
+
 const scheduleImageFitToScreen = () => {
   if (typeof window === "undefined") return;
-  if (imageFitFrame !== null) window.cancelAnimationFrame(imageFitFrame);
+  cancelScheduledImageFitToScreen();
   imageFitFrame = window.requestAnimationFrame(() => {
     imageFitFrame = null;
-    if (imageZoomMode.value === "fit") fitImageToScreen();
+    if (imageZoomMode.value === "fit" && !imageTransformGesture) fitImageToScreen();
   });
 };
 
@@ -2147,6 +2176,9 @@ const syncImageStageSize = () => {
 
   if (didResize && imageZoomMode.value === "fit") {
     scheduleImageFitToScreen();
+  }
+  if (didResize && imageTransformGesture) {
+    scheduleImageTransformGestureUpdate();
   }
   scheduleImagePreviewViewportUpdate();
 };
@@ -2210,6 +2242,7 @@ const zoomImageFromWheel = (event: WheelEvent) => {
     });
     imagePanX.value = nextView.panX;
     imagePanY.value = nextView.panY;
+    writeCommittedImageTransform();
   }
 
   imageZoomMode.value = "custom";
@@ -2369,6 +2402,7 @@ const continuePanningImageFromPointer = (event: PointerEvent) => {
   imageZoomMode.value = "custom";
   imagePanX.value += deltaX;
   imagePanY.value += deltaY;
+  writeCommittedImageTransform();
   scheduleImagePreviewViewportUpdate();
 };
 
@@ -2524,7 +2558,6 @@ const commitImageGestureView = () => {
   imageZoomMode.value = "custom";
   imageGestureView = null;
   void nextTick(writeCommittedImageTransform);
-  scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
 };
 
@@ -2586,16 +2619,35 @@ const startImageTransformGesture = () => {
   const stageCenter = getImageStageCenter();
   if (!first || !second || !stageCenter) return false;
 
+  cancelScheduledImageFitToScreen();
   imageTransformGesture = {
+    deferredPointerId: null,
     firstPointerId: first.pointerId,
-    previousFirstX: first.clientX,
-    previousFirstY: first.clientY,
-    previousSecondX: second.clientX,
-    previousSecondY: second.clientY,
+    initialFirstX: first.clientX,
+    initialFirstY: first.clientY,
+    initialSecondX: second.clientX,
+    initialSecondY: second.clientY,
+    lastFirstRevision: first.revision,
+    lastSecondRevision: second.revision,
+    previousPanFirstX: first.clientX,
+    previousPanFirstY: first.clientY,
+    previousPanSecondX: second.clientX,
+    previousPanSecondY: second.clientY,
+    previousStageCenterX: stageCenter.x,
+    previousStageCenterY: stageCenter.y,
+    previousTransformFirstX: first.clientX,
+    previousTransformFirstY: first.clientY,
+    previousTransformSecondX: second.clientX,
+    previousTransformSecondY: second.clientY,
     rawZoom: imageZoom.value,
+    rotationActive: false,
+    rotationIntentDirection: 0,
+    rotationIntentSamples: 0,
     secondPointerId: second.pointerId,
-    stageCenterX: stageCenter.x,
-    stageCenterY: stageCenter.y,
+    soloPointerId: null,
+    zoomActive: false,
+    zoomIntentDirection: 0,
+    zoomIntentSamples: 0,
   };
   imagePendingTouchPointerId = null;
   isImagePinching.value = true;
@@ -2603,47 +2655,185 @@ const startImageTransformGesture = () => {
   return true;
 };
 
-const updateImageTransformGesture = () => {
+const updateImageTransformGesture = ({
+  allowUnpairedFrame = true,
+}: Readonly<{ allowUnpairedFrame?: boolean }> = {}) => {
   const gesture = imageTransformGesture;
-  if (!gesture) return;
+  if (!gesture) return false;
 
   const first = imageTouchPointers.get(gesture.firstPointerId);
   const second = imageTouchPointers.get(gesture.secondPointerId);
-  if (!first || !second) return;
-  const stageCenter = { x: gesture.stageCenterX, y: gesture.stageCenterY };
+  if (!first || !second) return false;
 
-  const delta = getImageTwoFingerTransformDelta({
-    currentFirst: { x: first.clientX, y: first.clientY },
-    currentSecond: { x: second.clientX, y: second.clientY },
-    previousFirst: { x: gesture.previousFirstX, y: gesture.previousFirstY },
-    previousSecond: { x: gesture.previousSecondX, y: gesture.previousSecondY },
+  const currentStageCenter = getImageStageCenter() || {
+    x: gesture.previousStageCenterX,
+    y: gesture.previousStageCenterY,
+  };
+  const previousStageCenter = {
+    x: gesture.previousStageCenterX,
+    y: gesture.previousStageCenterY,
+  };
+  const currentFirst = { x: first.clientX, y: first.clientY };
+  const currentSecond = { x: second.clientX, y: second.clientY };
+
+  // Translation never waits for the second PointerEvent: each contact moves
+  // the shared centroid immediately, so two-finger pan remains 1:1 and 60 fps.
+  const panDelta = getImageTwoFingerTransformDelta({
+    currentFirst,
+    currentSecond,
+    previousFirst: {
+      x: gesture.previousPanFirstX,
+      y: gesture.previousPanFirstY,
+    },
+    previousSecond: {
+      x: gesture.previousPanSecondX,
+      y: gesture.previousPanSecondY,
+    },
   });
-  imageZoomMode.value = "custom";
   const currentView = imageGestureView || {
     panX: imagePanX.value,
     panY: imagePanY.value,
     rotationRadians: imageRotationRadians.value,
     zoom: imageZoom.value,
   };
-  gesture.rawZoom *= delta.zoomFactor;
-  const nextZoom = clampImageZoom(gesture.rawZoom);
-  imageGestureView = applyImageTwoFingerTransformDelta({
-    currentStageCenter: stageCenter,
+  let nextView = applyImageTwoFingerTransformDelta({
+    currentStageCenter,
     delta: {
-      ...delta,
-      zoomFactor: currentView.zoom > 0 ? nextZoom / currentView.zoom : 1,
+      ...panDelta,
+      rotationRadians: 0,
+      zoomFactor: 1,
     },
     maximumZoom: MAX_IMAGE_ZOOM,
     minimumZoom: MIN_IMAGE_ZOOM,
-    previousStageCenter: stageCenter,
+    previousStageCenter,
     view: currentView,
   });
-  writeImageGestureTransform(imageGestureView);
 
-  gesture.previousFirstX = first.clientX;
-  gesture.previousFirstY = first.clientY;
-  gesture.previousSecondX = second.clientX;
-  gesture.previousSecondY = second.clientY;
+  gesture.previousPanFirstX = first.clientX;
+  gesture.previousPanFirstY = first.clientY;
+  gesture.previousPanSecondX = second.clientX;
+  gesture.previousPanSecondY = second.clientY;
+  gesture.previousStageCenterX = currentStageCenter.x;
+  gesture.previousStageCenterY = currentStageCenter.y;
+
+  const firstMoved = first.revision !== gesture.lastFirstRevision;
+  const secondMoved = second.revision !== gesture.lastSecondRevision;
+  if (firstMoved || secondMoved) imageZoomMode.value = "custom";
+
+  // Scale and rotation do need a coherent pair. Pointer Events report each
+  // contact separately, so wait at most one paint frame for the partner event.
+  // A genuinely stationary contact is then recognized and adds no later lag.
+  const framePlan = getImageTwoFingerFramePlan({
+    allowUnpairedFrame,
+    coordination: {
+      deferredPointerId: gesture.deferredPointerId,
+      soloPointerId: gesture.soloPointerId,
+    },
+    firstMoved,
+    firstPointerId: gesture.firstPointerId,
+    secondMoved,
+    secondPointerId: gesture.secondPointerId,
+  });
+  gesture.deferredPointerId = framePlan.coordination.deferredPointerId;
+  gesture.soloPointerId = framePlan.coordination.soloPointerId;
+
+  if (framePlan.action === "apply") {
+    const transformDelta = getImageTwoFingerTransformDelta({
+      currentFirst,
+      currentSecond,
+      previousFirst: {
+        x: gesture.previousTransformFirstX,
+        y: gesture.previousTransformFirstY,
+      },
+      previousSecond: {
+        x: gesture.previousTransformSecondX,
+        y: gesture.previousTransformSecondY,
+      },
+    });
+    const zoomWasActive = gesture.zoomActive;
+    const rotationWasActive = gesture.rotationActive;
+
+    if (firstMoved || secondMoved) {
+      const intentMotion = getImageTwoFingerIntentMotion({
+        currentFirst,
+        currentSecond,
+        initialFirst: { x: gesture.initialFirstX, y: gesture.initialFirstY },
+        initialSecond: { x: gesture.initialSecondX, y: gesture.initialSecondY },
+      });
+      const zoomIntent = advanceImageTransformChannelIntent({
+        activationDistance: IMAGE_TRANSFORM_CHANNEL_TOUCH_SLOP,
+        motion: intentMotion.zoomPixels,
+        requiredSamples: IMAGE_TRANSFORM_INTENT_SAMPLE_COUNT,
+        state: {
+          active: gesture.zoomActive,
+          direction: gesture.zoomIntentDirection,
+          samples: gesture.zoomIntentSamples,
+        },
+      });
+      gesture.zoomActive = zoomIntent.active;
+      gesture.zoomIntentDirection = zoomIntent.direction;
+      gesture.zoomIntentSamples = zoomIntent.samples;
+
+      const rotationIntent = advanceImageTransformChannelIntent({
+        activationDistance: IMAGE_TRANSFORM_CHANNEL_TOUCH_SLOP,
+        motion: intentMotion.rotationPixels,
+        requiredSamples: IMAGE_TRANSFORM_INTENT_SAMPLE_COUNT,
+        state: {
+          active: gesture.rotationActive,
+          direction: gesture.rotationIntentDirection,
+          samples: gesture.rotationIntentSamples,
+        },
+      });
+      gesture.rotationActive = rotationIntent.active;
+      gesture.rotationIntentDirection = rotationIntent.direction;
+      gesture.rotationIntentSamples = rotationIntent.samples;
+    }
+
+    // Activation consumes only the threshold-crossing sample. Rebasing here
+    // means zoom/rotation start smoothly instead of jumping by the touch slop.
+    if (zoomWasActive || rotationWasActive) {
+      const zoomStep = zoomWasActive
+        ? advanceImageGestureZoom({
+            currentZoom: nextView.zoom,
+            maximumZoom: MAX_IMAGE_ZOOM,
+            minimumZoom: MIN_IMAGE_ZOOM,
+            rawZoom: gesture.rawZoom,
+            zoomFactor: transformDelta.zoomFactor,
+          })
+        : null;
+      if (zoomStep) gesture.rawZoom = zoomStep.rawZoom;
+
+      nextView = applyImageTwoFingerTransformDelta({
+        currentStageCenter,
+        delta: {
+          currentCentroid: transformDelta.currentCentroid,
+          pan: { x: 0, y: 0 },
+          previousCentroid: transformDelta.currentCentroid,
+          rotationRadians: rotationWasActive ? transformDelta.rotationRadians : 0,
+          zoomFactor: zoomStep?.zoomFactor ?? 1,
+        },
+        maximumZoom: MAX_IMAGE_ZOOM,
+        minimumZoom: MIN_IMAGE_ZOOM,
+        previousStageCenter: currentStageCenter,
+        view: nextView,
+      });
+    }
+
+    gesture.previousTransformFirstX = first.clientX;
+    gesture.previousTransformFirstY = first.clientY;
+    gesture.previousTransformSecondX = second.clientX;
+    gesture.previousTransformSecondY = second.clientY;
+    gesture.lastFirstRevision = first.revision;
+    gesture.lastSecondRevision = second.revision;
+  }
+
+  imageGestureView = nextView;
+  writeImageGestureTransform(nextView);
+
+  if (framePlan.action === "defer") {
+    scheduleImageTransformGestureUpdate();
+  }
+  return true;
 };
 
 const scheduleImageTransformGestureUpdate = () => {
@@ -2684,6 +2874,7 @@ const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) 
     clientX: event.clientX,
     clientY: event.clientY,
     pointerId: event.pointerId,
+    revision: 0,
     startClientX: event.clientX,
     startClientY: event.clientY,
     startsOnArtboard,
@@ -2739,6 +2930,9 @@ const continueImageTouchPointer = (event: PointerEvent) => {
   const touch = imageTouchPointers.get(event.pointerId);
   if (!touch) return;
 
+  if (touch.clientX !== event.clientX || touch.clientY !== event.clientY) {
+    touch.revision += 1;
+  }
   touch.clientX = event.clientX;
   touch.clientY = event.clientY;
 
@@ -2764,6 +2958,14 @@ const finishImageTouchPointer = (event: PointerEvent) => {
   const touch = imageTouchPointers.get(event.pointerId);
   if (!touch) return;
 
+  const didTouchMoveAtFinish =
+    touch.clientX !== event.clientX || touch.clientY !== event.clientY;
+  if (didTouchMoveAtFinish) {
+    touch.revision += 1;
+  }
+  touch.clientX = event.clientX;
+  touch.clientY = event.clientY;
+
   const gesture = imageTransformGesture;
   if (
     gesture &&
@@ -2771,8 +2973,8 @@ const finishImageTouchPointer = (event: PointerEvent) => {
   ) {
     const hasPendingTransformUpdate = imageTransformFrame !== null;
     cancelScheduledImageTransformUpdate();
-    if (hasPendingTransformUpdate) {
-      updateImageTransformGesture();
+    if (hasPendingTransformUpdate || didTouchMoveAtFinish) {
+      updateImageTransformGesture({ allowUnpairedFrame: false });
     }
     imageTouchPointers.delete(event.pointerId);
     commitImageGestureView();
@@ -2789,9 +2991,6 @@ const finishImageTouchPointer = (event: PointerEvent) => {
     }
     return;
   }
-
-  touch.clientX = event.clientX;
-  touch.clientY = event.clientY;
 
   if (imagePendingTouchPointerId === event.pointerId) {
     beginPendingImageTouch(event, touch);
@@ -6638,9 +6837,9 @@ onUnmounted(() => {
     box-sizing: border-box;
     cursor: crosshair;
     background-color: var(--image-pixel-background, #101010);
-    border: 1px solid var(--editor-border-strong);
+    border: 0;
     border-radius: var(--editor-radius-md);
-    box-shadow: none;
+    box-shadow: 0 0 0 1px var(--editor-border-strong);
     outline: none;
     touch-action: none;
     transform: translate3d(var(--image-pan-x, 0px), var(--image-pan-y, 0px), 0)
