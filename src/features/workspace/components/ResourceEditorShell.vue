@@ -6267,7 +6267,7 @@ onUnmounted(() => {
   .image-editor-floating-color-picker {
     --image-color-picker-scale: 0.67;
     position: absolute;
-    bottom: 164px;
+    bottom: 56px;
     left: 12px;
     z-index: 6;
     width: 196px;
@@ -6278,7 +6278,7 @@ onUnmounted(() => {
   }
 
   .image-editor-floating-palette {
-    --image-palette-safe-bottom: 372px;
+    --image-palette-safe-bottom: 264px;
     --image-palette-safe-right: 220px;
     position: absolute;
     top: 12px;
@@ -6500,6 +6500,7 @@ onUnmounted(() => {
   }
 
   .image-editor-color-swatches-host {
+    display: none;
     grid-area: swatches;
     width: 100%;
     min-width: 0;
@@ -7170,6 +7171,18 @@ onUnmounted(() => {
     .image-editor-context-host {
       padding-right: 86px;
       box-sizing: border-box;
+    }
+
+    .image-editor-floating-color-picker {
+      bottom: 164px;
+    }
+
+    .image-editor-floating-palette {
+      --image-palette-safe-bottom: 372px;
+    }
+
+    .image-editor-color-swatches-host {
+      display: grid;
     }
 
     .image-editor-right-dock {
