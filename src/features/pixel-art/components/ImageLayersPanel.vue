@@ -2,12 +2,15 @@
 import { computed, nextTick, ref, useId, watch, type ComponentPublicInstance } from "vue";
 
 import type { PixelLayer } from "../types";
+import ImageLayerThumbnail from "./ImageLayerThumbnail.vue";
 
 const props = withDefaults(
   defineProps<{
     layers: PixelLayer[];
     activeLayerId: string;
     canEdit: boolean;
+    imageWidth: number;
+    imageHeight: number;
     maxLayers?: number;
   }>(),
   {
@@ -191,6 +194,19 @@ watch(
         @click="selectLayer(layer.id)"
       >
         <div class="image-layer-row__main">
+          <span
+            class="image-layer-row__thumbnail"
+            role="img"
+            :aria-label="`${layer.name} preview`"
+          >
+            <ImageLayerThumbnail
+              :pixels="layer.pixels"
+              :width="imageWidth"
+              :height="imageHeight"
+              :opacity="layer.opacity"
+            />
+          </span>
+
           <button
             type="button"
             class="layer-icon-button"
@@ -223,13 +239,6 @@ watch(
               <path v-else d="M9 10V7a4 4 0 0 1 7.7-1.5" />
             </svg>
           </button>
-
-          <span class="image-layer-row__thumbnail" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <path d="m12 4 7 4-7 4-7-4 7-4Z" />
-              <path d="m5 12 7 4 7-4M5 16l7 4 7-4" />
-            </svg>
-          </span>
 
           <input
             v-if="renamingLayerId === layer.id"
@@ -400,7 +409,8 @@ watch(
     gap: 4px;
     align-items: center;
     min-width: 0;
-    padding: 6px 8px;
+    padding: 0 8px 0 0;
+    overflow: hidden;
     border: 0;
     border-bottom: 1px solid var(--layers-line);
     border-radius: 5px;
@@ -424,8 +434,6 @@ watch(
   }
 
   .image-layer-row.is-active .image-layer-row__thumbnail {
-    color: #555555;
-    background: #d4d4d4;
     border-color: #9a9a9a;
   }
 
@@ -446,32 +454,32 @@ watch(
 
   .image-layer-row__main {
     display: grid;
-    grid-template-columns: 30px 30px 34px minmax(0, 1fr);
+    grid-template-columns: 44px 30px 30px minmax(0, 1fr);
     gap: 4px;
     align-items: center;
     min-width: 0;
   }
 
   .image-layer-row__thumbnail {
-    display: grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
+    align-self: center;
+    width: 44px;
+    height: 44px;
     overflow: hidden;
-    color: #8d8d8d;
-    background: var(--layers-control);
-    border: 1px solid #3a3a3a;
-    border-radius: 4px;
-  }
-
-  .image-layer-row__thumbnail svg {
-    width: 16px;
-    height: 16px;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.65;
+    background-color: #141414;
+    background-image:
+      linear-gradient(45deg, #252525 25%, transparent 25%),
+      linear-gradient(-45deg, #252525 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #252525 75%),
+      linear-gradient(-45deg, transparent 75%, #252525 75%);
+    background-position:
+      0 0,
+      0 4px,
+      4px -4px,
+      -4px 0;
+    background-size: 8px 8px;
+    border: 0;
+    border-right: 1px solid #3a3a3a;
+    border-radius: 4px 0 0 4px;
   }
 
   .image-layer-row__name,
@@ -624,13 +632,13 @@ watch(
     text-align: center;
   }
 
-  @media (max-width: 820px) {
-    .image-layer-row__main {
-      grid-template-columns: 30px 30px minmax(0, 1fr);
+  @media (max-width: 440px) {
+    .image-layer-row {
+      grid-template-columns: minmax(0, 1fr);
     }
 
-    .image-layer-row__thumbnail {
-      display: none;
+    .image-layer-row__actions {
+      justify-content: flex-end;
     }
   }
 
