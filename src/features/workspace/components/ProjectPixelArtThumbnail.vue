@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 const props = withDefaults(
   defineProps<{
@@ -25,31 +25,47 @@ const visiblePixels = computed(() =>
     }))
     .filter((pixel): pixel is { color: string; x: number; y: number } => Boolean(pixel.color)),
 );
+
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+
+const renderThumbnail = () => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  const size = normalizedSize.value;
+  canvas.width = size;
+  canvas.height = size;
+
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, size, size);
+
+  for (const pixel of visiblePixels.value) {
+    context.fillStyle = pixel.color;
+    context.fillRect(pixel.x, pixel.y, 1, 1);
+  }
+};
+
+watch([normalizedSize, visiblePixels], renderThumbnail, { flush: "post" });
+onMounted(renderThumbnail);
 </script>
 
 <template>
-  <svg
-    :viewBox="`0 0 ${normalizedSize} ${normalizedSize}`"
-    preserveAspectRatio="none"
-    shape-rendering="crispEdges"
+  <canvas
+    ref="canvasRef"
+    :width="normalizedSize"
+    :height="normalizedSize"
     aria-hidden="true"
-    focusable="false"
-  >
-    <rect
-      v-for="pixel in visiblePixels"
-      :key="`${pixel.x}-${pixel.y}`"
-      :x="pixel.x"
-      :y="pixel.y"
-      width="1"
-      height="1"
-      :fill="pixel.color"
-    />
-  </svg>
+  ></canvas>
 </template>
 
 <style scoped>
-  svg {
+  canvas {
     display: block;
+    width: 100%;
+    height: 100%;
     overflow: hidden;
     image-rendering: pixelated;
   }
