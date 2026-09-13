@@ -1,0 +1,57 @@
+diff --git a/node_modules/@use-gesture/core/dist/actions-6579bdef.cjs.dev.js b/node_modules/@use-gesture/core/dist/actions-6579bdef.cjs.dev.js
+index 647c154..53a707d 100644
+--- a/node_modules/@use-gesture/core/dist/actions-6579bdef.cjs.dev.js
++++ b/node_modules/@use-gesture/core/dist/actions-6579bdef.cjs.dev.js
+@@ -150,7 +150,9 @@ function touchIds(event) {
+   return getCurrentTargetTouchList(event).map(touch => touch.identifier);
+ }
+ function touchDistanceAngle(event, ids) {
+-  const [P1, P2] = Array.from(event.touches).filter(touch => ids.includes(touch.identifier));
++  const touches = Array.from(event.touches);
++  const [P1, P2] = ids.map(id => touches.find(touch => touch.identifier === id));
++  if (!P1 || !P2) return null;
+   return distanceAngle(P1, P2);
+ }
+ function pointerId(event) {
+diff --git a/node_modules/@use-gesture/core/dist/actions-89e642c9.cjs.prod.js b/node_modules/@use-gesture/core/dist/actions-89e642c9.cjs.prod.js
+index d4d7ec4..495e679 100644
+--- a/node_modules/@use-gesture/core/dist/actions-89e642c9.cjs.prod.js
++++ b/node_modules/@use-gesture/core/dist/actions-89e642c9.cjs.prod.js
+@@ -150,7 +150,9 @@ function touchIds(event) {
+   return getCurrentTargetTouchList(event).map(touch => touch.identifier);
+ }
+ function touchDistanceAngle(event, ids) {
+-  const [P1, P2] = Array.from(event.touches).filter(touch => ids.includes(touch.identifier));
++  const touches = Array.from(event.touches);
++  const [P1, P2] = ids.map(id => touches.find(touch => touch.identifier === id));
++  if (!P1 || !P2) return null;
+   return distanceAngle(P1, P2);
+ }
+ function pointerId(event) {
+diff --git a/node_modules/@use-gesture/core/dist/actions-fe213e88.esm.js b/node_modules/@use-gesture/core/dist/actions-fe213e88.esm.js
+index bd42d19..bbf6e12 100644
+--- a/node_modules/@use-gesture/core/dist/actions-fe213e88.esm.js
++++ b/node_modules/@use-gesture/core/dist/actions-fe213e88.esm.js
+@@ -148,7 +148,9 @@ function touchIds(event) {
+   return getCurrentTargetTouchList(event).map(touch => touch.identifier);
+ }
+ function touchDistanceAngle(event, ids) {
+-  const [P1, P2] = Array.from(event.touches).filter(touch => ids.includes(touch.identifier));
++  const touches = Array.from(event.touches);
++  const [P1, P2] = ids.map(id => touches.find(touch => touch.identifier === id));
++  if (!P1 || !P2) return null;
+   return distanceAngle(P1, P2);
+ }
+ function pointerId(event) {
+diff --git a/node_modules/@use-gesture/core/src/utils/events.ts b/node_modules/@use-gesture/core/src/utils/events.ts
+index 90ce382..b1e0a74 100644
+--- a/node_modules/@use-gesture/core/src/utils/events.ts
++++ b/node_modules/@use-gesture/core/src/utils/events.ts
+@@ -96,3 +96,5 @@ export function touchDistanceAngle(event: TouchEvent, ids: number[]) {
+ export function touchDistanceAngle(event: TouchEvent, ids: number[]) {
+-  const [P1, P2] = Array.from(event.touches).filter((touch) => ids.includes(touch.identifier))
++  const touches = Array.from(event.touches)
++  const [P1, P2] = ids.map((id) => touches.find((touch) => touch.identifier === id))
++  if (!P1 || !P2) return null
+   return distanceAngle(P1, P2)
+ }
