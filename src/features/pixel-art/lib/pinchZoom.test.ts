@@ -1,128 +1,307 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  getAnchoredImagePinchPan,
-  getImagePinchGeometry,
-  getImagePinchZoom,
-  getImageTwoFingerGestureIntent,
+  applyImageTwoFingerTransformDelta,
+  getImageTwoFingerGeometry,
+  getImageTwoFingerTransformDelta,
+  getImageTwoFingerTransformMotion,
+  normalizeImageRotationRadians,
+  rotateImageClientPoint,
+  type ImageTwoFingerTransformDelta,
+  type ImageViewportTransform,
 } from "./pinchZoom";
 
-describe("image pinch zoom", () => {
-  it("derives the midpoint and distance from two contacts", () => {
-    expect(getImagePinchGeometry({ x: 20, y: 40 }, { x: 80, y: 120 })).toEqual({
-      distance: 100,
-      midpoint: { x: 50, y: 80 },
-    });
+const stationaryStageCenter = { x: 100, y: 100 };
+
+const view = (
+  overrides: Partial<ImageViewportTransform> = {},
+): ImageViewportTransform => ({
+  panX: 0,
+  panY: 0,
+  rotationRadians: 0,
+  zoom: 2,
+  ...overrides,
+});
+
+const apply = (
+  currentView: ImageViewportTransform,
+  delta: ImageTwoFingerTransformDelta,
+  overrides: Partial<Parameters<typeof applyImageTwoFingerTransformDelta>[0]> = {},
+) =>
+  applyImageTwoFingerTransformDelta({
+    currentStageCenter: stationaryStageCenter,
+    delta,
+    maximumZoom: 64,
+    minimumZoom: 0.25,
+    previousStageCenter: stationaryStageCenter,
+    view: currentView,
+    ...overrides,
   });
 
-  it("recognizes parallel two-finger movement as pan despite small imperfections", () => {
-    expect(
-      getImageTwoFingerGestureIntent({
-        currentFirst: { x: 38, y: 47 },
-        currentSecond: { x: 99, y: 125 },
-        initialFirst: { x: 20, y: 40 },
-        initialSecond: { x: 80, y: 120 },
-      }),
-    ).toBe("pan");
+describe("continuous image multitouch transforms", () => {
+  it("derives centroid, distance and angle from the same contact pair", () => {
+    const geometry = getImageTwoFingerGeometry({ x: 20, y: 40 }, { x: 80, y: 120 });
+
+    expect(geometry.centroid).toEqual({ x: 50, y: 80 });
+    expect(geometry.distance).toBe(100);
+    expect(geometry.angleRadians).toBeCloseTo(Math.atan2(80, 60));
   });
 
-  it("recognizes approximately opposing finger movement as zoom", () => {
-    expect(
-      getImageTwoFingerGestureIntent({
-        currentFirst: { x: 8, y: 42 },
-        currentSecond: { x: 93, y: 117 },
-        initialFirst: { x: 20, y: 40 },
-        initialSecond: { x: 80, y: 120 },
-      }),
-    ).toBe("zoom");
-  });
-
-  it("waits through contact jitter before choosing a gesture", () => {
-    expect(
-      getImageTwoFingerGestureIntent({
-        currentFirst: { x: 22, y: 41 },
-        currentSecond: { x: 79, y: 118 },
-        initialFirst: { x: 20, y: 40 },
-        initialSecond: { x: 80, y: 120 },
-      }),
-    ).toBeNull();
-  });
-
-  it("does not lock zoom from an isolated contact update", () => {
-    expect(
-      getImageTwoFingerGestureIntent({
-        currentFirst: { x: 20, y: 40 },
-        currentSecond: { x: 104, y: 138 },
-        initialFirst: { x: 20, y: 40 },
-        initialSecond: { x: 80, y: 120 },
-      }),
-    ).toBeNull();
-  });
-
-  it("scales from the initial distance and respects the zoom limits", () => {
-    expect(
-      getImagePinchZoom({
-        currentDistance: 200,
-        initialDistance: 100,
-        initialZoom: 4,
-        minimumZoom: 0.25,
-        maximumZoom: 64,
-      }),
-    ).toBe(8);
-    expect(
-      getImagePinchZoom({
-        currentDistance: 1,
-        initialDistance: 100,
-        initialZoom: 4,
-        minimumZoom: 0.25,
-        maximumZoom: 64,
-      }),
-    ).toBe(0.25);
-  });
-
-  it("keeps the anchored image point below a moving midpoint", () => {
-    expect(
-      getAnchoredImagePinchPan({
-        anchor: { x: 0.25, y: 0.75 },
-        artboardSize: { width: 400, height: 200 },
-        midpoint: { x: 260, y: 190 },
-        stageCenter: { x: 260, y: 220 },
-      }),
-    ).toEqual({ x: 100, y: -80 });
-  });
-
-  it("supports an artboard center that is offset inside the stage", () => {
-    expect(
-      getAnchoredImagePinchPan({
-        anchor: { x: 0.25, y: 0.75 },
-        artboardSize: { width: 400, height: 200 },
-        midpoint: { x: 260, y: 190 },
-        stageCenter: { x: 260, y: 204 },
-      }),
-    ).toEqual({ x: 100, y: -64 });
-  });
-
-  it("turns movement of the pinch midpoint into the same amount of two-finger pan", () => {
-    const anchor = { x: 0.55, y: 0.4 };
-    const artboardSize = { width: 320, height: 640 };
-    const stageCenter = { x: 200, y: 180 };
-    const initialMidpoint = { x: 246, y: 283 };
-    const initialPan = getAnchoredImagePinchPan({
-      anchor,
-      artboardSize,
-      midpoint: initialMidpoint,
-      stageCenter,
-    });
-    const movedPan = getAnchoredImagePinchPan({
-      anchor,
-      artboardSize,
-      midpoint: { x: initialMidpoint.x + 18, y: initialMidpoint.y - 12 },
-      stageCenter,
+  it("reports pan, zoom and rotation simultaneously between frames", () => {
+    const delta = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 0, y: 0 },
+      previousSecond: { x: 20, y: 0 },
+      currentFirst: { x: 5, y: 5 },
+      currentSecond: { x: 5, y: 45 },
     });
 
-    expect(movedPan).toEqual({
-      x: initialPan.x + 18,
-      y: initialPan.y - 12,
+    expect(delta.pan).toEqual({ x: -5, y: 25 });
+    expect(delta.zoomFactor).toBe(2);
+    expect(delta.rotationRadians).toBeCloseTo(Math.PI / 2);
+  });
+
+  it("uses the shortest rotation delta across the ±π boundary", () => {
+    const degrees = (value: number) => (value * Math.PI) / 180;
+    const previousAngle = degrees(179);
+    const currentAngle = degrees(-179);
+    const radius = 50;
+    const delta = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 0, y: 0 },
+      previousSecond: {
+        x: Math.cos(previousAngle) * radius,
+        y: Math.sin(previousAngle) * radius,
+      },
+      currentFirst: { x: 0, y: 0 },
+      currentSecond: {
+        x: Math.cos(currentAngle) * radius,
+        y: Math.sin(currentAngle) * radius,
+      },
     });
+
+    expect(delta.rotationRadians).toBeCloseTo(degrees(2));
+    expect(normalizeImageRotationRadians(degrees(358))).toBeCloseTo(degrees(-2));
+  });
+
+  it("treats a collapsed contact pair as translation without invalid scale or rotation", () => {
+    const delta = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 10, y: 10 },
+      previousSecond: { x: 10, y: 10 },
+      currentFirst: { x: 14, y: 17 },
+      currentSecond: { x: 14, y: 17 },
+    });
+
+    expect(delta.pan).toEqual({ x: 4, y: 7 });
+    expect(delta.zoomFactor).toBe(1);
+    expect(delta.rotationRadians).toBe(0);
+  });
+
+  it("suspends noisy scale and rotation while close contacts still translate", () => {
+    const delta = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 10, y: 10 },
+      previousSecond: { x: 18, y: 10 },
+      currentFirst: { x: 15, y: 16 },
+      currentSecond: { x: 15, y: 26 },
+    });
+
+    expect(delta.pan).toEqual({ x: 1, y: 11 });
+    expect(delta.zoomFactor).toBe(1);
+    expect(delta.rotationRadians).toBe(0);
+  });
+
+  it("expresses transform touch-slop in client pixels for every component", () => {
+    expect(
+      getImageTwoFingerTransformMotion({
+        centroidSize: 50,
+        currentCentroid: { x: 0, y: 0 },
+        pan: { x: 3, y: 4 },
+        previousCentroid: { x: 0, y: 0 },
+        rotationRadians: 0.04,
+        zoomFactor: 1.06,
+      }),
+    ).toBe(5);
+  });
+
+  it("translates rigid two-finger motion exactly 1:1", () => {
+    const result = apply(
+      view({ panX: 10, panY: -5 }),
+      getImageTwoFingerTransformDelta({
+        previousFirst: { x: 110, y: 100 },
+        previousSecond: { x: 130, y: 120 },
+        currentFirst: { x: 140, y: 80 },
+        currentSecond: { x: 160, y: 100 },
+      }),
+    );
+
+    expect(result.panX).toBeCloseTo(40);
+    expect(result.panY).toBeCloseTo(-25);
+    expect(result.zoom).toBe(2);
+    expect(result.rotationRadians).toBeCloseTo(0);
+  });
+
+  it("keeps the content beneath a stationary pinch centroid anchored", () => {
+    const result = apply(view(), {
+      centroidSize: 25,
+      currentCentroid: { x: 150, y: 100 },
+      pan: { x: 0, y: 0 },
+      previousCentroid: { x: 150, y: 100 },
+      rotationRadians: 0,
+      zoomFactor: 2,
+    });
+
+    expect(result.zoom).toBe(4);
+    expect(result.panX).toBeCloseTo(-50);
+    expect(result.panY).toBeCloseTo(0);
+  });
+
+  it("combines translation, scale and rotation in one anchored update", () => {
+    const result = apply(
+      view({ panX: 20, panY: -10 }),
+      {
+        centroidSize: 50,
+        currentCentroid: { x: 280, y: 210 },
+        pan: { x: 30, y: 30 },
+        previousCentroid: { x: 250, y: 180 },
+        rotationRadians: Math.PI / 2,
+        zoomFactor: 1.5,
+      },
+      {
+        currentStageCenter: { x: 200, y: 150 },
+        previousStageCenter: { x: 200, y: 150 },
+      },
+    );
+
+    expect(result.zoom).toBeCloseTo(3);
+    expect(result.rotationRadians).toBeCloseTo(Math.PI / 2);
+    expect(result.panX).toBeCloseTo(140);
+    expect(result.panY).toBeCloseTo(15);
+  });
+
+  it("composes sampled frames without path-dependent transform drift", () => {
+    const initialFirst = { x: 120, y: 80 };
+    const initialSecond = { x: 220, y: 120 };
+    const middleFirst = { x: 132, y: 70 };
+    const middleSecond = { x: 248, y: 146 };
+    const finalFirst = { x: 154, y: 58 };
+    const finalSecond = { x: 286, y: 174 };
+    const initialView = view({
+      panX: 17,
+      panY: -9,
+      rotationRadians: 0.35,
+      zoom: 3.25,
+    });
+    const throughMiddle = apply(
+      apply(
+        initialView,
+        getImageTwoFingerTransformDelta({
+          currentFirst: middleFirst,
+          currentSecond: middleSecond,
+          previousFirst: initialFirst,
+          previousSecond: initialSecond,
+        }),
+      ),
+      getImageTwoFingerTransformDelta({
+        currentFirst: finalFirst,
+        currentSecond: finalSecond,
+        previousFirst: middleFirst,
+        previousSecond: middleSecond,
+      }),
+    );
+    const direct = apply(
+      initialView,
+      getImageTwoFingerTransformDelta({
+        currentFirst: finalFirst,
+        currentSecond: finalSecond,
+        previousFirst: initialFirst,
+        previousSecond: initialSecond,
+      }),
+    );
+
+    expect(throughMiddle.panX).toBeCloseTo(direct.panX, 10);
+    expect(throughMiddle.panY).toBeCloseTo(direct.panY, 10);
+    expect(throughMiddle.zoom).toBeCloseTo(direct.zoom, 10);
+    expect(throughMiddle.rotationRadians).toBeCloseTo(direct.rotationRadians, 10);
+  });
+
+  it("keeps the client-space artboard fixed when the stage center moves", () => {
+    const result = apply(
+      view({ panX: 12, panY: -7 }),
+      {
+        centroidSize: 40,
+        currentCentroid: { x: 170, y: 150 },
+        pan: { x: 0, y: 0 },
+        previousCentroid: { x: 170, y: 150 },
+        rotationRadians: 0,
+        zoomFactor: 1,
+      },
+      {
+        currentStageCenter: { x: 125, y: 130 },
+        previousStageCenter: { x: 100, y: 100 },
+      },
+    );
+
+    expect(result.panX).toBeCloseTo(-13);
+    expect(result.panY).toBeCloseTo(-37);
+  });
+
+  it("is invariant when the two contacts keep their IDs but are listed in reverse order", () => {
+    const forward = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 50, y: 60 },
+      previousSecond: { x: 150, y: 90 },
+      currentFirst: { x: 42, y: 72 },
+      currentSecond: { x: 178, y: 142 },
+    });
+    const reversed = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 150, y: 90 },
+      previousSecond: { x: 50, y: 60 },
+      currentFirst: { x: 178, y: 142 },
+      currentSecond: { x: 42, y: 72 },
+    });
+
+    expect(reversed.pan).toEqual(forward.pan);
+    expect(reversed.zoomFactor).toBeCloseTo(forward.zoomFactor);
+    expect(reversed.rotationRadians).toBeCloseTo(forward.rotationRadians);
+  });
+
+  it("uses the effective scale at zoom limits while pan remains continuous", () => {
+    const result = apply(
+      view({ zoom: 60 }),
+      {
+        centroidSize: 50,
+        currentCentroid: { x: 165, y: 100 },
+        pan: { x: 15, y: 0 },
+        previousCentroid: { x: 150, y: 100 },
+        rotationRadians: 0,
+        zoomFactor: 2,
+      },
+    );
+
+    expect(result.zoom).toBe(64);
+    expect(result.panX).toBeCloseTo(165 - 100 - 50 * (64 / 60));
+  });
+
+  it("rotates client points around an arbitrary center", () => {
+    const rotated = rotateImageClientPoint({
+      center: { x: 10, y: 20 },
+      point: { x: 14, y: 20 },
+      rotationRadians: Math.PI / 2,
+    });
+
+    expect(rotated.x).toBeCloseTo(10);
+    expect(rotated.y).toBeCloseTo(24);
+  });
+
+  it("round-trips a rotated client point for inverse hit testing", () => {
+    const center = { x: 137, y: 211 };
+    const point = { x: 284, y: 96 };
+    const rotationRadians = 0.73;
+    const rotated = rotateImageClientPoint({ center, point, rotationRadians });
+    const restored = rotateImageClientPoint({
+      center,
+      point: rotated,
+      rotationRadians: -rotationRadians,
+    });
+
+    expect(restored.x).toBeCloseTo(point.x, 10);
+    expect(restored.y).toBeCloseTo(point.y, 10);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   calculateImagePreviewSize,
+  clipImagePreviewPolygonToBounds,
   IMAGE_PREVIEW_MAX_SIZE,
   IMAGE_PREVIEW_MIN_SIZE,
 } from "./previewSizing";
@@ -68,5 +69,52 @@ describe("pixel-art preview sizing", () => {
         ...largeStage,
       }),
     ).toBe(IMAGE_PREVIEW_MIN_SIZE);
+  });
+
+  it("clips a rotated viewport polygon to the image instead of using its oversized AABB", () => {
+    const clipped = clipImagePreviewPolygonToBounds(
+      [
+        { x: 5, y: -5 },
+        { x: 15, y: 5 },
+        { x: 5, y: 15 },
+        { x: -5, y: 5 },
+      ],
+      { bottom: 10, left: 0, right: 10, top: 0 },
+    );
+
+    expect(clipped).toHaveLength(4);
+    expect(clipped).toEqual(
+      expect.arrayContaining([
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ]),
+    );
+  });
+
+  it("returns no visible preview polygon when viewport and image do not overlap", () => {
+    expect(
+      clipImagePreviewPolygonToBounds(
+        [
+          { x: 20, y: 20 },
+          { x: 30, y: 20 },
+          { x: 30, y: 30 },
+          { x: 20, y: 30 },
+        ],
+        { bottom: 10, left: 0, right: 10, top: 0 },
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects invalid clipping geometry", () => {
+    expect(
+      clipImagePreviewPolygonToBounds([{ x: Number.NaN, y: 0 }], {
+        bottom: 10,
+        left: 0,
+        right: 10,
+        top: 0,
+      }),
+    ).toEqual([]);
   });
 });
