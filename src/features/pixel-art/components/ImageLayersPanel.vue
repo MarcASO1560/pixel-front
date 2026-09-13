@@ -1,23 +1,25 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch, type ComponentPublicInstance } from "vue";
+import {
+  computed,
+  nextTick,
+  onUnmounted,
+  ref,
+  useId,
+  watch,
+  type ComponentPublicInstance,
+} from "vue";
 
 import type { ImageLayerDropPosition } from "../lib/layerEditing";
 import type { PixelLayer } from "../types";
 import ImageLayerThumbnail from "./ImageLayerThumbnail.vue";
 
-const props = withDefaults(
-  defineProps<{
-    layers: PixelLayer[];
-    activeLayerId: string;
-    canEdit: boolean;
-    imageWidth: number;
-    imageHeight: number;
-    maxLayers?: number;
-  }>(),
-  {
-    maxLayers: 64,
-  },
-);
+const props = defineProps<{
+  layers: PixelLayer[];
+  activeLayerId: string;
+  canEdit: boolean;
+  imageWidth: number;
+  imageHeight: number;
+}>();
 
 const emit = defineEmits<{
   select: [id: string];
@@ -40,10 +42,10 @@ const layersListRef = ref<HTMLOListElement | null>(null);
 const layerNameButtonRefs = new Map<string, HTMLButtonElement>();
 const layerRowRefs = new Map<string, HTMLLIElement>();
 const titleId = useId();
-const opacityInputId = useId();
 const layerDragStatus = ref("");
 const draggedLayerId = ref<string | null>(null);
 const isLayerDragActive = ref(false);
+const isLayerDragSettling = ref(false);
 const layerDragOffsetY = ref(0);
 const layerDropTarget = ref<{
   id: string;
@@ -51,18 +53,12 @@ const layerDropTarget = ref<{
 } | null>(null);
 let layerDragPointerId: number | null = null;
 let layerDragStartY = 0;
+let layerDragCaptureTarget: HTMLElement | null = null;
+let layerDropSettleTimer: ReturnType<typeof setTimeout> | null = null;
 const LAYER_DRAG_ACTIVATION_DISTANCE = 4;
+const LAYER_ROW_PITCH = 47;
 
-const layerLimit = computed(() =>
-  Number.isFinite(props.maxLayers) ? Math.max(1, Math.floor(props.maxLayers)) : 64,
-);
-const canAddLayer = computed(
-  () => props.canEdit && props.layers.length < layerLimit.value,
-);
-const activeLayer = computed(
-  () => props.layers.find((layer) => layer.id === props.activeLayerId) ?? null,
-);
-
+const canAddLayer = computed(() => props.canEdit);
 // Documents are composed bottom-to-top, while layer panels conventionally show
 // the topmost layer first.
 const displayedLayers = computed(() => [...props.layers].reverse());
@@ -104,17 +100,84 @@ const selectLayer = (id: string) => {
   emit("select", id);
 };
 
-const layerDragStyle = (id: string) =>
-  isLayerDragActive.value && draggedLayerId.value === id
-    ? { transform: `translate3d(0, ${layerDragOffsetY.value}px, 0)` }
+const displayedDropIndex = () => {
+  const draggedId = draggedLayerId.value;
+  const target = layerDropTarget.value;
+  if (!draggedId || !target) return -1;
+
+  const sourceIndex = displayedLayers.value.findIndex((layer) => layer.id === draggedId);
+  const targetIndex = displayedLayers.value.findIndex((layer) => layer.id === target.id);
+  if (sourceIndex < 0 || targetIndex < 0) return -1;
+
+  const insertionIndex = targetIndex + (target.position === "after" ? 1 : 0);
+  return insertionIndex > sourceIndex ? insertionIndex - 1 : insertionIndex;
+};
+
+const layerDropPreviewOffset = (id: string) => {
+  if (!isLayerDragActive.value || id === draggedLayerId.value) return 0;
+
+  const sourceIndex = displayedLayers.value.findIndex(
+    (layer) => layer.id === draggedLayerId.value,
+  );
+  const rowIndex = displayedLayers.value.findIndex((layer) => layer.id === id);
+  const dropIndex = displayedDropIndex();
+  if (sourceIndex < 0 || rowIndex < 0 || dropIndex < 0 || dropIndex === sourceIndex) {
+    return 0;
+  }
+
+  if (dropIndex > sourceIndex && rowIndex > sourceIndex && rowIndex <= dropIndex) {
+    return -LAYER_ROW_PITCH;
+  }
+  if (dropIndex < sourceIndex && rowIndex >= dropIndex && rowIndex < sourceIndex) {
+    return LAYER_ROW_PITCH;
+  }
+  return 0;
+};
+
+const layerDragStyle = (id: string) => {
+  if (!isLayerDragActive.value) return undefined;
+  if (draggedLayerId.value === id) {
+    return {
+      transform: `translate3d(0, ${layerDragOffsetY.value}px, 0) scale(1.018)`,
+    };
+  }
+
+  const previewOffset = layerDropPreviewOffset(id);
+  return previewOffset
+    ? { transform: `translate3d(0, ${previewOffset}px, 0)` }
     : undefined;
+};
+
+const opacityThumbPosition = (opacity: number) => {
+  const normalizedOpacity = Math.min(1, Math.max(0, opacity));
+  const percentage = normalizedOpacity * 100;
+  const edgeCorrection = 17 - normalizedOpacity * 34;
+
+  return `calc(${percentage}% + ${edgeCorrection}px)`;
+};
 
 const updateLayerDropTarget = (clientY: number) => {
   const candidates = displayedLayers.value
     .filter((layer) => layer.id !== draggedLayerId.value)
-    .map((layer) => ({ layer, bounds: layerRowRefs.get(layer.id)?.getBoundingClientRect() }))
+    .map((layer) => {
+      const bounds = layerRowRefs.get(layer.id)?.getBoundingClientRect();
+      const previewOffset = layerDropPreviewOffset(layer.id);
+      return bounds
+        ? {
+            layer,
+            bounds: {
+              bottom: bounds.bottom - previewOffset,
+              height: bounds.height,
+              top: bounds.top - previewOffset,
+            },
+          }
+        : { layer, bounds: undefined };
+    })
     .filter(
-      (candidate): candidate is { layer: PixelLayer; bounds: DOMRect } =>
+      (candidate): candidate is {
+        layer: PixelLayer;
+        bounds: { bottom: number; height: number; top: number };
+      } =>
         Boolean(candidate.bounds),
     );
 
@@ -156,23 +219,35 @@ const scrollLayerListNearEdge = (clientY: number) => {
 };
 
 const resetLayerDrag = () => {
+  if (layerDropSettleTimer !== null) {
+    clearTimeout(layerDropSettleTimer);
+    layerDropSettleTimer = null;
+  }
   draggedLayerId.value = null;
   isLayerDragActive.value = false;
+  isLayerDragSettling.value = false;
   layerDragOffsetY.value = 0;
   layerDropTarget.value = null;
   layerDragPointerId = null;
+  layerDragCaptureTarget = null;
 };
 
 const startLayerDrag = (event: PointerEvent, layer: PixelLayer) => {
-  if (!props.canEdit || props.layers.length < 2 || event.button !== 0) return;
-  const handle = event.currentTarget as HTMLElement;
+  if (
+    !props.canEdit ||
+    props.layers.length < 2 ||
+    event.button !== 0 ||
+    isLayerDragSettling.value
+  ) {
+    return;
+  }
   selectLayer(layer.id);
   draggedLayerId.value = layer.id;
   layerDragPointerId = event.pointerId;
+  layerDragCaptureTarget = event.currentTarget as HTMLElement;
   layerDragStartY = event.clientY;
   layerDragOffsetY.value = 0;
   layerDropTarget.value = null;
-  handle.setPointerCapture(event.pointerId);
 };
 
 const continueLayerDrag = (event: PointerEvent) => {
@@ -183,6 +258,9 @@ const continueLayerDrag = (event: PointerEvent) => {
   }
 
   event.preventDefault();
+  if (!isLayerDragActive.value) {
+    layerDragCaptureTarget?.setPointerCapture(event.pointerId);
+  }
   isLayerDragActive.value = true;
   layerDragOffsetY.value = offsetY;
   scrollLayerListNearEdge(event.clientY);
@@ -196,15 +274,39 @@ const finishLayerDrag = (event: PointerEvent) => {
   const draggedLayer = props.layers.find((layer) => layer.id === draggedId);
   const targetLayer = props.layers.find((layer) => layer.id === target?.id);
 
-  if (isLayerDragActive.value && draggedId && target && targetLayer) {
-    emit("reorder", { id: draggedId, targetId: target.id, position: target.position });
-    layerDragStatus.value = `${draggedLayer?.name || "Layer"} moved ${target.position} ${targetLayer.name}.`;
+  const captureTarget = layerDragCaptureTarget;
+  layerDragPointerId = null;
+  layerDragCaptureTarget = null;
+  if (captureTarget?.hasPointerCapture(event.pointerId)) {
+    captureTarget.releasePointerCapture(event.pointerId);
   }
 
-  const handle = event.currentTarget as HTMLElement;
-  if (handle.hasPointerCapture(event.pointerId)) {
-    handle.releasePointerCapture(event.pointerId);
+  if (isLayerDragActive.value && draggedId && target && targetLayer) {
+    const sourceIndex = displayedLayers.value.findIndex(
+      (layer) => layer.id === draggedId,
+    );
+    const dropIndex = displayedDropIndex();
+    const shouldReorder =
+      sourceIndex >= 0 && dropIndex >= 0 && sourceIndex !== dropIndex;
+    layerDragOffsetY.value = shouldReorder
+      ? (dropIndex - sourceIndex) * LAYER_ROW_PITCH
+      : 0;
+    isLayerDragSettling.value = true;
+    layerDropSettleTimer = setTimeout(() => {
+      layerDropSettleTimer = null;
+      if (shouldReorder) {
+        emit("reorder", {
+          id: draggedId,
+          targetId: target.id,
+          position: target.position,
+        });
+        layerDragStatus.value = `${draggedLayer?.name || "Layer"} moved ${target.position} ${targetLayer.name}.`;
+      }
+      resetLayerDrag();
+    }, 170);
+    return;
   }
+
   resetLayerDrag();
 };
 
@@ -256,9 +358,12 @@ const commitRename = (layer: PixelLayer) => {
   }
 };
 
-const emitOpacity = (event: Event, mode: "preview" | "commit") => {
-  const layer = activeLayer.value;
-  if (!layer || !props.canEdit) {
+const emitOpacity = (
+  event: Event,
+  layer: PixelLayer,
+  mode: "preview" | "commit",
+) => {
+  if (!props.canEdit) {
     return;
   }
 
@@ -289,29 +394,18 @@ watch(
   },
   { deep: false },
 );
+
+onUnmounted(resetLayerDrag);
 </script>
 
 <template>
   <section class="image-layers-panel" :aria-labelledby="titleId">
     <header class="image-layers-panel__header">
-      <div class="image-layers-panel__heading">
-        <h2 :id="titleId">Layers</h2>
-        <span :aria-label="`${layers.length} of ${layerLimit} layers`">
-          {{ layers.length }}/{{ layerLimit }}
-        </span>
-      </div>
-
       <button
         type="button"
         class="layer-icon-button layer-icon-button--add"
         :disabled="!canAddLayer"
-        :title="
-          !canEdit
-            ? 'Editing is unavailable'
-            : canAddLayer
-              ? 'Add layer'
-              : `Layer limit reached (${layerLimit})`
-        "
+        :title="canEdit ? 'Add layer' : 'Editing is unavailable'"
         aria-label="Add layer"
         @click="emit('add')"
       >
@@ -319,13 +413,26 @@ watch(
           <path d="M12 5v14M5 12h14" />
         </svg>
       </button>
+
+      <div class="image-layers-panel__heading">
+        <h2 :id="titleId">Layers</h2>
+        <span :aria-label="`${layers.length} layers`">
+          {{ layers.length }}
+        </span>
+      </div>
     </header>
 
     <p v-if="layers.length === 0" class="image-layers-panel__empty">
       No layers available.
     </p>
 
-    <ol v-else ref="layersListRef" class="image-layers-panel__list" aria-label="Image layers">
+    <ol
+      v-else
+      ref="layersListRef"
+      class="image-layers-panel__list"
+      :class="{ 'is-reordering': isLayerDragActive }"
+      aria-label="Image layers"
+    >
       <li
         v-for="layer in displayedLayers"
         :key="layer.id"
@@ -335,6 +442,7 @@ watch(
           'is-active': layer.id === activeLayerId,
           'is-hidden': !layer.visible,
           'is-dragging': isLayerDragActive && draggedLayerId === layer.id,
+          'is-drag-settling': isLayerDragSettling && draggedLayerId === layer.id,
           'is-drop-before':
             isLayerDragActive &&
             layerDropTarget?.id === layer.id &&
@@ -346,7 +454,13 @@ watch(
         }"
         :style="layerDragStyle(layer.id)"
         :aria-current="layer.id === activeLayerId ? 'true' : undefined"
+        :title="canEdit && layers.length > 1 ? 'Drag to reorder' : undefined"
         @click="selectLayer(layer.id)"
+        @pointerdown="startLayerDrag($event, layer)"
+        @pointermove="continueLayerDrag"
+        @pointerup="finishLayerDrag"
+        @pointercancel="cancelLayerDrag"
+        @lostpointercapture="cancelLayerDrag"
       >
         <div class="image-layer-row__main">
           <span
@@ -368,6 +482,7 @@ watch(
             :disabled="!canEdit"
             :aria-label="layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`"
             :title="layer.visible ? 'Hide layer' : 'Show layer'"
+            @pointerdown.stop
             @click.stop="emit('toggle-visible', layer.id)"
           >
             <svg v-if="layer.visible" viewBox="0 0 24 24" aria-hidden="true">
@@ -386,6 +501,7 @@ watch(
             :disabled="!canEdit"
             :aria-label="layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`"
             :title="layer.locked ? 'Unlock layer' : 'Lock layer'"
+            @pointerdown.stop
             @click.stop="emit('toggle-lock', layer.id)"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -403,6 +519,7 @@ watch(
             type="text"
             maxlength="80"
             :aria-label="`Rename ${layer.name}`"
+            @pointerdown.stop
             @click.stop
             @dblclick.stop
             @blur="commitRename(layer)"
@@ -422,6 +539,28 @@ watch(
             <span>{{ layer.name }}</span>
             <small v-if="layer.locked">Locked</small>
           </button>
+
+          <label
+            class="image-layer-row__opacity"
+            :title="`${Math.round(layer.opacity * 100)}% opacity`"
+            @click.stop
+            @pointerdown.stop
+          >
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="Math.round(layer.opacity * 100)"
+              :disabled="!canEdit"
+              :aria-label="`Opacity for ${layer.name}`"
+              @input="emitOpacity($event, layer, 'preview')"
+              @change="emitOpacity($event, layer, 'commit')"
+            />
+            <output :style="{ left: opacityThumbPosition(layer.opacity) }">
+              {{ Math.round(layer.opacity * 100) }}%
+            </output>
+          </label>
         </div>
 
         <div class="image-layer-row__actions" role="group" :aria-label="`Actions for ${layer.name}`">
@@ -453,9 +592,10 @@ watch(
           <button
             type="button"
             class="layer-icon-button"
-            :disabled="!canEdit || layers.length >= layerLimit"
+            :disabled="!canEdit"
             :aria-label="`Duplicate ${layer.name}`"
             title="Duplicate layer"
+            @pointerdown.stop
             @click.stop="emit('duplicate', layer.id)"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -469,6 +609,7 @@ watch(
             :disabled="!canEdit || layers.length <= 1"
             :aria-label="`Delete ${layer.name}`"
             title="Delete layer"
+            @pointerdown.stop
             @click.stop="emit('remove', layer.id)"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -483,24 +624,6 @@ watch(
       {{ layerDragStatus }}
     </p>
 
-    <div v-if="activeLayer" class="image-layers-panel__opacity">
-      <label :for="opacityInputId">
-        <span>Opacity</span>
-        <output>{{ Math.round(activeLayer.opacity * 100) }}%</output>
-      </label>
-      <input
-        :id="opacityInputId"
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        :value="Math.round(activeLayer.opacity * 100)"
-        :disabled="!canEdit"
-        :aria-label="`Opacity for ${activeLayer.name}`"
-        @input="emitOpacity($event, 'preview')"
-        @change="emitOpacity($event, 'commit')"
-      />
-    </div>
   </section>
 </template>
 
@@ -522,9 +645,9 @@ watch(
 
   .image-layers-panel__header {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     min-height: 42px;
     padding: 7px 10px;
     border-bottom: 1px solid var(--layers-line);
@@ -539,7 +662,7 @@ watch(
 
   .image-layers-panel__heading h2 {
     margin: 0;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 760;
     line-height: 1;
     letter-spacing: 0;
@@ -549,14 +672,17 @@ watch(
     min-width: 0;
     padding: 0;
     color: var(--layers-muted);
-    font-size: 12px;
+    font-size: 13px;
     font-variant-numeric: tabular-nums;
   }
 
   .image-layers-panel__list {
     display: grid;
+    grid-auto-rows: 44px;
+    gap: 3px;
+    align-content: start;
     max-height: min(36vh, 328px);
-    padding: 0;
+    padding: 4px;
     margin: 0;
     overflow-x: hidden;
     overflow-y: auto;
@@ -575,10 +701,18 @@ watch(
     padding: 0 8px 0 0;
     overflow: hidden;
     border: 0;
-    border-bottom: 1px solid var(--layers-line);
-    border-radius: 5px;
-    cursor: default;
-    transition: background-color 100ms ease;
+    border-radius: 6px;
+    background: #151515;
+    box-shadow: inset 0 0 0 1px var(--layers-line);
+    cursor: grab;
+    touch-action: none;
+    transform-origin: center;
+    transition:
+      transform 190ms cubic-bezier(0.2, 0.82, 0.2, 1),
+      background-color 120ms ease,
+      box-shadow 160ms ease,
+      filter 160ms ease,
+      opacity 160ms ease;
   }
 
   .image-layer-row:hover {
@@ -586,11 +720,30 @@ watch(
   }
 
   .image-layer-row.is-dragging {
-    z-index: 4;
-    opacity: 0.84;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.48);
+    z-index: 8;
+    opacity: 0.98;
+    filter: brightness(1.08) saturate(1.04);
+    box-shadow:
+      0 14px 30px rgba(0, 0, 0, 0.58),
+      0 0 0 2px rgba(255, 255, 255, 0.8),
+      0 0 18px rgba(255, 255, 255, 0.22);
     cursor: grabbing;
+    transition:
+      box-shadow 140ms ease,
+      filter 140ms ease,
+      opacity 140ms ease;
     will-change: transform;
+  }
+
+  .image-layer-row.is-dragging.is-drag-settling {
+    transition:
+      transform 170ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 170ms ease,
+      filter 170ms ease;
+  }
+
+  .image-layers-panel__list.is-reordering .image-layer-row:not(.is-dragging) {
+    filter: brightness(0.92);
   }
 
   .image-layer-row.is-drop-before::before,
@@ -601,9 +754,11 @@ watch(
     z-index: 6;
     height: 3px;
     pointer-events: none;
-    background: #ffffff;
-    box-shadow: 0 0 0 1px #111111, 0 0 10px rgba(255, 255, 255, 0.72);
+    background: linear-gradient(90deg, transparent 0, #ffffff 12%, #ffffff 88%, transparent 100%);
+    border-radius: 999px;
+    box-shadow: 0 0 0 1px #111111, 0 0 14px rgba(255, 255, 255, 0.92);
     content: "";
+    animation: layer-drop-pulse 680ms ease-in-out infinite;
   }
 
   .image-layer-row.is-drop-before::before {
@@ -618,7 +773,7 @@ watch(
     --layers-focus: #111111;
     color: #111111;
     background: #e6e6e6;
-    border-bottom-color: #e6e6e6;
+    box-shadow: inset 0 0 0 1px #e6e6e6;
   }
 
   .image-layer-row.is-active .image-layer-row__name small {
@@ -646,8 +801,8 @@ watch(
 
   .image-layer-row__main {
     display: grid;
-    grid-template-columns: 44px 30px 30px minmax(0, 1fr);
-    gap: 4px;
+    grid-template-columns: 44px 30px 30px minmax(0, 1fr) 72px;
+    gap: 3px;
     align-items: center;
     min-width: 0;
   }
@@ -687,16 +842,105 @@ watch(
     border-radius: 4px;
   }
 
+  .image-layer-row__opacity {
+    --opacity-track: #6f6f6f;
+    --opacity-thumb: #f2f2f2;
+    --opacity-thumb-ink: #111111;
+    position: relative;
+    display: block;
+    width: 72px;
+    height: 32px;
+    min-width: 0;
+    color: var(--layers-muted);
+    cursor: pointer;
+  }
+
+  .image-layer-row__opacity output {
+    position: absolute;
+    top: 50%;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 24px;
+    color: var(--opacity-thumb-ink);
+    font-size: 9px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    background: var(--opacity-thumb);
+    border: 1px solid #8b8b8b;
+    border-radius: 999px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+
+  .image-layer-row__opacity input {
+    position: absolute;
+    inset: 0;
+    appearance: none;
+    width: 100%;
+    height: 32px;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    background: transparent;
+  }
+
+  .image-layer-row__opacity input::-webkit-slider-runnable-track {
+    height: 4px;
+    background: var(--opacity-track);
+    border-radius: 999px;
+  }
+
+  .image-layer-row__opacity input::-webkit-slider-thumb {
+    width: 34px;
+    height: 24px;
+    appearance: none;
+    background: transparent;
+    border: 0;
+  }
+
+  .image-layer-row__opacity input::-moz-range-track {
+    height: 4px;
+    background: var(--opacity-track);
+    border: 0;
+    border-radius: 999px;
+  }
+
+  .image-layer-row__opacity input::-moz-range-thumb {
+    width: 34px;
+    height: 24px;
+    background: transparent;
+    border: 0;
+  }
+
+  .image-layer-row__opacity input:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  .image-layer-row.is-active .image-layer-row__opacity {
+    --opacity-track: #767676;
+    --opacity-thumb: #242424;
+    --opacity-thumb-ink: #ffffff;
+  }
+
   .image-layer-row__name {
     display: grid;
     align-content: center;
-    cursor: default;
+    cursor: grab;
+  }
+
+  .image-layer-row.is-dragging .image-layer-row__name {
+    cursor: grabbing;
   }
 
   .image-layer-row__name span {
     overflow: hidden;
-    font-size: 12px;
-    font-weight: 650;
+    font-size: 14px;
+    font-weight: 680;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -716,7 +960,7 @@ watch(
 
   .image-layer-row__actions {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     align-items: center;
     min-height: 30px;
     padding-left: 0;
@@ -745,7 +989,7 @@ watch(
   .layer-icon-button:focus-visible,
   .image-layer-row__name:focus-visible,
   .image-layer-row__name-input:focus-visible,
-  .image-layers-panel__opacity input:focus-visible {
+  .image-layer-row__opacity input:focus-visible {
     outline: 2px solid var(--layers-focus);
     outline-offset: 1px;
   }
@@ -756,8 +1000,8 @@ watch(
   }
 
   .layer-icon-button svg {
-    width: 16px;
-    height: 16px;
+    width: 19px;
+    height: 19px;
     fill: none;
     stroke: currentColor;
     stroke-linecap: round;
@@ -785,45 +1029,15 @@ watch(
     stroke: none;
   }
 
+  .image-layer-row.is-dragging .layer-drag-handle svg {
+    animation: layer-grip-pulse 520ms ease-in-out infinite alternate;
+  }
+
   .layer-icon-button--danger:hover:not(:disabled),
   .image-layer-row.is-active .layer-icon-button--danger:hover:not(:disabled) {
     color: #ffffff;
     background: #752c2c;
     border-color: #a94b4b;
-  }
-
-  .image-layers-panel__opacity {
-    display: grid;
-    gap: 6px;
-    padding: 8px 10px 9px;
-    border-top: 1px solid var(--layers-line);
-  }
-
-  .image-layers-panel__opacity label {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    color: var(--layers-muted);
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  .image-layers-panel__opacity output {
-    color: var(--layers-ink);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .image-layers-panel__opacity input {
-    width: 100%;
-    height: 24px;
-    margin: 0;
-    accent-color: #ffffff;
-    cursor: pointer;
-  }
-
-  .image-layers-panel__opacity input:disabled {
-    cursor: not-allowed;
-    opacity: 0.4;
   }
 
   .image-layers-panel__empty {
@@ -846,13 +1060,28 @@ watch(
     border: 0;
   }
 
-  @media (max-width: 440px) {
-    .image-layer-row {
-      grid-template-columns: minmax(0, 1fr);
+  @keyframes layer-drop-pulse {
+    0%,
+    100% {
+      opacity: 0.55;
+      transform: scaleX(0.92);
     }
 
-    .image-layer-row__actions {
-      justify-content: flex-end;
+    50% {
+      opacity: 1;
+      transform: scaleX(1);
+    }
+  }
+
+  @keyframes layer-grip-pulse {
+    from {
+      opacity: 0.62;
+      transform: scale(0.88);
+    }
+
+    to {
+      opacity: 1;
+      transform: scale(1.08);
     }
   }
 
@@ -871,6 +1100,20 @@ watch(
       color: HighlightText;
       background: Highlight;
       border-color: Highlight;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .image-layer-row,
+    .image-layer-row.is-dragging,
+    .image-layer-row.is-dragging.is-drag-settling {
+      transition: none;
+    }
+
+    .image-layer-row.is-drop-before::before,
+    .image-layer-row.is-drop-after::after,
+    .image-layer-row.is-dragging .layer-drag-handle svg {
+      animation: none;
     }
   }
 </style>

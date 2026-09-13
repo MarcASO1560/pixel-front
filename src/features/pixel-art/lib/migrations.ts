@@ -2,7 +2,6 @@ import {
   createPixelArtDocument,
   createPixelLayer,
   MAX_IMAGE_DIMENSION,
-  MAX_IMAGE_LAYERS,
   MIN_IMAGE_DIMENSION,
   normalizePixelColor,
   normalizePalette,
@@ -96,12 +95,11 @@ const assertValidV2Document = (payload: Record<string, unknown>) => {
 
   if (
     !Array.isArray(payload.layers) ||
-    payload.layers.length < 1 ||
-    payload.layers.length > MAX_IMAGE_LAYERS
+    payload.layers.length < 1
   ) {
     throw new PixelArtMigrationError(
       "invalid-document",
-      `Stored pixel-art v2 must contain between 1 and ${MAX_IMAGE_LAYERS} layers.`,
+      "Stored pixel-art v2 must contain at least 1 layer.",
       { version: 2 },
     );
   }

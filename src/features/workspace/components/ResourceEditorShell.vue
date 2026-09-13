@@ -33,7 +33,6 @@ import {
   compositeVisibleLayers,
   createPixelArtDocument,
   createPixelLayer,
-  MAX_IMAGE_LAYERS,
   normalizePixelColor,
 } from "../../pixel-art/lib/document";
 import {
@@ -3564,7 +3563,7 @@ const selectImageLayer = (layerId: string) => {
 };
 
 const addImageLayer = () => {
-  if (!canEditImage.value || imageLayers.value.length >= MAX_IMAGE_LAYERS) return;
+  if (!canEditImage.value) return;
   cancelImageInteractionBeforeLayerChange();
   const layer = createPixelLayer(imageGridWidth.value, imageGridHeight.value, {
     name: `Layer ${imageLayers.value.length + 1}`,
@@ -3575,7 +3574,7 @@ const addImageLayer = () => {
 };
 
 const duplicateImageLayer = (layerId: string) => {
-  if (!canEditImage.value || imageLayers.value.length >= MAX_IMAGE_LAYERS) return;
+  if (!canEditImage.value) return;
   const index = imageLayers.value.findIndex((layer) => layer.id === layerId);
   if (index < 0) return;
   cancelImageInteractionBeforeLayerChange();
@@ -4566,7 +4565,7 @@ onUnmounted(() => {
           >
             <Layers3 :size="17" :stroke-width="2" aria-hidden="true" />
             <span>Layers</span>
-            <small>{{ imageLayers.length }}/{{ MAX_IMAGE_LAYERS }}</small>
+            <small>{{ imageLayers.length }}</small>
           </button>
 
           <div
@@ -4600,7 +4599,6 @@ onUnmounted(() => {
                   :can-edit="canEditImage"
                   :image-width="imageGridWidth"
                   :image-height="imageGridHeight"
-                  :max-layers="MAX_IMAGE_LAYERS"
                   @select="selectImageLayer"
                   @add="addImageLayer"
                   @duplicate="duplicateImageLayer"
@@ -5773,8 +5771,9 @@ onUnmounted(() => {
 
   .image-editor-layers-dialog {
     position: relative;
-    width: min(430px, calc(100% - 32px));
-    max-height: calc(100% - 32px);
+    width: min(430px, 100%);
+    height: min(430px, 100%);
+    max-height: 100%;
     overflow: hidden;
     border-radius: var(--editor-radius-md);
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
@@ -5798,8 +5797,8 @@ onUnmounted(() => {
     border-radius: var(--editor-radius-sm);
   }
 
-  .image-editor-layers-dialog :deep(.layer-icon-button--add) {
-    margin-right: 38px;
+  .image-editor-layers-dialog :deep(.image-layers-panel__header) {
+    padding-right: 50px;
   }
 
   .image-editor-layers-dialog__close:hover,
@@ -5814,7 +5813,7 @@ onUnmounted(() => {
     position: static;
     display: block;
     width: 100%;
-    height: auto;
+    height: 100%;
     max-height: none;
     overflow: hidden;
     border: 0;
@@ -5822,13 +5821,24 @@ onUnmounted(() => {
   }
 
   .image-editor-floating-layers .image-editor-layers-dialog :deep(.image-layers-panel) {
-    max-height: calc(100dvh - 160px);
+    height: 100%;
+    max-height: 100%;
   }
 
   .image-editor-floating-layers
     .image-editor-layers-dialog
     :deep(.image-layers-panel__list) {
-    max-height: min(46dvh, 328px);
+    max-height: none;
+  }
+
+  @media (max-width: 440px) {
+    .resource-editor-canvas .image-editor-floating-layers {
+      grid-column: 1 / -1;
+    }
+
+    .image-editor-layers-dialog-layer {
+      padding: 8px;
+    }
   }
 
   .image-editor-toolbar {

@@ -2,7 +2,6 @@ import type { PixelArtDocumentV2, PixelColor, PixelLayer } from "../types";
 
 export const MIN_IMAGE_DIMENSION = 1;
 export const MAX_IMAGE_DIMENSION = 256;
-export const MAX_IMAGE_LAYERS = 64;
 
 export const clampImageDimension = (value: unknown, fallback = 32) => {
   const numericValue = typeof value === "number" ? value : Number(value);
@@ -84,7 +83,6 @@ export const createPixelArtDocument = (
   const normalizedHeight = clampImageDimension(height);
   const layers = Array.isArray(options.layers)
     ? options.layers
-        .slice(0, MAX_IMAGE_LAYERS)
         .map((layer, index) =>
           createPixelLayer(normalizedWidth, normalizedHeight, {
             ...layer,

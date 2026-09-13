@@ -1,7 +1,6 @@
 import type { PixelArtDocumentV2, PixelColor } from "../types";
 import {
   MAX_IMAGE_DIMENSION,
-  MAX_IMAGE_LAYERS,
   compositeVisibleLayers,
   createPixelArtDocument,
   createPixelLayer,
@@ -196,12 +195,11 @@ const assertV2Document = (payload: Record<string, unknown>) => {
 
   if (
     !Array.isArray(payload.layers) ||
-    payload.layers.length < 1 ||
-    payload.layers.length > MAX_IMAGE_LAYERS
+    payload.layers.length < 1
   ) {
     throw new PixelArtImportError(
       "invalid-document",
-      `Pixel art must contain between 1 and ${MAX_IMAGE_LAYERS} layers.`,
+      "Pixel art must contain at least 1 layer.",
     );
   }
 

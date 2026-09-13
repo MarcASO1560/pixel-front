@@ -17,6 +17,19 @@ describe("pixel-art document", () => {
     expect(document.layers[0]?.pixels).toEqual(Array(12).fill(null));
   });
 
+  it("preserves every supplied layer without an artificial layer cap", () => {
+    const layers = Array.from({ length: 65 }, (_, index) => ({
+      id: `layer-${index + 1}`,
+      name: `Layer ${index + 1}`,
+      visible: true,
+      locked: false,
+      opacity: 1,
+      pixels: [null],
+    }));
+
+    expect(createPixelArtDocument(1, 1, { layers }).layers).toHaveLength(65);
+  });
+
   it("normalizes RGB and RGBA colors and removes palette duplicates", () => {
     expect(normalizePixelColor("#aabbcc80")).toBe("#AABBCC80");
     expect(normalizePixelColor("red")).toBeNull();
