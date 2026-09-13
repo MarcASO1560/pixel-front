@@ -44,6 +44,7 @@ const layerRowRefs = new Map<string, HTMLLIElement>();
 const titleId = useId();
 const layerDragStatus = ref("");
 const draggedLayerId = ref<string | null>(null);
+const isLayerDragPending = ref(false);
 const isLayerDragActive = ref(false);
 const isLayerDragSettling = ref(false);
 const isLayerDragCommitting = ref(false);
@@ -54,7 +55,9 @@ const layerDropTarget = ref<{
 } | null>(null);
 let layerDragPointerId: number | null = null;
 let layerDragStartY = 0;
+let layerDragStartX = 0;
 let layerDragCaptureTarget: HTMLElement | null = null;
+let layerDragActivationTimer: ReturnType<typeof setTimeout> | null = null;
 let layerDropSettleTimer: ReturnType<typeof setTimeout> | null = null;
 const layerDragBaseBounds = new Map<
   string,
@@ -63,9 +66,11 @@ const layerDragBaseBounds = new Map<
 let layerDragStartScrollTop = 0;
 let lastLayerDropDirection: -1 | 0 | 1 = 0;
 const LAYER_DRAG_ACTIVATION_DISTANCE = 4;
+const LAYER_TOUCH_HOLD_DURATION = 1000;
+const LAYER_TOUCH_HOLD_TOLERANCE = 12;
 const LAYER_DROP_HYSTERESIS = 9;
 const LAYER_DROP_SETTLE_DURATION = 240;
-const LAYER_ROW_PITCH = 47;
+const LAYER_ROW_PITCH = 50;
 
 const canAddLayer = computed(() => props.canEdit);
 // Documents are composed bottom-to-top, while layer panels conventionally show
@@ -275,11 +280,16 @@ const scrollLayerListNearEdge = (clientY: number) => {
 };
 
 const resetLayerDrag = () => {
+  if (layerDragActivationTimer !== null) {
+    clearTimeout(layerDragActivationTimer);
+    layerDragActivationTimer = null;
+  }
   if (layerDropSettleTimer !== null) {
     clearTimeout(layerDropSettleTimer);
     layerDropSettleTimer = null;
   }
   draggedLayerId.value = null;
+  isLayerDragPending.value = false;
   isLayerDragActive.value = false;
   isLayerDragSettling.value = false;
   isLayerDragCommitting.value = false;
@@ -289,6 +299,19 @@ const resetLayerDrag = () => {
   lastLayerDropDirection = 0;
   layerDragPointerId = null;
   layerDragCaptureTarget = null;
+};
+
+const activateLayerDrag = (pointerId: number) => {
+  if (layerDragPointerId !== pointerId || !draggedLayerId.value) return;
+
+  layerDragActivationTimer = null;
+  isLayerDragPending.value = false;
+  captureLayerDragLayout();
+  layerDragCaptureTarget?.setPointerCapture(pointerId);
+  isLayerDragActive.value = true;
+
+  const layer = props.layers.find((candidate) => candidate.id === draggedLayerId.value);
+  layerDragStatus.value = `${layer?.name || "Layer"} ready to move.`;
 };
 
 const startLayerDrag = (event: PointerEvent, layer: PixelLayer) => {
@@ -304,15 +327,31 @@ const startLayerDrag = (event: PointerEvent, layer: PixelLayer) => {
   draggedLayerId.value = layer.id;
   layerDragPointerId = event.pointerId;
   layerDragCaptureTarget = event.currentTarget as HTMLElement;
+  layerDragStartX = event.clientX;
   layerDragStartY = event.clientY;
   layerDragOffsetY.value = 0;
   layerDropTarget.value = null;
+
+  if (event.pointerType === "touch") {
+    isLayerDragPending.value = true;
+    layerDragActivationTimer = setTimeout(
+      () => activateLayerDrag(event.pointerId),
+      LAYER_TOUCH_HOLD_DURATION,
+    );
+  }
 };
 
 const continueLayerDrag = (event: PointerEvent) => {
   const draggedId = draggedLayerId.value;
   if (event.pointerId !== layerDragPointerId || !draggedId) return;
   const offsetY = event.clientY - layerDragStartY;
+  if (isLayerDragPending.value) {
+    const offsetX = event.clientX - layerDragStartX;
+    if (Math.hypot(offsetX, offsetY) > LAYER_TOUCH_HOLD_TOLERANCE) {
+      resetLayerDrag();
+    }
+    return;
+  }
   if (!isLayerDragActive.value && Math.abs(offsetY) < LAYER_DRAG_ACTIVATION_DISTANCE) {
     return;
   }
@@ -485,7 +524,7 @@ onUnmounted(resetLayerDrag);
 
       <div class="image-layers-panel__heading">
         <h2 :id="titleId">Layers</h2>
-        <span :aria-label="`${layers.length} layers`">
+        <span class="image-layers-panel__count" :aria-label="`${layers.length} layers`">
           {{ layers.length }}
         </span>
       </div>
@@ -510,6 +549,7 @@ onUnmounted(resetLayerDrag);
         :class="{
           'is-active': layer.id === activeLayerId,
           'is-hidden': !layer.visible,
+          'is-drag-pending': isLayerDragPending && draggedLayerId === layer.id,
           'is-dragging': isLayerDragActive && draggedLayerId === layer.id,
           'is-drag-settling': isLayerDragSettling && draggedLayerId === layer.id,
           'is-drop-before':
@@ -532,6 +572,7 @@ onUnmounted(resetLayerDrag);
         @pointerup="finishLayerDrag"
         @pointercancel="cancelLayerDrag"
         @lostpointercapture="cancelLayerDrag"
+        @contextmenu.prevent
       >
         <div class="image-layer-row__main">
           <span
@@ -700,28 +741,32 @@ onUnmounted(resetLayerDrag);
 
 <style scoped>
   .image-layers-panel {
-    --layers-ink: #f2f2f2;
-    --layers-muted: #a8a8a8;
-    --layers-line: #2d2d2d;
-    --layers-control: #171717;
-    --layers-control-hover: #262626;
+    --layers-ink: #f4f4f4;
+    --layers-muted: #9d9d9d;
+    --layers-line: rgba(255, 255, 255, 0.1);
+    --layers-control: #1b1b1b;
+    --layers-control-hover: #2a2a2a;
     --layers-focus: #ffffff;
     display: grid;
+    grid-template-rows: 48px minmax(0, 1fr);
     width: 100%;
     min-width: 0;
     overflow: hidden;
     color: var(--layers-ink);
-    background: transparent;
+    background:
+      radial-gradient(circle at 12% -8%, rgba(255, 255, 255, 0.075), transparent 34%),
+      linear-gradient(180deg, #141414 0%, #101010 100%);
   }
 
   .image-layers-panel__header {
     display: flex;
-    gap: 8px;
+    gap: 9px;
     align-items: center;
     justify-content: flex-start;
-    min-height: 42px;
-    padding: 7px 10px;
+    min-height: 48px;
+    padding: 7px 9px;
     border-bottom: 1px solid var(--layers-line);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
   }
 
   .image-layers-panel__heading {
@@ -739,30 +784,50 @@ onUnmounted(resetLayerDrag);
     letter-spacing: 0;
   }
 
-  .image-layers-panel__heading span {
-    min-width: 0;
-    padding: 0;
-    color: var(--layers-muted);
-    font-size: 13px;
+  .image-layers-panel__count {
+    display: inline-grid;
+    min-width: 24px;
+    height: 22px;
+    padding: 0 7px;
+    place-items: center;
+    color: #c7c7c7;
+    font-size: 11px;
+    font-weight: 700;
     font-variant-numeric: tabular-nums;
+    line-height: 1;
+    background: rgba(255, 255, 255, 0.075);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
   }
 
   .image-layers-panel__list {
     display: grid;
     grid-auto-rows: 44px;
-    gap: 3px;
+    gap: 6px;
     align-content: start;
+    min-height: 0;
     max-height: min(36vh, 328px);
-    padding: 4px;
+    padding: 8px;
     margin: 0;
     overflow-x: hidden;
     overflow-y: auto;
     list-style: none;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 96px),
+      repeating-linear-gradient(
+        180deg,
+        transparent 0,
+        transparent 49px,
+        rgba(255, 255, 255, 0.025) 49px,
+        rgba(255, 255, 255, 0.025) 50px
+      );
+    box-shadow: inset 0 12px 24px -24px rgba(0, 0, 0, 0.95);
     scrollbar-color: #4a4a4a transparent;
     scrollbar-width: thin;
   }
 
   .image-layer-row {
+    --layer-hold-indicator: #f2f2f2;
     position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -773,8 +838,10 @@ onUnmounted(resetLayerDrag);
     overflow: hidden;
     border: 0;
     border-radius: 6px;
-    background: #151515;
-    box-shadow: inset 0 0 0 1px var(--layers-line);
+    background: rgba(24, 24, 24, 0.94);
+    box-shadow:
+      inset 0 0 0 1px var(--layers-line),
+      0 2px 6px rgba(0, 0, 0, 0.22);
     cursor: grab;
     touch-action: none;
     transform-origin: center;
@@ -787,7 +854,10 @@ onUnmounted(resetLayerDrag);
   }
 
   .image-layer-row:hover {
-    background: #1d1d1d;
+    background: #202020;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.17),
+      0 4px 12px rgba(0, 0, 0, 0.28);
   }
 
   .image-layer-row.is-dragging {
@@ -804,6 +874,29 @@ onUnmounted(resetLayerDrag);
       filter 140ms ease,
       opacity 140ms ease;
     will-change: transform;
+  }
+
+  .image-layer-row.is-drag-pending {
+    cursor: progress;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.24),
+      0 5px 16px rgba(0, 0, 0, 0.34);
+  }
+
+  .image-layer-row.is-drag-pending::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 7;
+    height: 3px;
+    pointer-events: none;
+    background: var(--layer-hold-indicator);
+    border-radius: 999px;
+    content: "";
+    transform: scaleX(0);
+    transform-origin: left;
+    animation: layer-touch-hold-progress 1000ms linear forwards;
   }
 
   .image-layer-row.is-dragging.is-drag-settling {
@@ -842,9 +935,13 @@ onUnmounted(resetLayerDrag);
 
   .image-layer-row.is-active {
     --layers-focus: #111111;
+    --layer-hold-indicator: #202020;
     color: #111111;
-    background: #e6e6e6;
-    box-shadow: inset 0 0 0 1px #e6e6e6;
+    background: linear-gradient(135deg, #f5f5f5 0%, #dedede 100%);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.92),
+      0 5px 14px rgba(0, 0, 0, 0.34),
+      0 0 0 1px rgba(255, 255, 255, 0.14);
   }
 
   .image-layer-row.is-active .image-layer-row__name small {
@@ -1081,9 +1178,19 @@ onUnmounted(resetLayerDrag);
   }
 
   .layer-icon-button--add {
-    color: #f2f2f2;
-    background: var(--layers-control);
-    border-color: #454545;
+    width: 34px;
+    height: 34px;
+    color: #111111;
+    background: linear-gradient(135deg, #ffffff, #d8d8d8);
+    border-color: rgba(255, 255, 255, 0.75);
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.32);
+  }
+
+  .layer-icon-button--add:hover:not(:disabled) {
+    color: #000000;
+    background: #ffffff;
+    border-color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.38);
   }
 
   .layer-drag-handle {
@@ -1156,6 +1263,12 @@ onUnmounted(resetLayerDrag);
     }
   }
 
+  @keyframes layer-touch-hold-progress {
+    to {
+      transform: scaleX(1);
+    }
+  }
+
   @media (max-width: 640px) {
     .image-layers-panel {
       width: 100%;
@@ -1183,8 +1296,13 @@ onUnmounted(resetLayerDrag);
 
     .image-layer-row.is-drop-before::before,
     .image-layer-row.is-drop-after::after,
-    .image-layer-row.is-dragging .layer-drag-handle svg {
+    .image-layer-row.is-dragging .layer-drag-handle svg,
+    .image-layer-row.is-drag-pending::after {
       animation: none;
+    }
+
+    .image-layer-row.is-drag-pending::after {
+      transform: scaleX(1);
     }
   }
 </style>

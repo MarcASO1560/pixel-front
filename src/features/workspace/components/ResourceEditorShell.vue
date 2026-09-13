@@ -5754,7 +5754,8 @@ onUnmounted(() => {
     padding: 16px;
     box-sizing: border-box;
     visibility: hidden;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.52);
+    backdrop-filter: blur(3px);
     opacity: 0;
     pointer-events: none;
     transition:
@@ -5775,9 +5776,24 @@ onUnmounted(() => {
     height: min(430px, 100%);
     max-height: 100%;
     overflow: hidden;
-    border-radius: var(--editor-radius-md);
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+    background: #101010;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    box-shadow:
+      0 28px 72px rgba(0, 0, 0, 0.62),
+      0 8px 24px rgba(0, 0, 0, 0.42),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
     pointer-events: auto;
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+    transition:
+      opacity 180ms ease,
+      transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .image-editor-layers-dialog-layer.is-open .image-editor-layers-dialog {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 
   .image-editor-layers-dialog__close {
@@ -5787,14 +5803,14 @@ onUnmounted(() => {
     z-index: 3;
     display: grid;
     place-items: center;
-    width: 30px;
-    height: 30px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     color: var(--editor-muted);
     cursor: pointer;
-    background: var(--editor-surface);
-    border: 1px solid var(--editor-border-strong);
-    border-radius: var(--editor-radius-sm);
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
   }
 
   .image-editor-layers-dialog :deep(.image-layers-panel__header) {
@@ -5803,8 +5819,9 @@ onUnmounted(() => {
 
   .image-editor-layers-dialog__close:hover,
   .image-editor-layers-dialog__close:focus-visible {
-    color: var(--editor-text);
-    background: var(--editor-hover);
+    color: #111111;
+    background: #f0f0f0;
+    border-color: #ffffff;
     outline: 1px solid var(--editor-focus);
     outline-offset: 1px;
   }
@@ -5829,6 +5846,12 @@ onUnmounted(() => {
     .image-editor-layers-dialog
     :deep(.image-layers-panel__list) {
     max-height: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .image-editor-layers-dialog {
+      transition: none;
+    }
   }
 
   @media (max-width: 440px) {
