@@ -5,6 +5,7 @@ import {
   getImagePinchGeometry,
   getImagePinchStageCenterRatio,
   getImagePinchZoom,
+  getImageTwoFingerGestureIntent,
 } from "./pinchZoom";
 
 describe("image pinch zoom", () => {
@@ -13,6 +14,50 @@ describe("image pinch zoom", () => {
       distance: 100,
       midpoint: { x: 50, y: 80 },
     });
+  });
+
+  it("recognizes parallel two-finger movement as pan despite small imperfections", () => {
+    expect(
+      getImageTwoFingerGestureIntent({
+        currentFirst: { x: 38, y: 47 },
+        currentSecond: { x: 99, y: 125 },
+        initialFirst: { x: 20, y: 40 },
+        initialSecond: { x: 80, y: 120 },
+      }),
+    ).toBe("pan");
+  });
+
+  it("recognizes approximately opposing finger movement as zoom", () => {
+    expect(
+      getImageTwoFingerGestureIntent({
+        currentFirst: { x: 8, y: 42 },
+        currentSecond: { x: 93, y: 117 },
+        initialFirst: { x: 20, y: 40 },
+        initialSecond: { x: 80, y: 120 },
+      }),
+    ).toBe("zoom");
+  });
+
+  it("waits through contact jitter before choosing a gesture", () => {
+    expect(
+      getImageTwoFingerGestureIntent({
+        currentFirst: { x: 22, y: 41 },
+        currentSecond: { x: 79, y: 118 },
+        initialFirst: { x: 20, y: 40 },
+        initialSecond: { x: 80, y: 120 },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not lock zoom from an isolated contact update", () => {
+    expect(
+      getImageTwoFingerGestureIntent({
+        currentFirst: { x: 20, y: 40 },
+        currentSecond: { x: 104, y: 138 },
+        initialFirst: { x: 20, y: 40 },
+        initialSecond: { x: 80, y: 120 },
+      }),
+    ).toBeNull();
   });
 
   it("scales from the initial distance and respects the zoom limits", () => {

@@ -8,6 +8,8 @@ export type ImagePinchGeometry = Readonly<{
   midpoint: ImageClientPoint;
 }>;
 
+export type ImageTwoFingerGestureIntent = "pan" | "zoom";
+
 type ImageRect = Readonly<{
   height: number;
   left: number;
@@ -25,6 +27,73 @@ export const getImagePinchGeometry = (
     y: (first.y + second.y) / 2,
   },
 });
+
+/**
+ * Distinguishes a two-finger drag from a pinch before either gesture mutates
+ * the viewport. Parallel contact movement is a pan, while approximately
+ * opposing movement is a zoom. Ambiguous movement stays pending until both
+ * contacts make their shared intent clear.
+ */
+export const getImageTwoFingerGestureIntent = ({
+  currentFirst,
+  currentSecond,
+  initialFirst,
+  initialSecond,
+  minimumMovement = 6,
+}: Readonly<{
+  currentFirst: ImageClientPoint;
+  currentSecond: ImageClientPoint;
+  initialFirst: ImageClientPoint;
+  initialSecond: ImageClientPoint;
+  minimumMovement?: number;
+}>): ImageTwoFingerGestureIntent | null => {
+  const firstMovement = {
+    x: currentFirst.x - initialFirst.x,
+    y: currentFirst.y - initialFirst.y,
+  };
+  const secondMovement = {
+    x: currentSecond.x - initialSecond.x,
+    y: currentSecond.y - initialSecond.y,
+  };
+  const firstMagnitude = Math.hypot(firstMovement.x, firstMovement.y);
+  const secondMagnitude = Math.hypot(secondMovement.x, secondMovement.y);
+
+  if (Math.max(firstMagnitude, secondMagnitude) < minimumMovement) {
+    return null;
+  }
+
+  if (firstMagnitude >= minimumMovement && secondMagnitude >= minimumMovement) {
+    const directionSimilarity =
+      (firstMovement.x * secondMovement.x + firstMovement.y * secondMovement.y) /
+      (firstMagnitude * secondMagnitude);
+
+    if (directionSimilarity >= 0.25) return "pan";
+    if (directionSimilarity <= -0.25) return "zoom";
+  }
+
+  const initialGeometry = getImagePinchGeometry(initialFirst, initialSecond);
+  const currentGeometry = getImagePinchGeometry(currentFirst, currentSecond);
+  const midpointMovement = Math.hypot(
+    currentGeometry.midpoint.x - initialGeometry.midpoint.x,
+    currentGeometry.midpoint.y - initialGeometry.midpoint.y,
+  );
+  const separationMovement = Math.abs(currentGeometry.distance - initialGeometry.distance) / 2;
+
+  if (
+    midpointMovement >= minimumMovement &&
+    midpointMovement > separationMovement * 1.35
+  ) {
+    return "pan";
+  }
+  if (
+    separationMovement >= minimumMovement &&
+    separationMovement > midpointMovement * 1.35
+  ) {
+    return "zoom";
+  }
+
+  return null;
+};
 
 export const getImagePinchZoom = ({
   currentDistance,
