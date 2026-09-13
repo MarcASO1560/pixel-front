@@ -26,8 +26,8 @@ import {
   type ProjectResourceDetail,
   type ProjectResourcePublic,
   type ProjectTree,
+  type ProjectWorkspaceBootstrap,
   type UserPublic,
-  type WorkspaceBootstrap,
 } from "../../../lib/api";
 import StudioTopbarCommandBar from "../../navigation/components/StudioTopbarCommandBar.vue";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
@@ -96,6 +96,7 @@ const props = defineProps<{
   userAvatarUrl?: string;
   userEmail?: string;
   userPixelAvatar?: PixelAvatarData | null;
+  initialProjectWorkspace?: ProjectWorkspaceBootstrap | null;
 }>();
 
 const REQUEST_TIMEOUT_MS = 18000;
@@ -104,10 +105,11 @@ const DEFAULT_RESOURCE_IMAGE_SIZE = 32;
 const DEFAULT_ITEM_COLOR = "#f7f1e7";
 const EXPLORER_ITEM_AUTOSAVE_MS = 420;
 const PROJECT_SYNC_INTERVAL_MS = 30000;
+const PROJECT_SYNC_FOCUS_COOLDOWN_MS = PROJECT_SYNC_INTERVAL_MS;
 const REALTIME_REFRESH_DELAY_MS = 180;
 const STALE_SYNC_MS = REQUEST_TIMEOUT_MS + 5000;
-const project = ref<ProjectPublic | null>(null);
-const tree = ref<ProjectTree | null>(null);
+const project = ref<ProjectPublic | null>(props.initialProjectWorkspace?.project || null);
+const tree = ref<ProjectTree | null>(props.initialProjectWorkspace?.tree || null);
 const localFolders = ref<ProjectFolderPublic[]>([]);
 const localResources = ref<ProjectResourcePublic[]>([]);
 const currentFolderId = ref<string | null>(null);
@@ -135,9 +137,10 @@ const suppressNextExplorerRowClickTimeout = ref<number | null>(null);
 const explorerDropErrorMessage = ref("");
 const itemNameOverrides = ref<Record<string, string>>({});
 const itemColorOverrides = ref<Record<string, string>>({});
-const isLoading = ref(true);
+const isLoading = ref(!props.initialProjectWorkspace);
 const isSyncingProject = ref(false);
 const projectSyncStartedAt = ref<number | null>(null);
+const lastProjectSyncAt = ref(props.initialProjectWorkspace ? Date.now() : 0);
 const projectSyncIntervalId = ref<number | null>(null);
 const realtimeEventSource = ref<EventSource | null>(null);
 const projectRefreshTimeoutId = ref<number | null>(null);
@@ -1563,6 +1566,7 @@ const applyProjectSnapshot = (nextProject: ProjectPublic, nextTree: ProjectTree)
   localFolders.value = [];
   localResources.value = [];
   errorMessage.value = "";
+  lastProjectSyncAt.value = Date.now();
   reconcileExplorerState(nextTree);
 };
 
@@ -1875,19 +1879,10 @@ const refreshProject = async ({
   }
 
   try {
-    const [workspace, nextTree] = await Promise.all([
-      requestJson<WorkspaceBootstrap>("/workspace/"),
-      requestJson<ProjectTree>(`/projects/${encodeURIComponent(props.projectId)}/tree`),
-    ]);
-    const nextProject = workspace.projects.find(
-      (workspaceProject) => workspaceProject.id === props.projectId,
+    const snapshot = await requestJson<ProjectWorkspaceBootstrap>(
+      `/workspace/projects/${encodeURIComponent(props.projectId)}`,
     );
-
-    if (!nextProject) {
-      throw new Error("Project not found");
-    }
-
-    applyProjectSnapshot(nextProject, nextTree);
+    applyProjectSnapshot(snapshot.project, snapshot.tree);
   } catch {
     if (showError || !project.value) {
       errorMessage.value = "This project is not available.";
@@ -1998,6 +1993,9 @@ const syncSharedProjectState = () => {
   ) {
     connectRealtimeEvents();
   }
+  if (Date.now() - lastProjectSyncAt.value < PROJECT_SYNC_FOCUS_COOLDOWN_MS) {
+    return;
+  }
   void refreshProject({ showError: Boolean(errorMessage.value) });
 };
 
@@ -2014,7 +2012,10 @@ onMounted(() => {
     () => void refreshProject(),
     PROJECT_SYNC_INTERVAL_MS,
   );
-  void refreshProject({ showLoading: true, showError: true }).then(() => {
+  const initialLoad = props.initialProjectWorkspace
+    ? Promise.resolve()
+    : refreshProject({ showLoading: true, showError: true });
+  void initialLoad.then(() => {
     if (project.value) {
       openRequestedResourceCreation();
     }

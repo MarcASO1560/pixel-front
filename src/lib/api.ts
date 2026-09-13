@@ -159,6 +159,12 @@ export type WorkspaceBootstrap = {
   projects: ProjectPublic[];
 };
 
+export type ProjectWorkspaceBootstrap = {
+  user: UserPublic;
+  project: ProjectPublic;
+  tree: ProjectTree;
+};
+
 export const apiUrl = (path: string, options: { direct?: boolean } = {}) => {
   const apiBase = options.direct ? BACKEND_API_V1_URL : API_V1_URL;
   const origin = options.direct ? BACKEND_API_ORIGIN : API_ORIGIN;

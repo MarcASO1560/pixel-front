@@ -15,5 +15,6 @@ declare namespace App {
     apiAvailable?: boolean;
     user?: import("./lib/api").UserPublic;
     workspace?: import("./lib/api").WorkspaceBootstrap;
+    projectWorkspace?: import("./lib/api").ProjectWorkspaceBootstrap;
   }
 }

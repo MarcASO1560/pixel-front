@@ -3,6 +3,7 @@ import { defineMiddleware } from "astro:middleware";
 import {
   fetchApi,
   healthUrl,
+  type ProjectWorkspaceBootstrap,
   type UserPublic,
   type WorkspaceBootstrap,
 } from "./lib/api";
@@ -30,11 +31,35 @@ const readCurrentUser = async (accessToken: string) =>
 const readWorkspace = async (accessToken: string) =>
   fetchApi<WorkspaceBootstrap>("/workspace/", { accessToken, direct: true });
 
+const readProjectWorkspace = async (accessToken: string, projectId: string) =>
+  fetchApi<ProjectWorkspaceBootstrap>(`/workspace/projects/${encodeURIComponent(projectId)}`, {
+    accessToken,
+    direct: true,
+  });
+
+type AuthenticatedSession = {
+  user: UserPublic;
+  workspace?: WorkspaceBootstrap;
+  projectWorkspace?: ProjectWorkspaceBootstrap;
+};
+
 const readAuthenticatedSession = async (
   accessToken: string,
-  includeWorkspace: boolean,
-) => {
-  if (includeWorkspace) {
+  options: { includeWorkspace: boolean; projectId?: string },
+): Promise<AuthenticatedSession | null> => {
+  if (options.projectId) {
+    try {
+      const projectWorkspace = await readProjectWorkspace(accessToken, options.projectId);
+      if (projectWorkspace) {
+        return { user: projectWorkspace.user, projectWorkspace };
+      }
+    } catch {
+      // Fall through to the user endpoint so an unavailable project does not
+      // invalidate the authenticated session.
+    }
+  }
+
+  if (options.includeWorkspace) {
     try {
       const workspace = await readWorkspace(accessToken);
       if (workspace) {
@@ -94,8 +119,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   const accessToken = context.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value;
   const shouldBootstrapWorkspace = pathname === "/studio" || pathname === "/studio/";
+  const projectRouteMatch = pathname.match(/^\/studio\/([^/]+)\/?$/);
   const authenticatedSession = accessToken
-    ? await readAuthenticatedSession(accessToken, shouldBootstrapWorkspace)
+    ? await readAuthenticatedSession(accessToken, {
+        includeWorkspace: shouldBootstrapWorkspace,
+        projectId: projectRouteMatch?.[1],
+      })
     : null;
 
   if (authenticatedSession) {
@@ -103,6 +132,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
     context.locals.user = authenticatedSession.user;
     if (authenticatedSession.workspace) {
       context.locals.workspace = authenticatedSession.workspace;
+    }
+    if (authenticatedSession.projectWorkspace) {
+      context.locals.projectWorkspace = authenticatedSession.projectWorkspace;
     }
   } else {
     context.locals.apiAvailable = await checkApiHealth();

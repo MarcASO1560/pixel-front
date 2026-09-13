@@ -13,6 +13,7 @@ const userUsername = user?.username || "";
 const userAvatarUrl = user?.avatar_url || "";
 const userEmail = user?.email || "";
 const userPixelAvatar = user?.avatar_pixel_art || null;
+const initialProjectWorkspace = Astro.locals.projectWorkspace || null;
 ---
 
 <AppLayout title="Project | Sefkira Studio">
@@ -27,6 +28,7 @@ const userPixelAvatar = user?.avatar_pixel_art || null;
       userAvatarUrl={userAvatarUrl}
       userEmail={userEmail}
       userPixelAvatar={userPixelAvatar}
+      initialProjectWorkspace={initialProjectWorkspace}
     />
   </main>
   <WorkspaceLoadingTransition phase="entry" client:load />
