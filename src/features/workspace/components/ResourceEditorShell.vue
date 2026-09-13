@@ -2816,16 +2816,16 @@ const finishImageTouchPointer = (event: PointerEvent) => {
   const touch = imageTouchPointers.get(event.pointerId);
   if (!touch) return;
 
-  touch.clientX = event.clientX;
-  touch.clientY = event.clientY;
-
   const gesture = imageTransformGesture;
   if (
     gesture &&
     (event.pointerId === gesture.firstPointerId || event.pointerId === gesture.secondPointerId)
   ) {
+    const hasPendingTransformUpdate = imageTransformFrame !== null;
     cancelScheduledImageTransformUpdate();
-    updateImageTransformGesture();
+    if (hasPendingTransformUpdate) {
+      updateImageTransformGesture();
+    }
     imageTouchPointers.delete(event.pointerId);
     commitImageGestureView();
     imageTransformGesture = null;
@@ -2841,6 +2841,9 @@ const finishImageTouchPointer = (event: PointerEvent) => {
     }
     return;
   }
+
+  touch.clientX = event.clientX;
+  touch.clientY = event.clientY;
 
   if (imagePendingTouchPointerId === event.pointerId) {
     beginPendingImageTouch(event, touch);
