@@ -10,7 +10,6 @@ export type ImageTwoFingerGeometry = Readonly<{
 }>;
 
 export type ImageTwoFingerTransformDelta = Readonly<{
-  centroidSize: number;
   currentCentroid: ImageClientPoint;
   pan: ImageClientPoint;
   previousCentroid: ImageClientPoint;
@@ -96,7 +95,6 @@ export const getImageTwoFingerTransformDelta = ({
     current.distance >= MINIMUM_TWO_FINGER_DISTANCE;
 
   return {
-    centroidSize: previous.distance / 2,
     currentCentroid: current.centroid,
     pan: {
       x: current.centroid.x - previous.centroid.x,
@@ -109,15 +107,6 @@ export const getImageTwoFingerTransformDelta = ({
     zoomFactor: hasStableDistance ? current.distance / previous.distance : 1,
   };
 };
-
-export const getImageTwoFingerTransformMotion = (
-  delta: ImageTwoFingerTransformDelta,
-) =>
-  Math.max(
-    Math.hypot(delta.pan.x, delta.pan.y),
-    Math.abs(1 - delta.zoomFactor) * delta.centroidSize,
-    Math.abs(delta.rotationRadians) * delta.centroidSize,
-  );
 
 /**
  * Applies one similarity-transform delta around the live gesture centroid.

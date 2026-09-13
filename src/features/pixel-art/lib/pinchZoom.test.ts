@@ -4,7 +4,6 @@ import {
   applyImageTwoFingerTransformDelta,
   getImageTwoFingerGeometry,
   getImageTwoFingerTransformDelta,
-  getImageTwoFingerTransformMotion,
   normalizeImageRotationRadians,
   rotateImageClientPoint,
   type ImageTwoFingerTransformDelta,
@@ -108,19 +107,6 @@ describe("continuous image multitouch transforms", () => {
     expect(delta.rotationRadians).toBe(0);
   });
 
-  it("expresses transform touch-slop in client pixels for every component", () => {
-    expect(
-      getImageTwoFingerTransformMotion({
-        centroidSize: 50,
-        currentCentroid: { x: 0, y: 0 },
-        pan: { x: 3, y: 4 },
-        previousCentroid: { x: 0, y: 0 },
-        rotationRadians: 0.04,
-        zoomFactor: 1.06,
-      }),
-    ).toBe(5);
-  });
-
   it("translates rigid two-finger motion exactly 1:1", () => {
     const result = apply(
       view({ panX: 10, panY: -5 }),
@@ -140,7 +126,6 @@ describe("continuous image multitouch transforms", () => {
 
   it("keeps the content beneath a stationary pinch centroid anchored", () => {
     const result = apply(view(), {
-      centroidSize: 25,
       currentCentroid: { x: 150, y: 100 },
       pan: { x: 0, y: 0 },
       previousCentroid: { x: 150, y: 100 },
@@ -153,11 +138,28 @@ describe("continuous image multitouch transforms", () => {
     expect(result.panY).toBeCloseTo(0);
   });
 
+  it("zooms around one stationary finger when only the other finger moves", () => {
+    const delta = getImageTwoFingerTransformDelta({
+      previousFirst: { x: 120, y: 100 },
+      previousSecond: { x: 180, y: 100 },
+      currentFirst: { x: 120, y: 100 },
+      currentSecond: { x: 240, y: 100 },
+    });
+    const result = apply(view(), delta);
+    const nextCenterX = stationaryStageCenter.x + result.panX;
+    const projectedStationaryFinger =
+      nextCenterX + (120 - stationaryStageCenter.x) * (result.zoom / view().zoom);
+
+    expect(delta.pan.x).toBe(30);
+    expect(delta.zoomFactor).toBe(2);
+    expect(result.zoom).toBe(4);
+    expect(projectedStationaryFinger).toBeCloseTo(120);
+  });
+
   it("combines translation, scale and rotation in one anchored update", () => {
     const result = apply(
       view({ panX: 20, panY: -10 }),
       {
-        centroidSize: 50,
         currentCentroid: { x: 280, y: 210 },
         pan: { x: 30, y: 30 },
         previousCentroid: { x: 250, y: 180 },
@@ -226,7 +228,6 @@ describe("continuous image multitouch transforms", () => {
     const result = apply(
       view({ panX: 12, panY: -7 }),
       {
-        centroidSize: 40,
         currentCentroid: { x: 170, y: 150 },
         pan: { x: 0, y: 0 },
         previousCentroid: { x: 170, y: 150 },
@@ -266,7 +267,6 @@ describe("continuous image multitouch transforms", () => {
     const result = apply(
       view({ zoom: 60 }),
       {
-        centroidSize: 50,
         currentCentroid: { x: 165, y: 100 },
         pan: { x: 15, y: 0 },
         previousCentroid: { x: 150, y: 100 },

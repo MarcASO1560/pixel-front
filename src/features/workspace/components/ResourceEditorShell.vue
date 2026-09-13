@@ -79,7 +79,6 @@ import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
 import {
   applyImageTwoFingerTransformDelta,
   getImageTwoFingerTransformDelta,
-  getImageTwoFingerTransformMotion,
   normalizeImageRotationRadians,
   rotateImageClientPoint,
   type ImageViewportTransform,
@@ -207,11 +206,6 @@ type ImageTouchPointer = {
   startsOnArtboard: boolean;
 };
 type ImageTransformGesture = {
-  active: boolean;
-  accumulatedPanX: number;
-  accumulatedPanY: number;
-  accumulatedRotationRadians: number;
-  accumulatedZoomFactor: number;
   firstPointerId: number;
   previousFirstX: number;
   previousFirstY: number;
@@ -270,7 +264,6 @@ const MIN_IMAGE_ZOOM = 0.25;
 const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_TOUCH_COMMIT_THRESHOLD = 8;
-const IMAGE_TRANSFORM_TOUCH_SLOP = 3;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
@@ -2199,7 +2192,6 @@ const zoomImageFromWheel = (event: WheelEvent) => {
     const nextView = applyImageTwoFingerTransformDelta({
       currentStageCenter: stageCenter,
       delta: {
-        centroidSize: 0,
         currentCentroid: anchor,
         pan: { x: 0, y: 0 },
         previousCentroid: anchor,
@@ -2595,11 +2587,6 @@ const startImageTransformGesture = () => {
   if (!first || !second || !stageCenter) return false;
 
   imageTransformGesture = {
-    active: false,
-    accumulatedPanX: 0,
-    accumulatedPanY: 0,
-    accumulatedRotationRadians: 0,
-    accumulatedZoomFactor: 1,
     firstPointerId: first.pointerId,
     previousFirstX: first.clientX,
     previousFirstY: first.clientY,
@@ -2631,66 +2618,27 @@ const updateImageTransformGesture = () => {
     previousFirst: { x: gesture.previousFirstX, y: gesture.previousFirstY },
     previousSecond: { x: gesture.previousSecondX, y: gesture.previousSecondY },
   });
-  let appliedDelta = delta;
-  let didActivate = false;
-
-  if (!gesture.active) {
-    gesture.accumulatedPanX += delta.pan.x;
-    gesture.accumulatedPanY += delta.pan.y;
-    gesture.accumulatedRotationRadians += delta.rotationRadians;
-    gesture.accumulatedZoomFactor *= delta.zoomFactor;
-    const accumulatedMotion = getImageTwoFingerTransformMotion({
+  imageZoomMode.value = "custom";
+  const currentView = imageGestureView || {
+    panX: imagePanX.value,
+    panY: imagePanY.value,
+    rotationRadians: imageRotationRadians.value,
+    zoom: imageZoom.value,
+  };
+  gesture.rawZoom *= delta.zoomFactor;
+  const nextZoom = clampImageZoom(gesture.rawZoom);
+  imageGestureView = applyImageTwoFingerTransformDelta({
+    currentStageCenter: stageCenter,
+    delta: {
       ...delta,
-      pan: { x: gesture.accumulatedPanX, y: gesture.accumulatedPanY },
-      rotationRadians: gesture.accumulatedRotationRadians,
-      zoomFactor: gesture.accumulatedZoomFactor,
-    });
-    if (accumulatedMotion >= IMAGE_TRANSFORM_TOUCH_SLOP) {
-      gesture.active = true;
-      didActivate = true;
-      gesture.rawZoom = imageZoom.value * gesture.accumulatedZoomFactor;
-      appliedDelta = {
-        ...delta,
-        pan: {
-          x: gesture.accumulatedPanX,
-          y: gesture.accumulatedPanY,
-        },
-        previousCentroid: {
-          x: delta.currentCentroid.x - gesture.accumulatedPanX,
-          y: delta.currentCentroid.y - gesture.accumulatedPanY,
-        },
-        rotationRadians: gesture.accumulatedRotationRadians,
-        zoomFactor: gesture.accumulatedZoomFactor,
-      };
-    }
-  }
-
-  if (gesture.active) {
-    imageZoomMode.value = "custom";
-    const currentView = imageGestureView || {
-      panX: imagePanX.value,
-      panY: imagePanY.value,
-      rotationRadians: imageRotationRadians.value,
-      zoom: imageZoom.value,
-    };
-    if (!didActivate) {
-      gesture.rawZoom *= delta.zoomFactor;
-    }
-    const nextZoom = clampImageZoom(gesture.rawZoom);
-    appliedDelta = {
-      ...appliedDelta,
       zoomFactor: currentView.zoom > 0 ? nextZoom / currentView.zoom : 1,
-    };
-    imageGestureView = applyImageTwoFingerTransformDelta({
-      currentStageCenter: stageCenter,
-      delta: appliedDelta,
-      maximumZoom: MAX_IMAGE_ZOOM,
-      minimumZoom: MIN_IMAGE_ZOOM,
-      previousStageCenter: stageCenter,
-      view: currentView,
-    });
-    writeImageGestureTransform(imageGestureView);
-  }
+    },
+    maximumZoom: MAX_IMAGE_ZOOM,
+    minimumZoom: MIN_IMAGE_ZOOM,
+    previousStageCenter: stageCenter,
+    view: currentView,
+  });
+  writeImageGestureTransform(imageGestureView);
 
   gesture.previousFirstX = first.clientX;
   gesture.previousFirstY = first.clientY;
