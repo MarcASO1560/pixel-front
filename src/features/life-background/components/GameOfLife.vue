@@ -276,6 +276,10 @@ const stageRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const cells = shallowRef<Uint8Array>(new Uint8Array());
 const trails = shallowRef<Float32Array>(new Float32Array());
+let scratchCells = new Uint8Array();
+let scratchTrails = new Float32Array();
+let liveCellColors: Array<string | undefined> = [];
+let trailCellColors: Array<string | undefined> = [];
 const size = ref<BoardSize>({
   width: 0,
   height: 0,
@@ -290,6 +294,7 @@ let animationFrame = 0;
 let resizeFrame = 0;
 let lastTick = 0;
 let lastCameraFrame = 0;
+let lastRenderFrame = 0;
 let nextInjectionAt = 0;
 let palettePhase = Math.random() * 360;
 
@@ -305,6 +310,9 @@ const CAMERA_MAX_SPEED = 24;
 const CAMERA_ACCELERATION = 7;
 const CAMERA_MAX_ZOOM_SPEED = 0.035;
 const CAMERA_MAX_ORBIT_RADIUS_SPEED = 8;
+const BACKGROUND_FRAME_MS = 1000 / 30;
+const MAX_SIMULATION_STEPS_PER_FRAME = 2;
+const MAX_BACKGROUND_DPR = 1.25;
 
 const camera: Camera = {
   x: 0,
@@ -1227,39 +1235,46 @@ const updateCamera = (timestamp: number) => {
   clampCamera();
 };
 
-const drawCell = (
+const colorForCell = (
+  index: number,
   row: number,
   column: number,
-  alpha: number,
-  color: string,
+  trail = false,
 ) => {
-  if (!context || alpha <= 0) {
-    return;
+  const cache = trail ? trailCellColors : liveCellColors;
+  const cachedColor = cache[index];
+  if (cachedColor) {
+    return cachedColor;
   }
 
-  const { cellSize } = size.value;
-  const pixelSize = cellSize * camera.zoom + 0.75;
-  const x = (column * cellSize - camera.x) * camera.zoom;
-  const y = (row * cellSize - camera.y) * camera.zoom;
-
-  context.globalAlpha = alpha;
-  context.fillStyle = color;
-  context.fillRect(x, y, pixelSize, pixelSize);
-  context.globalAlpha = 1;
+  const { columns, rows } = size.value;
+  const dx = column - columns / 2;
+  const dy = row - rows / 2;
+  const radius = Math.sqrt(dx * dx + dy * dy);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const wave = Math.sin(radius * 0.28);
+  const hue = (angle + radius * 4.4 + palettePhase) % 360;
+  const saturation = trail ? 34 + wave * 5 : 48 + wave * 7;
+  const lightness = trail ? 60 + wave * 3 : 85 + wave * 3;
+  const color = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  cache[index] = color;
+  return color;
 };
 
 const draw = () => {
-  if (!context) {
+  const drawingContext = context;
+  if (!drawingContext) {
     return;
   }
 
   const { width, height, columns, rows, cellSize } = size.value;
-  context.clearRect(0, 0, width, height);
-  context.fillStyle = "#050505";
-  context.fillRect(0, 0, width, height);
+  const currentCells = cells.value;
+  const currentTrails = trails.value;
+  const pixelSize = cellSize * camera.zoom + 0.75;
+  drawingContext.clearRect(0, 0, width, height);
+  drawingContext.fillStyle = "#050505";
+  drawingContext.fillRect(0, 0, width, height);
 
-  const centerColumn = columns / 2;
-  const centerRow = rows / 2;
   const startColumn = Math.max(0, Math.floor(camera.x / cellSize) - 2);
   const endColumn = Math.min(
     columns,
@@ -1271,41 +1286,34 @@ const draw = () => {
     Math.ceil((camera.y + height / camera.zoom) / cellSize) + 2,
   );
 
-  const colorForCell = (row: number, column: number, trail = false) => {
-    const dx = column - centerColumn;
-    const dy = row - centerRow;
-    const radius = Math.sqrt(dx * dx + dy * dy);
-    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-    const wave = Math.sin(radius * 0.28);
-    const hue = (angle + radius * 4.4 + palettePhase) % 360;
-    const saturation = trail ? 34 + wave * 5 : 48 + wave * 7;
-    const lightness = trail ? 60 + wave * 3 : 85 + wave * 3;
-
-    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-  };
-
   for (let row = startRow; row < endRow; row += 1) {
+    const y = (row * cellSize - camera.y) * camera.zoom;
     for (let column = startColumn; column < endColumn; column += 1) {
       const index = row * columns + column;
-      const trail = trails.value[index] ?? 0;
+      const trail = currentTrails[index] ?? 0;
 
-      if (trail > 0.04 && cells.value[index] === 0) {
-        drawCell(row, column, trail * 0.2, colorForCell(row, column, true));
+      if (trail > 0.04 && currentCells[index] === 0) {
+        const x = (column * cellSize - camera.x) * camera.zoom;
+        drawingContext.globalAlpha = trail * 0.2;
+        drawingContext.fillStyle = colorForCell(index, row, column, true);
+        drawingContext.fillRect(x, y, pixelSize, pixelSize);
       }
     }
   }
 
+  drawingContext.globalAlpha = 0.5;
   for (let row = startRow; row < endRow; row += 1) {
+    const y = (row * cellSize - camera.y) * camera.zoom;
     for (let column = startColumn; column < endColumn; column += 1) {
       const index = row * columns + column;
-      const isAlive = cells.value[index] === 1;
-
-      if (isAlive) {
-        drawCell(row, column, 0.5, colorForCell(row, column));
+      if (currentCells[index] === 1) {
+        const x = (column * cellSize - camera.x) * camera.zoom;
+        drawingContext.fillStyle = colorForCell(index, row, column);
+        drawingContext.fillRect(x, y, pixelSize, pixelSize);
       }
     }
   }
-
+  drawingContext.globalAlpha = 1;
 };
 
 const resizeBoard = () => {
@@ -1339,7 +1347,7 @@ const resizeBoard = () => {
   );
   const nextWidth = rect.width;
   const nextHeight = rect.height;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_BACKGROUND_DPR);
   const previous = size.value;
   const previousWorldWidth = previous.columns * previous.cellSize;
   const previousWorldHeight = previous.rows * previous.cellSize;
@@ -1360,13 +1368,15 @@ const resizeBoard = () => {
   context = canvas.getContext("2d");
   context?.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const nextCells = new Uint8Array(nextColumns * nextRows);
-  const nextTrails = new Float32Array(nextColumns * nextRows);
+  let resizedCells: Uint8Array;
+  let resizedTrails: Float32Array;
 
   if (cells.value.length === 0) {
-    cells.value = createSeedBoard(nextColumns, nextRows);
-    trails.value = Float32Array.from(cells.value);
+    resizedCells = createSeedBoard(nextColumns, nextRows);
+    resizedTrails = Float32Array.from(resizedCells);
   } else {
+    resizedCells = new Uint8Array(nextColumns * nextRows);
+    resizedTrails = new Float32Array(nextColumns * nextRows);
     const seed = createSeedBoard(nextColumns, nextRows);
     const previousCells = cells.value;
     const previousTrails = trails.value;
@@ -1387,17 +1397,21 @@ const resizeBoard = () => {
         const sampledTrail = previousTrails[previousIndex] ?? 0;
         const seeded = seed[nextIndex] === 1;
 
-        nextCells[nextIndex] =
+        resizedCells[nextIndex] =
           previousCells[previousIndex] === 1 || (seeded && Math.random() > 0.42)
             ? 1
             : 0;
-        nextTrails[nextIndex] = Math.max(sampledTrail * 0.9, seeded ? 0.42 : 0);
+        resizedTrails[nextIndex] = Math.max(sampledTrail * 0.9, seeded ? 0.42 : 0);
       }
     }
-
-    cells.value = nextCells;
-    trails.value = nextTrails;
   }
+
+  cells.value = resizedCells;
+  trails.value = resizedTrails;
+  scratchCells = new Uint8Array(resizedCells.length);
+  scratchTrails = new Float32Array(resizedCells.length);
+  liveCellColors = new Array(resizedCells.length);
+  trailCellColors = new Array(resizedCells.length);
 
   size.value = {
     width: nextWidth,
@@ -1441,30 +1455,6 @@ const scheduleResize = () => {
   resizeFrame = window.requestAnimationFrame(resizeBoard);
 };
 
-const countNeighbors = (
-  board: Uint8Array,
-  row: number,
-  column: number,
-  columns: number,
-  rows: number,
-) => {
-  let count = 0;
-
-  for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
-    for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
-      if (rowOffset === 0 && columnOffset === 0) {
-        continue;
-      }
-
-      const nextRow = (row + rowOffset + rows) % rows;
-      const nextColumn = (column + columnOffset + columns) % columns;
-      count += board[nextRow * columns + nextColumn];
-    }
-  }
-
-  return count;
-};
-
 const stepBoard = () => {
   const { columns, rows } = size.value;
   if (columns === 0 || rows === 0) {
@@ -1476,13 +1466,31 @@ const stepBoard = () => {
     trails.value.length === current.length
       ? trails.value
       : new Float32Array(current.length);
-  const next = new Uint8Array(current.length);
-  const nextTrails = new Float32Array(current.length);
+  if (scratchCells.length !== current.length) {
+    scratchCells = new Uint8Array(current.length);
+    scratchTrails = new Float32Array(current.length);
+  }
+  const next = scratchCells;
+  const nextTrails = scratchTrails;
 
   for (let row = 0; row < rows; row += 1) {
+    const previousRowStart = (row === 0 ? rows - 1 : row - 1) * columns;
+    const rowStart = row * columns;
+    const nextRowStart = (row === rows - 1 ? 0 : row + 1) * columns;
+
     for (let column = 0; column < columns; column += 1) {
-      const index = row * columns + column;
-      const neighbors = countNeighbors(current, row, column, columns, rows);
+      const previousColumn = column === 0 ? columns - 1 : column - 1;
+      const nextColumn = column === columns - 1 ? 0 : column + 1;
+      const index = rowStart + column;
+      const neighbors =
+        current[previousRowStart + previousColumn] +
+        current[previousRowStart + column] +
+        current[previousRowStart + nextColumn] +
+        current[rowStart + previousColumn] +
+        current[rowStart + nextColumn] +
+        current[nextRowStart + previousColumn] +
+        current[nextRowStart + column] +
+        current[nextRowStart + nextColumn];
       const alive = current[index] === 1;
 
       next[index] = alive
@@ -1499,22 +1507,44 @@ const stepBoard = () => {
 
   cells.value = next;
   trails.value = nextTrails;
+  scratchCells = current;
+  scratchTrails = currentTrails;
 };
 
 const loop = (timestamp: number) => {
+  animationFrame = 0;
+  if (document.visibilityState === "hidden") {
+    return;
+  }
+
   if (lastTick === 0) {
     lastTick = timestamp;
+    lastRenderFrame = timestamp;
     nextInjectionAt = timestamp + currentInjectionMs();
     draw();
     animationFrame = window.requestAnimationFrame(loop);
     return;
   }
 
-  const stepMs = currentStepMs();
+  if (timestamp - lastRenderFrame < BACKGROUND_FRAME_MS) {
+    animationFrame = window.requestAnimationFrame(loop);
+    return;
+  }
+  lastRenderFrame = timestamp;
 
-  while (timestamp - lastTick >= stepMs) {
+  const stepMs = currentStepMs();
+  let completedSteps = 0;
+
+  while (
+    timestamp - lastTick >= stepMs &&
+    completedSteps < MAX_SIMULATION_STEPS_PER_FRAME
+  ) {
     stepBoard();
     lastTick += stepMs;
+    completedSteps += 1;
+  }
+  if (timestamp - lastTick >= stepMs) {
+    lastTick = timestamp;
   }
 
   if (timestamp >= nextInjectionAt) {
@@ -1527,6 +1557,27 @@ const loop = (timestamp: number) => {
   animationFrame = window.requestAnimationFrame(loop);
 };
 
+const startAnimation = () => {
+  if (animationFrame !== 0 || document.visibilityState === "hidden") {
+    return;
+  }
+
+  lastTick = 0;
+  lastCameraFrame = 0;
+  lastRenderFrame = 0;
+  animationFrame = window.requestAnimationFrame(loop);
+};
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === "hidden") {
+    window.cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    return;
+  }
+
+  startAnimation();
+};
+
 onMounted(() => {
   resizeBoard();
   resizeObserver = new ResizeObserver(scheduleResize);
@@ -1537,13 +1588,15 @@ onMounted(() => {
 
   window.addEventListener("resize", scheduleResize);
   window.visualViewport?.addEventListener("resize", scheduleResize);
-  animationFrame = window.requestAnimationFrame(loop);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  startAnimation();
 });
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   window.removeEventListener("resize", scheduleResize);
   window.visualViewport?.removeEventListener("resize", scheduleResize);
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.cancelAnimationFrame(animationFrame);
   window.cancelAnimationFrame(resizeFrame);
 });
@@ -1568,5 +1621,10 @@ onBeforeUnmount(() => {
   inset: 0;
   width: 100%;
   height: 100%;
+  filter:
+    blur(var(--life-background-blur, 8px))
+    saturate(var(--life-background-saturation, 100%));
+  transform: scale(1.04);
+  transform-origin: center;
 }
 </style>

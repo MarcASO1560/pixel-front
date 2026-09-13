@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed } from "vue";
 
 const props = withDefaults(
   defineProps<{
@@ -15,58 +15,48 @@ const normalizedSize = computed(() =>
   Number.isFinite(props.size) ? Math.max(1, Math.floor(props.size)) : 16,
 );
 
-const visiblePixels = computed(() =>
-  props.pixels
-    .slice(0, normalizedSize.value * normalizedSize.value)
-    .map((color, index) => ({
-      color,
-      x: index % normalizedSize.value,
-      y: Math.floor(index / normalizedSize.value),
-    }))
-    .filter((pixel): pixel is { color: string; x: number; y: number } => Boolean(pixel.color)),
-);
-
-const canvasRef = ref<HTMLCanvasElement | null>(null);
-
-const renderThumbnail = () => {
-  const canvas = canvasRef.value;
-  if (!canvas) return;
-
+const colorPaths = computed(() => {
   const size = normalizedSize.value;
-  canvas.width = size;
-  canvas.height = size;
+  const paths = new Map<string, string[]>();
 
-  const context = canvas.getContext("2d");
-  if (!context) return;
+  for (let index = 0; index < Math.min(props.pixels.length, size * size); index += 1) {
+    const color = props.pixels[index];
+    if (!color) continue;
 
-  context.imageSmoothingEnabled = false;
-  context.clearRect(0, 0, size, size);
-
-  for (const pixel of visiblePixels.value) {
-    context.fillStyle = pixel.color;
-    context.fillRect(pixel.x, pixel.y, 1, 1);
+    const commands = paths.get(color) || [];
+    commands.push(`M${index % size} ${Math.floor(index / size)}h1v1h-1z`);
+    paths.set(color, commands);
   }
-};
 
-watch([normalizedSize, visiblePixels], renderThumbnail, { flush: "post" });
-onMounted(renderThumbnail);
+  return [...paths].map(([color, commands]) => ({
+    color,
+    path: commands.join(""),
+  }));
+});
 </script>
 
 <template>
-  <canvas
-    ref="canvasRef"
-    :width="normalizedSize"
-    :height="normalizedSize"
+  <svg
+    :viewBox="`0 0 ${normalizedSize} ${normalizedSize}`"
+    preserveAspectRatio="none"
+    shape-rendering="crispEdges"
     aria-hidden="true"
-  ></canvas>
+    focusable="false"
+  >
+    <path
+      v-for="entry in colorPaths"
+      :key="entry.color"
+      :d="entry.path"
+      :fill="entry.color"
+    />
+  </svg>
 </template>
 
 <style scoped>
-  canvas {
+  svg {
     display: block;
     width: 100%;
     height: 100%;
     overflow: hidden;
-    image-rendering: pixelated;
   }
 </style>

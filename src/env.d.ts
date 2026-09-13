@@ -14,5 +14,6 @@ declare namespace App {
   interface Locals {
     apiAvailable?: boolean;
     user?: import("./lib/api").UserPublic;
+    workspace?: import("./lib/api").WorkspaceBootstrap;
   }
 }

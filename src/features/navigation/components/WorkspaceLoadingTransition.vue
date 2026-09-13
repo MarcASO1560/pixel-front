@@ -25,6 +25,7 @@ let animationFrame = 0;
 let lastStepAt = 0;
 let generation = 0;
 let board = new Uint8Array();
+let scratchBoard = new Uint8Array();
 let context: CanvasRenderingContext2D | null = null;
 let resizeHandler: (() => void) | null = null;
 let visibleColumns = 0;
@@ -45,6 +46,7 @@ const STEP_MS = 18;
 const RESET_GENERATION = 2000;
 const SIMULATION_COLUMN_BUFFER = 220;
 const SIMULATION_LEFT_BUFFER = 70;
+const MAX_TRANSITION_DPR = 1.25;
 let cellSize = DESKTOP_CELL_SIZE;
 
 type Point = readonly [row: number, column: number];
@@ -233,40 +235,53 @@ const createBoard = () => {
   return nextBoard;
 };
 
-const countNeighbors = (source: Uint8Array, row: number, column: number) => {
-  let count = 0;
-
-  for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
-    for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
-      if (rowOffset === 0 && columnOffset === 0) {
-        continue;
-      }
-
-      const nextRow = row + rowOffset;
-      const nextColumn = column + columnOffset;
-
-      if (
-        nextRow >= 0 &&
-        nextRow < rows &&
-        nextColumn >= 0 &&
-        nextColumn < columns
-      ) {
-        count += source[indexFor(nextRow, nextColumn)];
-      }
-    }
+const stepBoard = () => {
+  if (scratchBoard.length !== board.length) {
+    scratchBoard = new Uint8Array(board.length);
   }
 
-  return count;
-};
-
-const stepBoard = () => {
-  const nextBoard = new Uint8Array(columns * rows);
+  const currentBoard = board;
+  const nextBoard = scratchBoard;
 
   for (let row = 0; row < rows; row += 1) {
+    const hasPreviousRow = row > 0;
+    const hasNextRow = row < rows - 1;
+    const previousRowStart = (row - 1) * columns;
+    const rowStart = row * columns;
+    const nextRowStart = (row + 1) * columns;
+
     for (let column = 0; column < columns; column += 1) {
-      const index = indexFor(row, column);
-      const neighbors = countNeighbors(board, row, column);
-      const isAlive = board[index] === 1;
+      const hasPreviousColumn = column > 0;
+      const hasNextColumn = column < columns - 1;
+      const index = rowStart + column;
+      let neighbors = 0;
+
+      if (hasPreviousRow) {
+        neighbors += currentBoard[previousRowStart + column];
+        if (hasPreviousColumn) {
+          neighbors += currentBoard[previousRowStart + column - 1];
+        }
+        if (hasNextColumn) {
+          neighbors += currentBoard[previousRowStart + column + 1];
+        }
+      }
+      if (hasPreviousColumn) {
+        neighbors += currentBoard[rowStart + column - 1];
+      }
+      if (hasNextColumn) {
+        neighbors += currentBoard[rowStart + column + 1];
+      }
+      if (hasNextRow) {
+        neighbors += currentBoard[nextRowStart + column];
+        if (hasPreviousColumn) {
+          neighbors += currentBoard[nextRowStart + column - 1];
+        }
+        if (hasNextColumn) {
+          neighbors += currentBoard[nextRowStart + column + 1];
+        }
+      }
+
+      const isAlive = currentBoard[index] === 1;
 
       nextBoard[index] = isAlive
         ? neighbors === 2 || neighbors === 3
@@ -279,6 +294,7 @@ const stepBoard = () => {
   }
 
   board = nextBoard;
+  scratchBoard = currentBoard;
   generation += 1;
 
   if (generation >= RESET_GENERATION) {
@@ -293,6 +309,7 @@ const drawBoard = () => {
   }
 
   context.clearRect(0, 0, canvasWidth, canvasHeight);
+  context.fillStyle = "#fff";
 
   for (let row = 0; row < rows; row += 1) {
     for (let column = visibleColumnOffset; column < visibleColumnOffset + visibleColumns; column += 1) {
@@ -303,7 +320,6 @@ const drawBoard = () => {
       }
 
       const visibleColumn = column - visibleColumnOffset;
-      context.fillStyle = "#fff";
       context.fillRect(
         visibleColumn * cellSize,
         row * cellSize,
@@ -326,7 +342,7 @@ const loop = (timestamp: number) => {
 
 const resizeCanvas = (canvas: HTMLCanvasElement) => {
   const rect = canvas.getBoundingClientRect();
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_TRANSITION_DPR);
   canvasWidth = Math.max(1, rect.width || window.innerWidth);
   canvasHeight = Math.max(1, rect.height || window.innerHeight);
   cellSize = getResponsiveCellSize(canvasWidth);
@@ -345,6 +361,7 @@ const resizeCanvas = (canvas: HTMLCanvasElement) => {
   }
 
   board = createBoard();
+  scratchBoard = new Uint8Array(board.length);
   generation = 0;
   drawBoard();
   isCanvasReady.value = true;

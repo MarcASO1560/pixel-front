@@ -1,7 +1,19 @@
 ---
 import GlassLayer from "./GlassLayer.vue";
 import GameOfLife from "./GameOfLife.vue";
+
+interface Props {
+  blur?: number;
+  saturation?: number;
+}
+
+const { blur = 8, saturation = 100 } = Astro.props;
 ---
 
-<GameOfLife client:load />
-<GlassLayer />
+<div
+  class="life-background"
+  style={`--life-background-blur: ${blur}px; --life-background-saturation: ${saturation}%;`}
+>
+  <GameOfLife client:load />
+  <GlassLayer />
+</div>

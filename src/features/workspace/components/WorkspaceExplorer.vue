@@ -32,6 +32,7 @@ type ExplorerProject = {
 type ShareLinkRole = Extract<ProjectAccessRole, "viewer" | "editor">;
 
 const props = defineProps<{
+  initialWorkspace?: WorkspaceBootstrap | null;
   userName?: string;
   userUsername?: string | null;
   userAvatarUrl?: string;
@@ -290,6 +291,12 @@ const mapProject = (
   };
 };
 
+if (props.initialWorkspace) {
+  projects.value = props.initialWorkspace.projects.map((project) => mapProject(project));
+  selectedProjectId.value = projects.value[0]?.id || null;
+  isLoading.value = false;
+}
+
 const buildLocalProject = (): ExplorerProject => {
   return {
     id: `local-${crypto.randomUUID()}`,
@@ -495,7 +502,9 @@ const acceptProjectShareFromUrl = async () => {
 };
 
 const initializeWorkspace = async () => {
-  await loadWorkspace();
+  if (!props.initialWorkspace) {
+    await loadWorkspace();
+  }
   await acceptProjectShareFromUrl();
 };
 

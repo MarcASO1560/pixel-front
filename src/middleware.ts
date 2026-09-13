@@ -1,6 +1,11 @@
 import { defineMiddleware } from "astro:middleware";
 
-import { fetchApi, healthUrl, type UserPublic } from "./lib/api";
+import {
+  fetchApi,
+  healthUrl,
+  type UserPublic,
+  type WorkspaceBootstrap,
+} from "./lib/api";
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   createLoginRedirectUrl,
@@ -21,6 +26,33 @@ const checkApiHealth = async () => {
 
 const readCurrentUser = async (accessToken: string) =>
   fetchApi<UserPublic>("/users/me", { accessToken, direct: true });
+
+const readWorkspace = async (accessToken: string) =>
+  fetchApi<WorkspaceBootstrap>("/workspace/", { accessToken, direct: true });
+
+const readAuthenticatedSession = async (
+  accessToken: string,
+  includeWorkspace: boolean,
+) => {
+  if (includeWorkspace) {
+    try {
+      const workspace = await readWorkspace(accessToken);
+      if (workspace) {
+        return { user: workspace.user, workspace };
+      }
+    } catch {
+      // Fall back to the lightweight user endpoint below so a temporary
+      // workspace failure does not discard an otherwise valid session.
+    }
+  }
+
+  try {
+    const user = await readCurrentUser(accessToken);
+    return user ? { user } : null;
+  } catch {
+    return null;
+  }
+};
 
 const createExpiredSessionCookie = (requestUrl: URL) =>
   [
@@ -60,12 +92,20 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return Response.redirect(studioUrl.toString(), 302);
   }
 
-  context.locals.apiAvailable = await checkApiHealth();
-
   const accessToken = context.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value;
-  const user = accessToken ? await readCurrentUser(accessToken) : null;
-  if (user) {
-    context.locals.user = user;
+  const shouldBootstrapWorkspace = pathname === "/studio" || pathname === "/studio/";
+  const authenticatedSession = accessToken
+    ? await readAuthenticatedSession(accessToken, shouldBootstrapWorkspace)
+    : null;
+
+  if (authenticatedSession) {
+    context.locals.apiAvailable = true;
+    context.locals.user = authenticatedSession.user;
+    if (authenticatedSession.workspace) {
+      context.locals.workspace = authenticatedSession.workspace;
+    }
+  } else {
+    context.locals.apiAvailable = await checkApiHealth();
   }
 
   if (isProtectedPath(pathname)) {
@@ -73,12 +113,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
       return new Response("API unavailable", { status: 503 });
     }
 
-    if (!accessToken || !user) {
+    if (!accessToken || !authenticatedSession) {
       return redirectToLoginWithExpiredSession(context.url);
     }
   }
 
-  if (isAuthPath(pathname) && user) {
+  if (isAuthPath(pathname) && authenticatedSession) {
     return Response.redirect(new URL("/studio", context.url).toString(), 302);
   }
 

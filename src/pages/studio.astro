@@ -12,11 +12,12 @@ const userUsername = user?.username || "";
 const userAvatarUrl = user?.avatar_url || "";
 const userEmail = user?.email || "";
 const userPixelAvatar = user?.avatar_pixel_art || null;
+const initialWorkspace = Astro.locals.workspace || null;
 ---
 
 <AppLayout title="Studio | Sefkira Studio">
   <main class="studio-shell">
-    <LifeBackground />
+    <LifeBackground blur={14} saturation={94} />
     <div class="studio-background-shade" aria-hidden="true"></div>
     <WorkspaceExplorer
       client:load
@@ -25,6 +26,7 @@ const userPixelAvatar = user?.avatar_pixel_art || null;
       userAvatarUrl={userAvatarUrl}
       userEmail={userEmail}
       userPixelAvatar={userPixelAvatar}
+      initialWorkspace={initialWorkspace}
     />
   </main>
   <WorkspaceLoadingTransition phase="entry" client:load />
@@ -48,7 +50,6 @@ const userPixelAvatar = user?.avatar_pixel_art || null;
     background:
       linear-gradient(180deg, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.64)),
       radial-gradient(circle at 48% 36%, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.42) 68%);
-    backdrop-filter: blur(12px) saturate(94%);
     pointer-events: none;
   }
 </style>
