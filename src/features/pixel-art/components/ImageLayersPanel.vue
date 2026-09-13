@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch, type ComponentPublicInstance } from "vue";
 
+import type { ImageLayerDropPosition } from "../lib/layerEditing";
 import type { PixelLayer } from "../types";
 import ImageLayerThumbnail from "./ImageLayerThumbnail.vue";
 
@@ -29,14 +30,28 @@ const emit = defineEmits<{
   "preview-opacity": [payload: { id: string; opacity: number }];
   "set-opacity": [payload: { id: string; opacity: number }];
   move: [payload: { id: string; direction: "up" | "down" }];
+  reorder: [payload: { id: string; targetId: string; position: ImageLayerDropPosition }];
 }>();
 
 const renamingLayerId = ref<string | null>(null);
 const renameDraft = ref("");
 const renameInputRef = ref<HTMLInputElement | null>(null);
+const layersListRef = ref<HTMLOListElement | null>(null);
 const layerNameButtonRefs = new Map<string, HTMLButtonElement>();
+const layerRowRefs = new Map<string, HTMLLIElement>();
 const titleId = useId();
 const opacityInputId = useId();
+const layerDragStatus = ref("");
+const draggedLayerId = ref<string | null>(null);
+const isLayerDragActive = ref(false);
+const layerDragOffsetY = ref(0);
+const layerDropTarget = ref<{
+  id: string;
+  position: ImageLayerDropPosition;
+} | null>(null);
+let layerDragPointerId: number | null = null;
+let layerDragStartY = 0;
+const LAYER_DRAG_ACTIVATION_DISTANCE = 4;
 
 const layerLimit = computed(() =>
   Number.isFinite(props.maxLayers) ? Math.max(1, Math.floor(props.maxLayers)) : 64,
@@ -74,8 +89,134 @@ const setLayerNameButtonRef = (
   }
 };
 
+const setLayerRowRef = (
+  id: string,
+  element: Element | ComponentPublicInstance | null,
+) => {
+  if (element instanceof HTMLLIElement) {
+    layerRowRefs.set(id, element);
+  } else {
+    layerRowRefs.delete(id);
+  }
+};
+
 const selectLayer = (id: string) => {
   emit("select", id);
+};
+
+const layerDragStyle = (id: string) =>
+  isLayerDragActive.value && draggedLayerId.value === id
+    ? { transform: `translate3d(0, ${layerDragOffsetY.value}px, 0)` }
+    : undefined;
+
+const updateLayerDropTarget = (clientY: number) => {
+  const candidates = displayedLayers.value
+    .filter((layer) => layer.id !== draggedLayerId.value)
+    .map((layer) => ({ layer, bounds: layerRowRefs.get(layer.id)?.getBoundingClientRect() }))
+    .filter(
+      (candidate): candidate is { layer: PixelLayer; bounds: DOMRect } =>
+        Boolean(candidate.bounds),
+    );
+
+  if (candidates.length === 0) {
+    layerDropTarget.value = null;
+    return;
+  }
+
+  for (const candidate of candidates) {
+    if (clientY < candidate.bounds.top) {
+      layerDropTarget.value = { id: candidate.layer.id, position: "before" };
+      return;
+    }
+    if (clientY <= candidate.bounds.bottom) {
+      layerDropTarget.value = {
+        id: candidate.layer.id,
+        position: clientY < candidate.bounds.top + candidate.bounds.height / 2 ? "before" : "after",
+      };
+      return;
+    }
+  }
+
+  layerDropTarget.value = {
+    id: candidates[candidates.length - 1]!.layer.id,
+    position: "after",
+  };
+};
+
+const scrollLayerListNearEdge = (clientY: number) => {
+  const list = layersListRef.value;
+  if (!list) return;
+  const bounds = list.getBoundingClientRect();
+  const edgeSize = Math.min(36, bounds.height * 0.22);
+  if (clientY < bounds.top + edgeSize) {
+    list.scrollTop -= 10;
+  } else if (clientY > bounds.bottom - edgeSize) {
+    list.scrollTop += 10;
+  }
+};
+
+const resetLayerDrag = () => {
+  draggedLayerId.value = null;
+  isLayerDragActive.value = false;
+  layerDragOffsetY.value = 0;
+  layerDropTarget.value = null;
+  layerDragPointerId = null;
+};
+
+const startLayerDrag = (event: PointerEvent, layer: PixelLayer) => {
+  if (!props.canEdit || props.layers.length < 2 || event.button !== 0) return;
+  const handle = event.currentTarget as HTMLElement;
+  selectLayer(layer.id);
+  draggedLayerId.value = layer.id;
+  layerDragPointerId = event.pointerId;
+  layerDragStartY = event.clientY;
+  layerDragOffsetY.value = 0;
+  layerDropTarget.value = null;
+  handle.setPointerCapture(event.pointerId);
+};
+
+const continueLayerDrag = (event: PointerEvent) => {
+  if (event.pointerId !== layerDragPointerId || !draggedLayerId.value) return;
+  const offsetY = event.clientY - layerDragStartY;
+  if (!isLayerDragActive.value && Math.abs(offsetY) < LAYER_DRAG_ACTIVATION_DISTANCE) {
+    return;
+  }
+
+  event.preventDefault();
+  isLayerDragActive.value = true;
+  layerDragOffsetY.value = offsetY;
+  scrollLayerListNearEdge(event.clientY);
+  updateLayerDropTarget(event.clientY);
+};
+
+const finishLayerDrag = (event: PointerEvent) => {
+  if (event.pointerId !== layerDragPointerId) return;
+  const draggedId = draggedLayerId.value;
+  const target = layerDropTarget.value;
+  const draggedLayer = props.layers.find((layer) => layer.id === draggedId);
+  const targetLayer = props.layers.find((layer) => layer.id === target?.id);
+
+  if (isLayerDragActive.value && draggedId && target && targetLayer) {
+    emit("reorder", { id: draggedId, targetId: target.id, position: target.position });
+    layerDragStatus.value = `${draggedLayer?.name || "Layer"} moved ${target.position} ${targetLayer.name}.`;
+  }
+
+  const handle = event.currentTarget as HTMLElement;
+  if (handle.hasPointerCapture(event.pointerId)) {
+    handle.releasePointerCapture(event.pointerId);
+  }
+  resetLayerDrag();
+};
+
+const cancelLayerDrag = (event: PointerEvent) => {
+  if (event.pointerId !== layerDragPointerId) return;
+  resetLayerDrag();
+};
+
+const moveLayerWithKeyboard = (layer: PixelLayer, direction: "up" | "down") => {
+  if (direction === "up" ? !canMoveUp(layer.id) : !canMoveDown(layer.id)) return;
+  emit("move", { id: layer.id, direction });
+  layerDragStatus.value = `${layer.name} moved ${direction}.`;
 };
 
 const startRename = async (layer: PixelLayer) => {
@@ -142,6 +283,9 @@ watch(
     ) {
       void cancelRename();
     }
+    if (draggedLayerId.value && !layers.some((layer) => layer.id === draggedLayerId.value)) {
+      resetLayerDrag();
+    }
   },
   { deep: false },
 );
@@ -181,15 +325,26 @@ watch(
       No layers available.
     </p>
 
-    <ol v-else class="image-layers-panel__list" aria-label="Image layers">
+    <ol v-else ref="layersListRef" class="image-layers-panel__list" aria-label="Image layers">
       <li
         v-for="layer in displayedLayers"
         :key="layer.id"
+        :ref="(element) => setLayerRowRef(layer.id, element)"
         class="image-layer-row"
         :class="{
           'is-active': layer.id === activeLayerId,
           'is-hidden': !layer.visible,
+          'is-dragging': isLayerDragActive && draggedLayerId === layer.id,
+          'is-drop-before':
+            isLayerDragActive &&
+            layerDropTarget?.id === layer.id &&
+            layerDropTarget.position === 'before',
+          'is-drop-after':
+            isLayerDragActive &&
+            layerDropTarget?.id === layer.id &&
+            layerDropTarget.position === 'after',
         }"
+        :style="layerDragStyle(layer.id)"
         :aria-current="layer.id === activeLayerId ? 'true' : undefined"
         @click="selectLayer(layer.id)"
       >
@@ -272,25 +427,29 @@ watch(
         <div class="image-layer-row__actions" role="group" :aria-label="`Actions for ${layer.name}`">
           <button
             type="button"
-            class="layer-icon-button"
-            :disabled="!canMoveUp(layer.id)"
-            :aria-label="`Move ${layer.name} up`"
-            title="Move layer up"
-            @click.stop="emit('move', { id: layer.id, direction: 'up' })"
+            class="layer-icon-button layer-drag-handle"
+            :disabled="!canEdit || layers.length < 2"
+            :aria-label="`Reorder ${layer.name}. Drag or use arrow keys.`"
+            aria-keyshortcuts="ArrowUp ArrowDown"
+            title="Drag to reorder · Arrow keys also work"
+            @click.stop.prevent
+            @pointerdown.stop="startLayerDrag($event, layer)"
+            @pointermove.stop="continueLayerDrag"
+            @pointerup.stop="finishLayerDrag"
+            @pointercancel.stop="cancelLayerDrag"
+            @lostpointercapture.stop="cancelLayerDrag"
+            @keydown.up.prevent.stop="moveLayerWithKeyboard(layer, 'up')"
+            @keydown.down.prevent.stop="moveLayerWithKeyboard(layer, 'down')"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14 5-5 5 5" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="9" cy="7" r="1" />
+              <circle cx="15" cy="7" r="1" />
+              <circle cx="9" cy="12" r="1" />
+              <circle cx="15" cy="12" r="1" />
+              <circle cx="9" cy="17" r="1" />
+              <circle cx="15" cy="17" r="1" />
+            </svg>
           </button>
-          <button
-            type="button"
-            class="layer-icon-button"
-            :disabled="!canMoveDown(layer.id)"
-            :aria-label="`Move ${layer.name} down`"
-            title="Move layer down"
-            @click.stop="emit('move', { id: layer.id, direction: 'down' })"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
-          </button>
-          <span class="image-layer-row__action-spacer" aria-hidden="true"></span>
           <button
             type="button"
             class="layer-icon-button"
@@ -319,6 +478,10 @@ watch(
         </div>
       </li>
     </ol>
+
+    <p class="image-layers-panel__drag-status" aria-live="polite">
+      {{ layerDragStatus }}
+    </p>
 
     <div v-if="activeLayer" class="image-layers-panel__opacity">
       <label :for="opacityInputId">
@@ -420,6 +583,35 @@ watch(
 
   .image-layer-row:hover {
     background: #1d1d1d;
+  }
+
+  .image-layer-row.is-dragging {
+    z-index: 4;
+    opacity: 0.84;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.48);
+    cursor: grabbing;
+    will-change: transform;
+  }
+
+  .image-layer-row.is-drop-before::before,
+  .image-layer-row.is-drop-after::after {
+    position: absolute;
+    right: 0;
+    left: 0;
+    z-index: 6;
+    height: 3px;
+    pointer-events: none;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px #111111, 0 0 10px rgba(255, 255, 255, 0.72);
+    content: "";
+  }
+
+  .image-layer-row.is-drop-before::before {
+    top: 0;
+  }
+
+  .image-layer-row.is-drop-after::after {
+    bottom: 0;
   }
 
   .image-layer-row.is-active {
@@ -530,10 +722,6 @@ watch(
     padding-left: 0;
   }
 
-  .image-layer-row__action-spacer {
-    display: none;
-  }
-
   .layer-icon-button {
     display: inline-grid;
     flex: 0 0 auto;
@@ -583,6 +771,20 @@ watch(
     border-color: #454545;
   }
 
+  .layer-drag-handle {
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .layer-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  .layer-drag-handle svg circle {
+    fill: currentColor;
+    stroke: none;
+  }
+
   .layer-icon-button--danger:hover:not(:disabled),
   .image-layer-row.is-active .layer-icon-button--danger:hover:not(:disabled) {
     color: #ffffff;
@@ -630,6 +832,18 @@ watch(
     color: var(--layers-muted);
     font-size: 12px;
     text-align: center;
+  }
+
+  .image-layers-panel__drag-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   @media (max-width: 440px) {

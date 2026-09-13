@@ -1,6 +1,7 @@
 import type { ImageTool, PixelLayer } from "../types";
 
 export type ImageLayerPixelState = Pick<PixelLayer, "locked" | "visible">;
+export type ImageLayerDropPosition = "before" | "after";
 
 const IMAGE_PIXEL_MUTATION_TOOLS: ReadonlySet<ImageTool> = new Set([
   "pencil",
@@ -25,3 +26,30 @@ export const isImagePixelMutationTool = (tool: ImageTool) =>
 export const canMutateImageLayerPixels = (
   layer: ImageLayerPixelState | null | undefined,
 ): boolean => Boolean(layer?.visible && !layer.locked);
+
+/**
+ * Reorders bottom-to-top document layers from a drop described in the
+ * top-to-bottom order shown by the layer panel.
+ */
+export const reorderImageLayersByDisplayDrop = (
+  layers: PixelLayer[],
+  draggedLayerId: string,
+  targetLayerId: string,
+  position: ImageLayerDropPosition,
+): PixelLayer[] => {
+  if (draggedLayerId === targetLayerId) return layers;
+
+  const displayedLayers = [...layers].reverse();
+  const draggedIndex = displayedLayers.findIndex((layer) => layer.id === draggedLayerId);
+  if (draggedIndex < 0) return layers;
+
+  const [draggedLayer] = displayedLayers.splice(draggedIndex, 1);
+  const targetIndex = displayedLayers.findIndex((layer) => layer.id === targetLayerId);
+  if (!draggedLayer || targetIndex < 0) return layers;
+
+  displayedLayers.splice(targetIndex + (position === "after" ? 1 : 0), 0, draggedLayer);
+  const reorderedLayers = displayedLayers.reverse();
+  return reorderedLayers.every((layer, index) => layer === layers[index])
+    ? layers
+    : reorderedLayers;
+};

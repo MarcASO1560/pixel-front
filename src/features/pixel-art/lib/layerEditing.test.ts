@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { ImageTool } from "../types";
+import type { ImageTool, PixelLayer } from "../types";
 import {
   canMutateImageLayerPixels,
   isImagePixelMutationTool,
+  reorderImageLayersByDisplayDrop,
 } from "./layerEditing";
 
 const PIXEL_PAINTING_TOOLS: ImageTool[] = [
@@ -18,6 +19,14 @@ const PIXEL_PAINTING_TOOLS: ImageTool[] = [
 ];
 
 const NON_MUTATING_TOOLS: ImageTool[] = ["picker", "select"];
+const makeLayer = (id: string): PixelLayer => ({
+  id,
+  name: id,
+  visible: true,
+  locked: false,
+  opacity: 1,
+  pixels: [],
+});
 
 describe("image layer painting policy", () => {
   it.each(PIXEL_PAINTING_TOOLS)("classifies %s as a pixel mutation tool", (tool) => {
@@ -60,5 +69,40 @@ describe("image layer painting policy", () => {
     // Selecting the layer and toggling its panel control remain separate actions.
     const madeVisible = { ...layer, visible: true };
     expect(canMutateImageLayerPixels(madeVisible)).toBe(true);
+  });
+});
+
+describe("image layer drag ordering", () => {
+  const bottomToTop = [makeLayer("bottom"), makeLayer("middle"), makeLayer("top")];
+
+  it("moves a displayed top layer below its drop target", () => {
+    expect(
+      reorderImageLayersByDisplayDrop(bottomToTop, "top", "middle", "after").map(
+        (layer) => layer.id,
+      ),
+    ).toEqual(["bottom", "top", "middle"]);
+  });
+
+  it("moves a displayed bottom layer above its drop target", () => {
+    expect(
+      reorderImageLayersByDisplayDrop(bottomToTop, "bottom", "middle", "before").map(
+        (layer) => layer.id,
+      ),
+    ).toEqual(["middle", "bottom", "top"]);
+  });
+
+  it("keeps the original array when a drop does not change the order", () => {
+    expect(
+      reorderImageLayersByDisplayDrop(bottomToTop, "top", "middle", "before"),
+    ).toBe(bottomToTop);
+  });
+
+  it("ignores missing and self-referential drop targets", () => {
+    expect(
+      reorderImageLayersByDisplayDrop(bottomToTop, "missing", "middle", "before"),
+    ).toBe(bottomToTop);
+    expect(
+      reorderImageLayersByDisplayDrop(bottomToTop, "top", "top", "after"),
+    ).toBe(bottomToTop);
   });
 });

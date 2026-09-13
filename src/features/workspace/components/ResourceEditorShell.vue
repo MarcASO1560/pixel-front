@@ -71,6 +71,8 @@ import { graffitiBrushStamp } from "../../pixel-art/lib/graffitiBrush";
 import {
   canMutateImageLayerPixels,
   isImagePixelMutationTool,
+  reorderImageLayersByDisplayDrop,
+  type ImageLayerDropPosition,
 } from "../../pixel-art/lib/layerEditing";
 import {
   getImagePixelIndexFromClientPoint,
@@ -3678,6 +3680,27 @@ const moveImageLayer = ({
   finishImageLayerMutation();
 };
 
+const reorderImageLayer = ({
+  id,
+  targetId,
+  position,
+}: {
+  id: string;
+  targetId: string;
+  position: ImageLayerDropPosition;
+}) => {
+  if (!canEditImage.value) return;
+  const reorderedLayers = reorderImageLayersByDisplayDrop(
+    imageLayers.value,
+    id,
+    targetId,
+    position,
+  );
+  if (reorderedLayers === imageLayers.value) return;
+  imageLayers.value = reorderedLayers;
+  finishImageLayerMutation();
+};
+
 const activeImageBuffer = () => ({
   width: imageGridWidth.value,
   height: imageGridHeight.value,
@@ -4588,6 +4611,7 @@ onUnmounted(() => {
                   @preview-opacity="previewImageLayerOpacity"
                   @set-opacity="setImageLayerOpacity"
                   @move="moveImageLayer"
+                  @reorder="reorderImageLayer"
                 />
               </div>
             </section>
