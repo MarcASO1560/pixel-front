@@ -46,6 +46,7 @@ const layerDragStatus = ref("");
 const draggedLayerId = ref<string | null>(null);
 const isLayerDragActive = ref(false);
 const isLayerDragSettling = ref(false);
+const isLayerDragCommitting = ref(false);
 const layerDragOffsetY = ref(0);
 const layerDropTarget = ref<{
   id: string;
@@ -55,7 +56,15 @@ let layerDragPointerId: number | null = null;
 let layerDragStartY = 0;
 let layerDragCaptureTarget: HTMLElement | null = null;
 let layerDropSettleTimer: ReturnType<typeof setTimeout> | null = null;
+const layerDragBaseBounds = new Map<
+  string,
+  { height: number; top: number }
+>();
+let layerDragStartScrollTop = 0;
+let lastLayerDropDirection: -1 | 0 | 1 = 0;
 const LAYER_DRAG_ACTIVATION_DISTANCE = 4;
+const LAYER_DROP_HYSTERESIS = 9;
+const LAYER_DROP_SETTLE_DURATION = 240;
 const LAYER_ROW_PITCH = 47;
 
 const canAddLayer = computed(() => props.canEdit);
@@ -114,7 +123,13 @@ const displayedDropIndex = () => {
 };
 
 const layerDropPreviewOffset = (id: string) => {
-  if (!isLayerDragActive.value || id === draggedLayerId.value) return 0;
+  if (
+    !isLayerDragActive.value ||
+    isLayerDragCommitting.value ||
+    id === draggedLayerId.value
+  ) {
+    return 0;
+  }
 
   const sourceIndex = displayedLayers.value.findIndex(
     (layer) => layer.id === draggedLayerId.value,
@@ -135,7 +150,7 @@ const layerDropPreviewOffset = (id: string) => {
 };
 
 const layerDragStyle = (id: string) => {
-  if (!isLayerDragActive.value) return undefined;
+  if (!isLayerDragActive.value || isLayerDragCommitting.value) return undefined;
   if (draggedLayerId.value === id) {
     return {
       transform: `translate3d(0, ${layerDragOffsetY.value}px, 0) scale(1.018)`,
@@ -156,27 +171,43 @@ const opacityThumbPosition = (opacity: number) => {
   return `calc(${percentage}% + ${edgeCorrection}px)`;
 };
 
-const updateLayerDropTarget = (clientY: number) => {
+const captureLayerDragLayout = () => {
+  layerDragBaseBounds.clear();
+  layerDragStartScrollTop = layersListRef.value?.scrollTop ?? 0;
+
+  for (const layer of displayedLayers.value) {
+    const bounds = layerRowRefs.get(layer.id)?.getBoundingClientRect();
+    if (!bounds) continue;
+    layerDragBaseBounds.set(layer.id, {
+      height: bounds.height,
+      top: bounds.top,
+    });
+  }
+};
+
+const stableLayerBounds = (id: string) => {
+  const baseBounds = layerDragBaseBounds.get(id);
+  if (!baseBounds) return undefined;
+  const scrollOffset = (layersListRef.value?.scrollTop ?? layerDragStartScrollTop)
+    - layerDragStartScrollTop;
+
+  return {
+    height: baseBounds.height,
+    top: baseBounds.top - scrollOffset,
+  };
+};
+
+const updateLayerDropTarget = (draggedCenterY: number) => {
   const candidates = displayedLayers.value
     .filter((layer) => layer.id !== draggedLayerId.value)
     .map((layer) => {
-      const bounds = layerRowRefs.get(layer.id)?.getBoundingClientRect();
-      const previewOffset = layerDropPreviewOffset(layer.id);
-      return bounds
-        ? {
-            layer,
-            bounds: {
-              bottom: bounds.bottom - previewOffset,
-              height: bounds.height,
-              top: bounds.top - previewOffset,
-            },
-          }
-        : { layer, bounds: undefined };
+      const bounds = stableLayerBounds(layer.id);
+      return bounds ? { layer, bounds } : { layer, bounds: undefined };
     })
     .filter(
       (candidate): candidate is {
         layer: PixelLayer;
-        bounds: { bottom: number; height: number; top: number };
+        bounds: { height: number; top: number };
       } =>
         Boolean(candidate.bounds),
     );
@@ -186,24 +217,49 @@ const updateLayerDropTarget = (clientY: number) => {
     return;
   }
 
-  for (const candidate of candidates) {
-    if (clientY < candidate.bounds.top) {
-      layerDropTarget.value = { id: candidate.layer.id, position: "before" };
-      return;
+  let proposedIndex = candidates.findIndex((candidate) => {
+    const midpoint = candidate.bounds.top + candidate.bounds.height / 2;
+    return draggedCenterY < midpoint
+      || (draggedCenterY === midpoint && layerDragOffsetY.value < 0);
+  });
+  if (proposedIndex < 0) proposedIndex = candidates.length;
+
+  const currentIndex = displayedDropIndex();
+  if (currentIndex >= 0 && proposedIndex !== currentIndex) {
+    const proposedDirection = proposedIndex > currentIndex ? 1 : -1;
+    const isReversing =
+      lastLayerDropDirection !== 0 && proposedDirection !== lastLayerDropDirection;
+
+    if (isReversing) {
+      const boundary =
+        proposedDirection > 0
+          ? candidates[currentIndex]
+          : candidates[currentIndex - 1];
+      if (boundary) {
+        const midpoint = boundary.bounds.top + boundary.bounds.height / 2;
+        if (
+          (proposedDirection > 0 && draggedCenterY <= midpoint + LAYER_DROP_HYSTERESIS)
+          || (proposedDirection < 0
+            && draggedCenterY >= midpoint - LAYER_DROP_HYSTERESIS)
+        ) {
+          return;
+        }
+      }
     }
-    if (clientY <= candidate.bounds.bottom) {
-      layerDropTarget.value = {
-        id: candidate.layer.id,
-        position: clientY < candidate.bounds.top + candidate.bounds.height / 2 ? "before" : "after",
-      };
-      return;
-    }
+
+    lastLayerDropDirection = proposedDirection;
   }
 
-  layerDropTarget.value = {
-    id: candidates[candidates.length - 1]!.layer.id,
-    position: "after",
-  };
+  const nextTarget = proposedIndex < candidates.length
+    ? { id: candidates[proposedIndex]!.layer.id, position: "before" as const }
+    : { id: candidates[candidates.length - 1]!.layer.id, position: "after" as const };
+
+  if (
+    layerDropTarget.value?.id !== nextTarget.id
+    || layerDropTarget.value.position !== nextTarget.position
+  ) {
+    layerDropTarget.value = nextTarget;
+  }
 };
 
 const scrollLayerListNearEdge = (clientY: number) => {
@@ -226,8 +282,11 @@ const resetLayerDrag = () => {
   draggedLayerId.value = null;
   isLayerDragActive.value = false;
   isLayerDragSettling.value = false;
+  isLayerDragCommitting.value = false;
   layerDragOffsetY.value = 0;
   layerDropTarget.value = null;
+  layerDragBaseBounds.clear();
+  lastLayerDropDirection = 0;
   layerDragPointerId = null;
   layerDragCaptureTarget = null;
 };
@@ -251,7 +310,8 @@ const startLayerDrag = (event: PointerEvent, layer: PixelLayer) => {
 };
 
 const continueLayerDrag = (event: PointerEvent) => {
-  if (event.pointerId !== layerDragPointerId || !draggedLayerId.value) return;
+  const draggedId = draggedLayerId.value;
+  if (event.pointerId !== layerDragPointerId || !draggedId) return;
   const offsetY = event.clientY - layerDragStartY;
   if (!isLayerDragActive.value && Math.abs(offsetY) < LAYER_DRAG_ACTIVATION_DISTANCE) {
     return;
@@ -259,12 +319,18 @@ const continueLayerDrag = (event: PointerEvent) => {
 
   event.preventDefault();
   if (!isLayerDragActive.value) {
+    captureLayerDragLayout();
     layerDragCaptureTarget?.setPointerCapture(event.pointerId);
   }
   isLayerDragActive.value = true;
   layerDragOffsetY.value = offsetY;
   scrollLayerListNearEdge(event.clientY);
-  updateLayerDropTarget(event.clientY);
+
+  const draggedBounds = stableLayerBounds(draggedId);
+  const draggedCenterY = draggedBounds
+    ? draggedBounds.top + draggedBounds.height / 2 + offsetY
+    : event.clientY;
+  updateLayerDropTarget(draggedCenterY);
 };
 
 const finishLayerDrag = (event: PointerEvent) => {
@@ -295,15 +361,18 @@ const finishLayerDrag = (event: PointerEvent) => {
     layerDropSettleTimer = setTimeout(() => {
       layerDropSettleTimer = null;
       if (shouldReorder) {
+        isLayerDragCommitting.value = true;
         emit("reorder", {
           id: draggedId,
           targetId: target.id,
           position: target.position,
         });
         layerDragStatus.value = `${draggedLayer?.name || "Layer"} moved ${target.position} ${targetLayer.name}.`;
+        void nextTick(() => resetLayerDrag());
+        return;
       }
       resetLayerDrag();
-    }, 170);
+    }, LAYER_DROP_SETTLE_DURATION);
     return;
   }
 
@@ -430,7 +499,7 @@ onUnmounted(resetLayerDrag);
       v-else
       ref="layersListRef"
       class="image-layers-panel__list"
-      :class="{ 'is-reordering': isLayerDragActive }"
+      :class="{ 'is-committing': isLayerDragCommitting }"
       aria-label="Image layers"
     >
       <li
@@ -445,10 +514,12 @@ onUnmounted(resetLayerDrag);
           'is-drag-settling': isLayerDragSettling && draggedLayerId === layer.id,
           'is-drop-before':
             isLayerDragActive &&
+            !isLayerDragCommitting &&
             layerDropTarget?.id === layer.id &&
             layerDropTarget.position === 'before',
           'is-drop-after':
             isLayerDragActive &&
+            !isLayerDragCommitting &&
             layerDropTarget?.id === layer.id &&
             layerDropTarget.position === 'after',
         }"
@@ -708,11 +779,11 @@ onUnmounted(resetLayerDrag);
     touch-action: none;
     transform-origin: center;
     transition:
-      transform 190ms cubic-bezier(0.2, 0.82, 0.2, 1),
-      background-color 120ms ease,
-      box-shadow 160ms ease,
-      filter 160ms ease,
-      opacity 160ms ease;
+      transform 280ms cubic-bezier(0.2, 0.78, 0.2, 1),
+      background-color 180ms ease,
+      box-shadow 220ms ease,
+      filter 220ms ease,
+      opacity 220ms ease;
   }
 
   .image-layer-row:hover {
@@ -737,13 +808,13 @@ onUnmounted(resetLayerDrag);
 
   .image-layer-row.is-dragging.is-drag-settling {
     transition:
-      transform 170ms cubic-bezier(0.22, 1, 0.36, 1),
-      box-shadow 170ms ease,
-      filter 170ms ease;
+      transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 240ms ease,
+      filter 240ms ease;
   }
 
-  .image-layers-panel__list.is-reordering .image-layer-row:not(.is-dragging) {
-    filter: brightness(0.92);
+  .image-layers-panel__list.is-committing .image-layer-row {
+    transition: none;
   }
 
   .image-layer-row.is-drop-before::before,
@@ -758,7 +829,7 @@ onUnmounted(resetLayerDrag);
     border-radius: 999px;
     box-shadow: 0 0 0 1px #111111, 0 0 14px rgba(255, 255, 255, 0.92);
     content: "";
-    animation: layer-drop-pulse 680ms ease-in-out infinite;
+    animation: layer-drop-pulse 920ms ease-in-out infinite;
   }
 
   .image-layer-row.is-drop-before::before {
