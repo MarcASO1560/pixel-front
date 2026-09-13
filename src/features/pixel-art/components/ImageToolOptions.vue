@@ -116,41 +116,31 @@ const updateBrushSize = (event: Event) => {
 
 <style scoped>
   .image-tool-options {
-    --tool-options-ink: #f4f4f4;
-    --tool-options-muted: #9d9d9d;
-    --tool-options-line: rgba(255, 255, 255, 0.1);
-    --tool-options-surface: rgba(24, 24, 24, 0.92);
+    --tool-options-ink: #eeeeee;
+    --tool-options-muted: #989898;
+    --tool-options-line: #2c2c2c;
     display: flex;
-    gap: 10px;
+    gap: 9px;
     align-items: center;
     width: 100%;
     min-width: 0;
-    min-height: 46px;
-    padding: 5px 8px;
+    min-height: 40px;
+    padding: 0 8px;
     box-sizing: border-box;
     color: var(--tool-options-ink);
     font-size: 11px;
-    background:
-      radial-gradient(circle at 14% -120%, rgba(255, 255, 255, 0.11), transparent 34%),
-      linear-gradient(180deg, #141414 0%, #101010 100%);
+    background: #0c0c0c;
     border: 0;
     border-bottom: 1px solid var(--tool-options-line);
     border-radius: 0;
-    box-shadow:
-      0 3px 12px rgba(0, 0, 0, 0.28),
-      inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    box-shadow: none;
   }
 
   .image-tool-options__history {
     display: inline-flex;
     flex: 0 0 auto;
-    gap: 2px;
+    gap: 1px;
     align-items: center;
-    padding: 2px;
-    background: var(--tool-options-surface);
-    border: 1px solid var(--tool-options-line);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
   }
 
   .image-tool-options__button {
@@ -169,20 +159,12 @@ const updateBrushSize = (event: Event) => {
     outline: none;
     transition:
       color 150ms ease,
-      background-color 150ms ease,
-      border-color 150ms ease,
-      transform 150ms ease;
+      background-color 150ms ease;
   }
 
   .image-tool-options__button:hover:not(:disabled) {
-    color: #111111;
-    background: #f0f0f0;
-    border-color: #ffffff;
-    transform: translateY(-1px);
-  }
-
-  .image-tool-options__button:active:not(:disabled) {
-    transform: translateY(0);
+    color: #ffffff;
+    background: #1c1c1c;
   }
 
   .image-tool-options__button:focus-visible {
@@ -204,63 +186,35 @@ const updateBrushSize = (event: Event) => {
   .image-tool-options__separator {
     flex: 0 0 1px;
     width: 1px;
-    height: 24px;
-    background: linear-gradient(180deg, transparent, #3a3a3a 24%, #3a3a3a 76%, transparent);
+    height: 20px;
+    background: #333333;
   }
 
   .image-tool-options__tool {
-    display: inline-flex;
     flex: 0 0 auto;
-    gap: 8px;
-    align-items: center;
-    min-width: 88px;
-    height: 34px;
-    padding: 0 11px;
-    box-sizing: border-box;
+    min-width: 76px;
     color: var(--tool-options-ink);
     font-size: 12px;
-    font-weight: 700;
-    background: var(--tool-options-surface);
-    border: 1px solid var(--tool-options-line);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
-  }
-
-  .image-tool-options__tool::before {
-    flex: 0 0 auto;
-    width: 6px;
-    height: 6px;
-    background: #f1f1f1;
-    border-radius: 50%;
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
-    content: "";
+    font-weight: 650;
   }
 
   .image-tool-options__size,
   .image-tool-options__filled {
     display: inline-flex;
     flex: 0 0 auto;
-    gap: 9px;
+    gap: 8px;
     align-items: center;
-    height: 34px;
-    padding: 0 5px 0 10px;
-    box-sizing: border-box;
-    background: var(--tool-options-surface);
-    border: 1px solid var(--tool-options-line);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    min-height: 30px;
   }
 
   .image-tool-options__size > span {
     color: var(--tool-options-muted);
-    font-size: 9px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 600;
   }
 
   .image-tool-options__size input[type="range"] {
-    width: 118px;
+    width: 112px;
     height: 28px;
     padding: 0;
     margin: 0;
@@ -276,16 +230,14 @@ const updateBrushSize = (event: Event) => {
   }
 
   .image-tool-options__size input[type="range"]::-webkit-slider-thumb {
-    width: 16px;
-    height: 16px;
-    margin-top: -6px;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
     appearance: none;
     background: #f2f2f2;
     border: 1px solid #ffffff;
     border-radius: 50%;
-    box-shadow:
-      0 2px 5px rgba(0, 0, 0, 0.48),
-      0 0 0 3px rgba(255, 255, 255, 0.075);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   }
 
   .image-tool-options__size input[type="range"]::-moz-range-track {
@@ -296,14 +248,12 @@ const updateBrushSize = (event: Event) => {
   }
 
   .image-tool-options__size input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     background: #f2f2f2;
     border: 1px solid #ffffff;
     border-radius: 50%;
-    box-shadow:
-      0 2px 5px rgba(0, 0, 0, 0.48),
-      0 0 0 3px rgba(255, 255, 255, 0.075);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   }
 
   .image-tool-options__size input[type="range"]:focus-visible {
@@ -318,38 +268,25 @@ const updateBrushSize = (event: Event) => {
   }
 
   .image-tool-options__size output {
-    display: inline-grid;
-    min-width: 42px;
-    height: 24px;
-    padding: 0 6px;
-    place-items: center;
-    box-sizing: border-box;
-    color: #111111;
-    font-size: 10px;
-    font-weight: 750;
+    min-width: 34px;
+    color: var(--tool-options-ink);
+    font-size: 11px;
+    font-weight: 650;
     font-variant-numeric: tabular-nums;
-    line-height: 1;
-    background: linear-gradient(135deg, #ffffff, #d9d9d9);
-    border: 1px solid rgba(255, 255, 255, 0.78);
-    border-radius: 999px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
+    text-align: right;
   }
 
   .image-tool-options__filled {
-    min-width: 76px;
-    padding: 0 9px;
+    min-width: 66px;
+    padding: 0 4px;
     color: #d0d0d0;
     cursor: pointer;
-    transition:
-      color 150ms ease,
-      background-color 150ms ease,
-      border-color 150ms ease;
+    border-radius: 5px;
+    transition: color 150ms ease;
   }
 
   .image-tool-options__filled:hover:not(:has(input:disabled)) {
     color: #ffffff;
-    background: #222222;
-    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .image-tool-options__filled input {
@@ -367,7 +304,7 @@ const updateBrushSize = (event: Event) => {
   @media (max-width: 768px) {
     .image-tool-options {
       gap: 6px;
-      min-height: 48px;
+      min-height: 44px;
       padding-right: 4px;
       padding-left: 4px;
       overflow-x: auto;
@@ -400,7 +337,6 @@ const updateBrushSize = (event: Event) => {
 
     .image-tool-options__size {
       gap: 6px;
-      padding-left: 8px;
     }
 
     .image-tool-options__size input[type="range"] {
@@ -408,8 +344,7 @@ const updateBrushSize = (event: Event) => {
     }
 
     .image-tool-options__size output {
-      min-width: 38px;
-      padding: 0 5px;
+      min-width: 34px;
     }
   }
 
