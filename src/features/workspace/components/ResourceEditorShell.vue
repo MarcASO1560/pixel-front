@@ -77,6 +77,11 @@ import {
 } from "../../pixel-art/lib/hitTesting";
 import { getImagePointerIntent } from "../../pixel-art/lib/pointerIntent";
 import {
+  getAnchoredImagePinchPan,
+  getImagePinchGeometry,
+  getImagePinchZoom,
+} from "../../pixel-art/lib/pinchZoom";
+import {
   getImagePointerColorChannel,
   getImageToolColorIntent,
   type ImageColorChannel,
@@ -189,6 +194,22 @@ type ImageGraffitiPreviewGesture = Readonly<{
   primaryColor: string;
   secondaryColor: string;
 }>;
+type ImageTouchPointer = {
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startsOnArtboard: boolean;
+};
+type ImagePinchGesture = {
+  anchorX: number;
+  anchorY: number;
+  firstPointerId: number;
+  initialDistance: number;
+  initialZoom: number;
+  secondPointerId: number;
+};
 
 const props = defineProps<{
   projectId: string;
@@ -236,6 +257,7 @@ const MAX_IMAGE_DIMENSION = 256;
 const MIN_IMAGE_ZOOM = 0.25;
 const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
+const IMAGE_TOUCH_COMMIT_THRESHOLD = 8;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
@@ -329,6 +351,7 @@ const imageStageHeight = ref(0);
 const areImageDimensionsLinked = ref(true);
 const isPaintingImage = ref(false);
 const isPanningImage = ref(false);
+const isImagePinching = ref(false);
 const isImageSpacePressed = ref(false);
 const imageInteractionKind = ref<"paint" | "shape" | "select" | "move" | null>(null);
 const hoveredImagePixelIndex = ref<number | null>(null);
@@ -379,6 +402,9 @@ let imageInteractionGraffitiInverted = false;
 let isImageViewportPaintAwaitingArtboard = false;
 let imageViewportPaintClientX = 0;
 let imageViewportPaintClientY = 0;
+const imageTouchPointers = new Map<number, ImageTouchPointer>();
+let imagePendingTouchPointerId: number | null = null;
+let imagePinchGesture: ImagePinchGesture | null = null;
 let imagePreferencesController: ReturnType<typeof useImagePreferences> | null = null;
 let isApplyingImagePreferences = false;
 let imageAutosaveSequence = 0;
@@ -896,7 +922,8 @@ const imageArtboardAriaLabel = computed(() => {
   return `${base}${toolDescription}${layerState}`;
 });
 const imageViewportAriaLabel = computed(() => {
-  const navigation = "Hold Space to pan, or use the mouse wheel to zoom.";
+  const navigation =
+    "Hold Space to pan, use the mouse wheel to zoom, or pinch with two fingers to zoom and move.";
   if (isImagePixelMutationBlocked.value) {
     const reason =
       activeImageLayer.value && !activeImageLayer.value.visible
@@ -2117,7 +2144,10 @@ const startPanningImageFromPointer = (event: PointerEvent) => {
   focusAndCaptureImagePointer(event);
 };
 
-const startImageViewportInteractionFromPointer = (event: PointerEvent) => {
+const startImageViewportInteractionFromPointer = (
+  event: PointerEvent,
+  startPoint?: Readonly<{ x: number; y: number }>,
+) => {
   const intent = getImagePointerEventIntent(event);
   if (intent === "pan") {
     startPanningImageFromPointer(event);
@@ -2142,13 +2172,16 @@ const startImageViewportInteractionFromPointer = (event: PointerEvent) => {
   imageViewportPaintPointerId = event.pointerId;
   captureImagePointerInteractionIntent(event);
   isImageViewportPaintAwaitingArtboard = true;
-  imageViewportPaintClientX = event.clientX;
-  imageViewportPaintClientY = event.clientY;
+  imageViewportPaintClientX = startPoint?.x ?? event.clientX;
+  imageViewportPaintClientY = startPoint?.y ?? event.clientY;
   hoveredImagePixelIndex.value = null;
   focusAndCaptureImagePointer(event);
 };
 
-const startImageArtboardInteractionFromPointer = (event: PointerEvent) => {
+const startImageArtboardInteractionFromPointer = (
+  event: PointerEvent,
+  startPoint?: Readonly<{ x: number; y: number }>,
+) => {
   const intent = getImagePointerEventIntent(event);
   if (intent === "pan") {
     startPanningImageFromPointer(event);
@@ -2172,9 +2205,11 @@ const startImageArtboardInteractionFromPointer = (event: PointerEvent) => {
 
   imageViewportPaintPointerId = event.pointerId;
   captureImagePointerInteractionIntent(event);
-  imageViewportPaintClientX = event.clientX;
-  imageViewportPaintClientY = event.clientY;
-  const initialPixelIndex = getImagePixelIndexFromPointer(event);
+  const clientX = startPoint?.x ?? event.clientX;
+  const clientY = startPoint?.y ?? event.clientY;
+  imageViewportPaintClientX = clientX;
+  imageViewportPaintClientY = clientY;
+  const initialPixelIndex = getImagePixelIndexFromClientCoordinates(clientX, clientY);
   isImageViewportPaintAwaitingArtboard = initialPixelIndex === null;
   if (initialPixelIndex === null) {
     hoveredImagePixelIndex.value = null;
@@ -2317,6 +2352,241 @@ const finishImagePointerInteractionFromPointer = (event: PointerEvent) => {
   }
   updateHoveredImagePixelFromPointer(event);
   stopPaintingImage(event);
+};
+
+const resetImageTouchPointers = () => {
+  imageTouchPointers.clear();
+  imagePendingTouchPointerId = null;
+  imagePinchGesture = null;
+  isImagePinching.value = false;
+};
+
+const startImagePinchGesture = () => {
+  if (
+    imageTouchPointers.size < 2 ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null ||
+    imageInteractionKind.value !== null
+  ) {
+    return false;
+  }
+
+  const [first, second] = [...imageTouchPointers.values()].slice(0, 2);
+  const stage = imageStageRef.value;
+  const artboard = imageArtboardRef.value;
+  if (!first || !second || !stage || !artboard) {
+    return false;
+  }
+
+  const artboardRect = artboard.getBoundingClientRect();
+  if (artboardRect.width <= 0 || artboardRect.height <= 0) {
+    return false;
+  }
+
+  const geometry = getImagePinchGeometry(
+    { x: first.clientX, y: first.clientY },
+    { x: second.clientX, y: second.clientY },
+  );
+  imagePinchGesture = {
+    anchorX: (geometry.midpoint.x - artboardRect.left) / artboardRect.width,
+    anchorY: (geometry.midpoint.y - artboardRect.top) / artboardRect.height,
+    firstPointerId: first.pointerId,
+    initialDistance: Math.max(1, geometry.distance),
+    initialZoom: imageZoom.value,
+    secondPointerId: second.pointerId,
+  };
+  imagePendingTouchPointerId = null;
+  isImagePinching.value = true;
+  hoveredImagePixelIndex.value = null;
+  return true;
+};
+
+const updateImagePinchGesture = () => {
+  const pinch = imagePinchGesture;
+  if (!pinch) return;
+
+  const first = imageTouchPointers.get(pinch.firstPointerId);
+  const second = imageTouchPointers.get(pinch.secondPointerId);
+  const stage = imageStageRef.value;
+  if (!first || !second || !stage) return;
+
+  const geometry = getImagePinchGeometry(
+    { x: first.clientX, y: first.clientY },
+    { x: second.clientX, y: second.clientY },
+  );
+  const nextZoom = getImagePinchZoom({
+    currentDistance: geometry.distance,
+    initialDistance: pinch.initialDistance,
+    initialZoom: pinch.initialZoom,
+    maximumZoom: MAX_IMAGE_ZOOM,
+    minimumZoom: MIN_IMAGE_ZOOM,
+  });
+  const nextMetrics = imageArtboardMetricsForZoom(nextZoom);
+  const stageRect = stage.getBoundingClientRect();
+  const pan = getAnchoredImagePinchPan({
+    anchor: { x: pinch.anchorX, y: pinch.anchorY },
+    artboardSize: { height: nextMetrics.height, width: nextMetrics.width },
+    midpoint: geometry.midpoint,
+    stage: {
+      height: stageRect.height,
+      left: stageRect.left,
+      top: stageRect.top,
+      width: stageRect.width,
+    },
+  });
+
+  imageZoomMode.value = "custom";
+  imageZoom.value = nextZoom;
+  imagePanX.value = pan.x;
+  imagePanY.value = pan.y;
+  scheduleImageCanvasRender();
+  scheduleImagePreviewViewportUpdate();
+};
+
+const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) => {
+  if (
+    imagePinchGesture ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null ||
+    imageInteractionKind.value !== null
+  ) {
+    return;
+  }
+
+  focusAndCaptureImagePointer(event);
+  imageTouchPointers.set(event.pointerId, {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startsOnArtboard,
+  });
+
+  if (imageTouchPointers.size === 1) {
+    imagePendingTouchPointerId = event.pointerId;
+    hoveredImagePixelIndex.value = null;
+    return;
+  }
+
+  if (imageTouchPointers.size === 2) {
+    startImagePinchGesture();
+  }
+};
+
+const continueCommittedImageTouch = (event: PointerEvent) => {
+  if (imagePanPointerId === event.pointerId) {
+    continuePanningImageFromPointer(event);
+    return;
+  }
+  if (imageViewportPaintPointerId !== event.pointerId) return;
+
+  for (const point of getImagePointerSamplePoints(event)) {
+    processImagePointerSegment(event, point);
+  }
+  updateHoveredImagePixelFromPointer(event);
+};
+
+const beginPendingImageTouch = (event: PointerEvent, touch: ImageTouchPointer) => {
+  imagePendingTouchPointerId = null;
+  const startPoint = { x: touch.startClientX, y: touch.startClientY };
+  if (touch.startsOnArtboard) {
+    startImageArtboardInteractionFromPointer(event, startPoint);
+  } else {
+    startImageViewportInteractionFromPointer(event, startPoint);
+  }
+  continueCommittedImageTouch(event);
+};
+
+const continueImageTouchPointer = (event: PointerEvent) => {
+  const touch = imageTouchPointers.get(event.pointerId);
+  if (!touch) return;
+
+  touch.clientX = event.clientX;
+  touch.clientY = event.clientY;
+
+  if (imagePinchGesture) {
+    updateImagePinchGesture();
+    return;
+  }
+
+  if (imagePendingTouchPointerId === event.pointerId) {
+    const distanceFromStart = Math.hypot(
+      event.clientX - touch.startClientX,
+      event.clientY - touch.startClientY,
+    );
+    if (distanceFromStart < IMAGE_TOUCH_COMMIT_THRESHOLD) return;
+    beginPendingImageTouch(event, touch);
+    return;
+  }
+
+  continueCommittedImageTouch(event);
+};
+
+const finishImageTouchPointer = (event: PointerEvent) => {
+  const touch = imageTouchPointers.get(event.pointerId);
+  if (!touch) return;
+
+  touch.clientX = event.clientX;
+  touch.clientY = event.clientY;
+
+  const pinch = imagePinchGesture;
+  if (
+    pinch &&
+    (event.pointerId === pinch.firstPointerId || event.pointerId === pinch.secondPointerId)
+  ) {
+    updateImagePinchGesture();
+    imageTouchPointers.delete(event.pointerId);
+    imagePinchGesture = null;
+    imagePendingTouchPointerId = null;
+    isImagePinching.value = false;
+    hoveredImagePixelIndex.value = null;
+    return;
+  }
+
+  if (imagePendingTouchPointerId === event.pointerId) {
+    beginPendingImageTouch(event, touch);
+  }
+  imageTouchPointers.delete(event.pointerId);
+
+  if (
+    imagePanPointerId === event.pointerId ||
+    imageViewportPaintPointerId === event.pointerId
+  ) {
+    finishImagePointerInteractionFromPointer(event);
+  }
+};
+
+const startImageViewportPointerInteraction = (event: PointerEvent) => {
+  if (event.pointerType === "touch") {
+    startImageTouchPointer(event, false);
+    return;
+  }
+  startImageViewportInteractionFromPointer(event);
+};
+
+const startImageArtboardPointerInteraction = (event: PointerEvent) => {
+  if (event.pointerType === "touch") {
+    startImageTouchPointer(event, true);
+    return;
+  }
+  startImageArtboardInteractionFromPointer(event);
+};
+
+const continueImagePointerInteraction = (event: PointerEvent) => {
+  if (event.pointerType === "touch") {
+    continueImageTouchPointer(event);
+    return;
+  }
+  continueImageViewportInteractionFromPointer(event);
+};
+
+const finishImagePointerInteraction = (event: PointerEvent) => {
+  if (event.pointerType === "touch") {
+    finishImageTouchPointer(event);
+    return;
+  }
+  finishImagePointerInteractionFromPointer(event);
 };
 
 let lastPaintedImagePixelIndex: number | null = null;
@@ -2854,6 +3124,23 @@ const cancelImageInteraction = (event?: PointerEvent) => {
   }
 };
 
+const cancelImagePointerInteraction = (event: PointerEvent) => {
+  if (event.pointerType !== "touch") {
+    cancelImageInteraction(event);
+    return;
+  }
+
+  const hadTrackedTouch = imageTouchPointers.has(event.pointerId);
+  const hadActiveInteraction =
+    imagePanPointerId === event.pointerId || imageViewportPaintPointerId === event.pointerId;
+  if (!hadTrackedTouch && !hadActiveInteraction) return;
+
+  resetImageTouchPointers();
+  if (hadActiveInteraction) {
+    cancelImageInteraction(event);
+  }
+};
+
 const imageResizeAnchorOptionByValue = (anchorValue: ImageResizeAnchor) =>
   IMAGE_RESIZE_ANCHORS.find((anchor) => anchor.value === anchorValue) ||
   IMAGE_RESIZE_ANCHORS.find((anchor) => anchor.value === DEFAULT_IMAGE_RESIZE_ANCHOR)!;
@@ -3017,8 +3304,11 @@ const cancelImageInteractionBeforeLayerChange = () => {
   if (
     imageInteractionKind.value !== null ||
     imagePanPointerId !== null ||
-    imageViewportPaintPointerId !== null
+    imageViewportPaintPointerId !== null ||
+    imageTouchPointers.size > 0 ||
+    imagePinchGesture !== null
   ) {
+    resetImageTouchPointers();
     cancelImageInteraction();
   }
 };
@@ -3630,9 +3920,13 @@ const handleResourceEditorKeydown = (event: KeyboardEvent) => {
 
   if (
     event.key === "Escape" &&
-    (imagePanPointerId !== null || imageViewportPaintPointerId !== null)
+    (imagePanPointerId !== null ||
+      imageViewportPaintPointerId !== null ||
+      imageTouchPointers.size > 0 ||
+      imagePinchGesture !== null)
   ) {
     event.preventDefault();
+    resetImageTouchPointers();
     cancelImageInteraction();
     return;
   }
@@ -3683,7 +3977,13 @@ const handleResourceEditorKeyup = (event: KeyboardEvent) => {
 
 const clearImageTemporaryKeys = () => {
   isImageSpacePressed.value = false;
-  if (imagePanPointerId !== null || imageViewportPaintPointerId !== null) {
+  if (
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null ||
+    imageTouchPointers.size > 0 ||
+    imagePinchGesture !== null
+  ) {
+    resetImageTouchPointers();
     cancelImageInteraction();
   }
 };
@@ -3823,7 +4123,8 @@ const loadEditor = async () => {
 };
 
 onMounted(() => {
-  window.addEventListener("pointerup", finishImagePointerInteractionFromPointer);
+  window.addEventListener("pointerup", finishImagePointerInteraction);
+  window.addEventListener("pointercancel", cancelImagePointerInteraction);
   window.addEventListener("keydown", handleResourceEditorKeydown);
   window.addEventListener("keyup", handleResourceEditorKeyup);
   window.addEventListener("blur", clearImageTemporaryKeys);
@@ -3835,7 +4136,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("pointerup", finishImagePointerInteractionFromPointer);
+  window.removeEventListener("pointerup", finishImagePointerInteraction);
+  window.removeEventListener("pointercancel", cancelImagePointerInteraction);
   window.removeEventListener("keydown", handleResourceEditorKeydown);
   window.removeEventListener("keyup", handleResourceEditorKeyup);
   window.removeEventListener("blur", clearImageTemporaryKeys);
@@ -3856,6 +4158,7 @@ onUnmounted(() => {
     window.cancelAnimationFrame(imageCanvasRenderFrame);
     imageCanvasRenderFrame = null;
   }
+  resetImageTouchPointers();
   void imageAutosave.flush().finally(imageAutosave.dispose);
 });
 </script>
@@ -4512,18 +4815,20 @@ onUnmounted(() => {
             'is-pan-ready':
               isImageSpacePressed &&
               !isPaintingImage &&
+              !isImagePinching &&
               imageInteractionKind === null &&
               imageViewportPaintPointerId === null,
             'is-panning': isPanningImage,
+            'is-pinching': isImagePinching,
             'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
           }"
           :aria-label="imageViewportAriaLabel"
           tabindex="-1"
-          @pointerdown.self.prevent="startImageViewportInteractionFromPointer"
-          @pointermove.self.prevent="continueImageViewportInteractionFromPointer"
-          @pointerup.self="finishImagePointerInteractionFromPointer"
-          @pointercancel.self="cancelImageInteraction"
-          @lostpointercapture.self="cancelImageInteraction"
+          @pointerdown.self.prevent="startImageViewportPointerInteraction"
+          @pointermove.self.prevent="continueImagePointerInteraction"
+          @pointerup.self="finishImagePointerInteraction"
+          @pointercancel.self="cancelImagePointerInteraction"
+          @lostpointercapture.self="cancelImagePointerInteraction"
           @wheel.stop.prevent="zoomImageFromWheel"
           @auxclick.self.prevent
           @contextmenu.self.prevent
@@ -4557,16 +4862,17 @@ onUnmounted(() => {
             class="image-editor-artboard"
             :class="{
               'is-panning': isPanningImage,
+              'is-pinching': isImagePinching,
               'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
             }"
             :style="imageCanvasGridStyle"
             :aria-label="imageArtboardAriaLabel"
             tabindex="0"
-            @pointerdown.prevent="startImageArtboardInteractionFromPointer"
-            @pointermove.prevent="continueImageViewportInteractionFromPointer"
-            @pointerup="finishImagePointerInteractionFromPointer"
-            @pointercancel="cancelImageInteraction"
-            @lostpointercapture="cancelImageInteraction"
+            @pointerdown.prevent="startImageArtboardPointerInteraction"
+            @pointermove.prevent="continueImagePointerInteraction"
+            @pointerup="finishImagePointerInteraction"
+            @pointercancel="cancelImagePointerInteraction"
+            @lostpointercapture="cancelImagePointerInteraction"
             @pointerleave="leaveImageCanvas"
             @auxclick.prevent
             @contextmenu.prevent
@@ -4981,7 +5287,8 @@ onUnmounted(() => {
     cursor: grab;
   }
 
-  .image-editor-viewport.is-panning {
+  .image-editor-viewport.is-panning,
+  .image-editor-viewport.is-pinching {
     cursor: grabbing;
   }
 
@@ -4989,7 +5296,8 @@ onUnmounted(() => {
     cursor: grab;
   }
 
-  .image-editor-viewport.is-panning .image-editor-artboard {
+  .image-editor-viewport.is-panning .image-editor-artboard,
+  .image-editor-viewport.is-pinching .image-editor-artboard {
     cursor: grabbing;
   }
 
@@ -5890,7 +6198,8 @@ onUnmounted(() => {
     outline-offset: 1px;
   }
 
-  .image-editor-artboard.is-panning {
+  .image-editor-artboard.is-panning,
+  .image-editor-artboard.is-pinching {
     cursor: grabbing;
   }
 
