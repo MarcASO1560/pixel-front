@@ -47,7 +47,9 @@ diff --git a/node_modules/@use-gesture/core/src/utils/events.ts b/node_modules/@
 index 90ce382..b1e0a74 100644
 --- a/node_modules/@use-gesture/core/src/utils/events.ts
 +++ b/node_modules/@use-gesture/core/src/utils/events.ts
-@@ -96,3 +96,5 @@ export function touchDistanceAngle(event: TouchEvent, ids: number[]) {
+@@ -94,7 +94,9 @@ export function touchIds(event: TouchEvent) {
+ }
+ 
  export function touchDistanceAngle(event: TouchEvent, ids: number[]) {
 -  const [P1, P2] = Array.from(event.touches).filter((touch) => ids.includes(touch.identifier))
 +  const touches = Array.from(event.touches)
@@ -55,3 +57,4 @@ index 90ce382..b1e0a74 100644
 +  if (!P1 || !P2) return null
    return distanceAngle(P1, P2)
  }
+ 
