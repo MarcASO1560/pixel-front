@@ -352,6 +352,7 @@ const imageViewportHeight = ref(0);
 const isImageMobileViewport = computed(
   () => imageViewportWidth.value > 0 && imageViewportWidth.value <= 768,
 );
+const areImageLayersFloating = computed(() => imageViewportWidth.value > 1120);
 const imageStageWidth = ref(0);
 const imageStageHeight = ref(0);
 const areImageDimensionsLinked = ref(true);
@@ -4497,6 +4498,12 @@ onUnmounted(() => {
           />
         </aside>
 
+        <div
+          v-if="isImageEditor"
+          id="image-editor-floating-layers"
+          class="image-editor-floating-layers"
+        ></div>
+
         <aside
           v-if="isImageEditor"
           id="image-editor-properties"
@@ -4521,24 +4528,30 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <div class="image-editor-layers-host">
-            <ImageLayersPanel
-              :layers="imageLayers"
-              :active-layer-id="activeImageLayerId"
-              :can-edit="canEditImage"
-              :max-layers="MAX_IMAGE_LAYERS"
-              @select="selectImageLayer"
-              @add="addImageLayer"
-              @duplicate="duplicateImageLayer"
-              @remove="removeImageLayer"
-              @rename="renameImageLayer"
-              @toggle-visible="toggleImageLayerVisibility"
-              @toggle-lock="toggleImageLayerLock"
-              @preview-opacity="previewImageLayerOpacity"
-              @set-opacity="setImageLayerOpacity"
-              @move="moveImageLayer"
-            />
-          </div>
+          <Teleport
+            to="#image-editor-floating-layers"
+            :disabled="!areImageLayersFloating"
+            defer
+          >
+            <div class="image-editor-layers-host">
+              <ImageLayersPanel
+                :layers="imageLayers"
+                :active-layer-id="activeImageLayerId"
+                :can-edit="canEditImage"
+                :max-layers="MAX_IMAGE_LAYERS"
+                @select="selectImageLayer"
+                @add="addImageLayer"
+                @duplicate="duplicateImageLayer"
+                @remove="removeImageLayer"
+                @rename="renameImageLayer"
+                @toggle-visible="toggleImageLayerVisibility"
+                @toggle-lock="toggleImageLayerLock"
+                @preview-opacity="previewImageLayerOpacity"
+                @set-opacity="setImageLayerOpacity"
+                @move="moveImageLayer"
+              />
+            </div>
+          </Teleport>
 
           <section
             class="image-editor-color-panel"
@@ -5591,6 +5604,16 @@ onUnmounted(() => {
     content: none;
   }
 
+  .image-editor-floating-layers {
+    position: relative;
+    z-index: 6;
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    pointer-events: none;
+  }
+
   .image-editor-toolbar {
     position: static;
     width: 32px;
@@ -5856,6 +5879,37 @@ onUnmounted(() => {
     border-bottom: 1px solid var(--editor-border);
   }
 
+  .image-editor-floating-layers .image-editor-layers-host {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    align-items: flex-end;
+    width: min(420px, calc(100% - 244px));
+    height: min(360px, calc(100% - 220px));
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    pointer-events: none;
+  }
+
+  .image-editor-floating-layers :deep(.image-layers-panel) {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    width: 100%;
+    max-height: 100%;
+    overflow: hidden;
+    background: var(--editor-panel);
+    border: 1px solid var(--editor-border-strong);
+    border-radius: var(--editor-radius-md);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+    pointer-events: auto;
+  }
+
+  .image-editor-floating-layers :deep(.image-layers-panel__list) {
+    min-height: 0;
+    max-height: none;
+  }
+
   .image-editor-color-panel {
     position: static;
     display: grid;
@@ -5905,14 +5959,40 @@ onUnmounted(() => {
   }
 
   .image-editor-floating-palette {
+    --image-palette-safe-bottom: 220px;
+    --image-palette-safe-right: 220px;
     position: absolute;
     top: 12px;
     left: 12px;
     z-index: 6;
-    width: min(365px, calc(100% - 220px));
+    width: calc(100% - var(--image-palette-safe-right));
+    height: calc(100% - var(--image-palette-safe-bottom) - 12px);
     min-width: 0;
-    pointer-events: auto;
-    touch-action: manipulation;
+    overflow-x: auto;
+    overflow-y: hidden;
+    pointer-events: none;
+    scrollbar-color: var(--editor-border-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  @media (min-width: 769px) {
+    .image-editor-floating-palette :deep(.image-palette-panel) {
+      height: 100%;
+    }
+
+    .image-editor-floating-palette :deep(.image-palette-panel__swatches) {
+      grid-auto-flow: column;
+      grid-auto-columns: var(--image-palette-swatch-size, 32px);
+      grid-template-rows: repeat(auto-fit, var(--image-palette-swatch-size, 32px));
+      grid-template-columns: none;
+      width: max-content;
+      max-width: none;
+      height: 100%;
+      max-height: 100%;
+      margin-inline: 0;
+      pointer-events: auto;
+      touch-action: manipulation;
+    }
   }
 
   .image-editor-color-wheel {
@@ -6752,6 +6832,10 @@ onUnmounted(() => {
       --editor-right-dock: 320px;
     }
 
+    .image-editor-floating-layers {
+      display: none;
+    }
+
     .image-editor-color-panel {
       grid-template-areas:
         "value"
@@ -7088,6 +7172,7 @@ onUnmounted(() => {
       grid-area: palette;
       width: 100%;
       max-width: none;
+      height: auto;
       min-width: 0;
       padding-top: 10px;
       overflow: visible;
