@@ -56,7 +56,8 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
         :style="{ '--swatch-color': normalizedSecondaryColor }"
         title="Secondary color"
       >
-        <span aria-hidden="true"></span>
+        <span class="image-color-swatches__fill" aria-hidden="true"></span>
+        <span class="image-color-swatches__badge" aria-hidden="true">S</span>
         <input
           type="color"
           :value="secondaryColorInputValue"
@@ -71,7 +72,8 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
         :style="{ '--swatch-color': normalizedPrimaryColor }"
         title="Primary color"
       >
-        <span aria-hidden="true"></span>
+        <span class="image-color-swatches__fill" aria-hidden="true"></span>
+        <span class="image-color-swatches__badge" aria-hidden="true">P</span>
         <input
           type="color"
           :value="primaryColorInputValue"
@@ -126,11 +128,11 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     --colors-muted: rgba(242, 242, 242, 0.64);
     --colors-line: rgba(242, 242, 242, 0.14);
     display: grid;
-    grid-template-columns: 62px minmax(0, 1fr);
+    grid-template-columns: 56px minmax(0, 1fr);
     grid-template-areas:
       "stack values"
       "actions actions";
-    gap: 7px 9px;
+    gap: 7px 8px;
     width: 100%;
     min-width: 0;
     padding: 8px 0 0;
@@ -144,15 +146,15 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
   .image-color-swatches__stack {
     position: relative;
     grid-area: stack;
-    width: 62px;
+    width: 56px;
     height: 54px;
   }
 
   .image-color-swatches__swatch {
     position: absolute;
     display: block;
-    width: 36px;
-    height: 36px;
+    width: 38px;
+    height: 38px;
     overflow: hidden;
     background-color: #181919;
     background-image:
@@ -163,16 +165,39 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     background-position: 0 0, 0 4px, 4px -4px, -4px 0;
     background-size: 8px 8px;
     border: 1px solid rgba(242, 242, 242, 0.5);
-    border-radius: 5px;
-    box-shadow: none;
+    border-radius: 6px;
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.28);
     cursor: pointer;
+    transition:
+      border-color 140ms ease,
+      transform 140ms ease;
   }
 
-  .image-color-swatches__swatch > span {
+  .image-color-swatches__fill {
     position: absolute;
     inset: 0;
     background: var(--swatch-color);
     forced-color-adjust: none;
+  }
+
+  .image-color-swatches__badge {
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 13px;
+    height: 13px;
+    color: #ffffff;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+    background: rgba(10, 10, 10, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.58);
+    border-radius: 3px;
+    pointer-events: none;
   }
 
   .image-color-swatches__swatch--secondary {
@@ -185,6 +210,12 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     top: 2px;
     left: 2px;
     z-index: 2;
+  }
+
+  .image-color-swatches__swatch:hover:not(:has(input:disabled)) {
+    z-index: 3;
+    border-color: rgba(255, 255, 255, 0.86);
+    transform: translateY(-1px);
   }
 
   .image-color-swatches__swatch input {
@@ -215,7 +246,7 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
   .image-color-swatches__values {
     display: grid;
     grid-area: values;
-    gap: 3px;
+    gap: 6px;
     align-content: center;
     min-width: 0;
     padding: 0;
@@ -223,19 +254,22 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
   }
 
   .image-color-swatches__values div {
-    display: grid;
-    gap: 1px;
-    align-content: center;
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+    justify-content: space-between;
     min-width: 0;
   }
 
   .image-color-swatches__values dt {
     overflow: hidden;
     color: var(--colors-muted);
-    font-size: 12px;
-    font-weight: 620;
+    font-size: 9px;
+    font-weight: 720;
     line-height: 1.15;
+    letter-spacing: 0.055em;
     text-overflow: ellipsis;
+    text-transform: uppercase;
     white-space: nowrap;
   }
 
@@ -243,7 +277,7 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     margin: 0;
     color: rgba(242, 242, 242, 0.88);
     font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-    font-size: 12px;
+    font-size: 10px;
     font-variant-numeric: tabular-nums;
     font-weight: 650;
     line-height: 1.15;
@@ -253,8 +287,9 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     display: grid;
     grid-area: actions;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px;
-    padding-top: 1px;
+    gap: 0;
+    padding-top: 5px;
+    border-top: 1px solid var(--colors-line);
   }
 
   .image-color-swatches__actions button {
@@ -262,22 +297,26 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     gap: 5px;
     align-items: center;
     justify-content: center;
-    height: 32px;
+    height: 28px;
     padding: 0 8px;
     color: rgba(242, 242, 242, 0.78);
     font: inherit;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 650;
     background: transparent;
-    border: 1px solid var(--colors-line);
-    border-radius: 5px;
+    border: 0;
+    border-radius: 4px;
     cursor: pointer;
   }
 
   .image-color-swatches__actions button:hover:not(:disabled) {
     color: #ffffff;
     background: rgba(242, 242, 242, 0.07);
-    border-color: rgba(242, 242, 242, 0.28);
+  }
+
+  .image-color-swatches__actions button + button {
+    border-left: 1px solid var(--colors-line);
+    border-radius: 0 4px 4px 0;
   }
 
   .image-color-swatches__actions button:focus-visible {
@@ -330,6 +369,11 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
       inset: auto;
       width: 34px;
       height: 34px;
+      box-shadow: none;
+    }
+
+    .image-color-swatches__swatch:hover:not(:has(input:disabled)) {
+      transform: none;
     }
 
     .image-color-swatches__swatch--primary {
@@ -349,8 +393,8 @@ const updateColor = (target: "primary" | "secondary", event: Event) => {
     }
 
     .image-color-swatches__actions {
-      gap: 6px;
-      padding-top: 2px;
+      gap: 0;
+      padding-top: 6px;
     }
   }
 

@@ -6434,24 +6434,27 @@ onUnmounted(() => {
     box-sizing: border-box;
     background: var(--selected-image-color, #ffffff);
     border: 1px solid var(--editor-border-strong);
-    border-radius: var(--editor-radius-sm);
-    box-shadow: none;
+    border-radius: 6px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+      0 3px 9px rgba(0, 0, 0, 0.24);
   }
 
   .image-editor-color-value input {
     width: 100%;
     min-width: 0;
     height: 34px;
-    padding: 0 8px;
+    padding: 0 4px;
     box-sizing: border-box;
     color: var(--editor-muted);
     font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
     font-size: 12px;
     font-weight: 550;
     text-transform: uppercase;
-    background: var(--editor-surface);
-    border: 1px solid var(--editor-border);
-    border-radius: var(--editor-radius-sm);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--editor-border);
+    border-radius: 0;
     outline: none;
   }
 
@@ -6461,6 +6464,7 @@ onUnmounted(() => {
 
   .image-editor-color-value input:focus-visible {
     border-color: var(--editor-focus);
+    box-shadow: 0 1px 0 var(--editor-focus);
   }
 
   .image-editor-color-add {
@@ -6473,8 +6477,8 @@ onUnmounted(() => {
     color: var(--editor-muted);
     cursor: pointer;
     background: transparent;
-    border: 1px solid var(--editor-border);
-    border-radius: var(--editor-radius-sm);
+    border: 0;
+    border-radius: 5px;
     box-shadow: none;
     outline: none;
   }
