@@ -468,7 +468,7 @@ onUnmounted(() => {
     justify-content: start;
     width: max-content;
     max-width: 100%;
-    margin-inline: auto;
+    margin-inline: 0;
   }
 
   .image-palette-panel__swatch {
