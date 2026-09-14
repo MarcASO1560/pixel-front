@@ -5,6 +5,7 @@ import {
   canMutateImageLayerPixels,
   isImagePixelMutationTool,
   reorderImageLayersByDisplayDrop,
+  resolveImageActiveLayerAfterHistory,
 } from "./layerEditing";
 
 const PIXEL_PAINTING_TOOLS: ImageTool[] = [
@@ -104,5 +105,28 @@ describe("image layer drag ordering", () => {
     expect(
       reorderImageLayersByDisplayDrop(bottomToTop, "top", "top", "after"),
     ).toBe(bottomToTop);
+  });
+});
+
+describe("image layer selection after history navigation", () => {
+  const layers = [makeLayer("background"), makeLayer("details")];
+
+  it("keeps the layer currently selected when undo restores an older snapshot", () => {
+    expect(
+      resolveImageActiveLayerAfterHistory(layers, "details", "background"),
+    ).toBe("details");
+  });
+
+  it("uses the snapshot layer only when the current layer was removed", () => {
+    expect(
+      resolveImageActiveLayerAfterHistory([makeLayer("background")], "details", "background"),
+    ).toBe("background");
+  });
+
+  it("falls back safely when neither remembered layer exists", () => {
+    expect(resolveImageActiveLayerAfterHistory(layers, "missing", "also-missing")).toBe(
+      "details",
+    );
+    expect(resolveImageActiveLayerAfterHistory([], "missing", "also-missing")).toBe("");
   });
 });

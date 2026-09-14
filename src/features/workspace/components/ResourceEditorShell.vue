@@ -90,6 +90,7 @@ import {
   canMutateImageLayerPixels,
   isImagePixelMutationTool,
   reorderImageLayersByDisplayDrop,
+  resolveImageActiveLayerAfterHistory,
   type ImageLayerDropPosition,
 } from "../../pixel-art/lib/layerEditing";
 import {
@@ -1779,7 +1780,6 @@ const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSna
   const leftDocument = left.document;
   const rightDocument = right.document;
   if (
-    left.activeLayerId !== right.activeLayerId ||
     leftDocument.width !== rightDocument.width ||
     leftDocument.height !== rightDocument.height ||
     leftDocument.palette.length !== rightDocument.palette.length ||
@@ -1819,16 +1819,18 @@ const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSna
 
 const applyImageSnapshot = (snapshot: ImageEditorSnapshot) => {
   const document = snapshot.document;
+  const currentActiveLayerId = activeImageLayerId.value;
   imageGridWidth.value = document.width;
   imageGridHeight.value = document.height;
   imageLayers.value = document.layers.map((layer) => ({
     ...layer,
     pixels: layer.pixels,
   }));
-  activeImageLayerId.value =
-    document.layers.some((layer) => layer.id === snapshot.activeLayerId)
-      ? snapshot.activeLayerId
-      : document.layers[document.layers.length - 1]?.id || "";
+  activeImageLayerId.value = resolveImageActiveLayerAfterHistory(
+    document.layers,
+    currentActiveLayerId,
+    snapshot.activeLayerId,
+  );
   imageSelection.value = snapshot.selection ? { ...snapshot.selection } : null;
   syncImageDimensionDrafts();
   scheduleImageCanvasRender();

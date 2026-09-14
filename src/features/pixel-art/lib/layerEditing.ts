@@ -28,6 +28,25 @@ export const canMutateImageLayerPixels = (
 ): boolean => Boolean(layer?.visible && !layer.locked);
 
 /**
+ * Undo and redo restore document content, but the selected layer is editor UI
+ * state. Keep the layer the user is currently working in whenever it still
+ * exists; only fall back to snapshot context when a history step removes it.
+ */
+export const resolveImageActiveLayerAfterHistory = (
+  layers: ReadonlyArray<Pick<PixelLayer, "id">>,
+  currentActiveLayerId: string,
+  snapshotActiveLayerId: string,
+): string => {
+  if (layers.some((layer) => layer.id === currentActiveLayerId)) {
+    return currentActiveLayerId;
+  }
+  if (layers.some((layer) => layer.id === snapshotActiveLayerId)) {
+    return snapshotActiveLayerId;
+  }
+  return layers[layers.length - 1]?.id || "";
+};
+
+/**
  * Reorders bottom-to-top document layers from a drop described in the
  * top-to-bottom order shown by the layer panel.
  */
