@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-const props = defineProps<{
-  auxiliaryControlsId?: string;
-  dialogId: string;
-  label: string;
-  open: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    auxiliaryControlsId?: string;
+    contentSized?: boolean;
+    dialogId: string;
+    label: string;
+    open: boolean;
+  }>(),
+  {
+    contentSized: false,
+  },
+);
 
 const emit = defineEmits<{
   close: [];
@@ -137,6 +143,7 @@ onBeforeUnmount(() => {
     :id="dialogId"
     ref="dialogRef"
     class="image-options-dialog"
+    :class="{ 'is-content-sized': contentSized }"
     :aria-label="label"
     data-image-shortcuts="off"
     @cancel="handleCancel"
@@ -188,6 +195,15 @@ onBeforeUnmount(() => {
       position: fixed;
       inset: 0 70px 0 auto;
       margin: auto 0;
+    }
+
+    .image-options-dialog.is-content-sized {
+      height: fit-content;
+      max-height: min(680px, calc(100dvh - 48px));
+    }
+
+    .image-options-dialog.is-content-sized[open] {
+      grid-template-rows: auto;
     }
   }
 

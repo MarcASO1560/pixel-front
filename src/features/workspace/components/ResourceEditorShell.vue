@@ -5474,6 +5474,7 @@ onUnmounted(() => {
         <ImageOptionsDialog
           v-if="isImageEditor"
           auxiliary-controls-id="image-editor-options-rail"
+          :content-sized="activeImageInspectorPanel === 'resize'"
           dialog-id="image-editor-options-dialog"
           :label="`${activeImageInspectorLabel} options`"
           :open="activeImageInspectorPanel !== null"
@@ -5482,6 +5483,7 @@ onUnmounted(() => {
           <section
             v-if="activeImageInspectorPanel"
             class="image-editor-inspector-panel"
+            :class="{ 'is-content-sized': activeImageInspectorPanel === 'resize' }"
             :aria-label="`${activeImageInspectorLabel} options`"
           >
             <div class="image-editor-inspector-header">
@@ -7326,6 +7328,17 @@ onUnmounted(() => {
     transform: none;
     scrollbar-color: var(--editor-border-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  @media (min-width: 1121px) {
+    .image-editor-inspector-panel.is-content-sized {
+      grid-template-rows: auto auto auto;
+      height: auto;
+    }
+
+    .image-editor-inspector-panel.is-content-sized .image-editor-settings-page {
+      overflow-y: visible;
+    }
   }
 
   .image-editor-dialog-notice-host {
