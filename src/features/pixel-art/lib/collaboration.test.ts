@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ProjectEditorActivity } from "../../../lib/realtime";
 import { createPixelLayer } from "./document";
+import { PIXEL_ART_PASTEL_PALETTE } from "./palette";
 import {
   applyCollaborativePixelPatch,
   collaboratorColor,
@@ -103,5 +104,7 @@ describe("pixel-art collaboration", () => {
       ),
     ).toEqual({ height: 2, width: 3, x: 1, y: 4 });
     expect(collaboratorColor("user-2")).toBe(collaboratorColor("user-2"));
+    expect(PIXEL_ART_PASTEL_PALETTE).toHaveLength(16);
+    expect(PIXEL_ART_PASTEL_PALETTE).toContain(collaboratorColor("user-2"));
   });
 });

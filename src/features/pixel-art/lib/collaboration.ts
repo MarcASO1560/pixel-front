@@ -1,6 +1,7 @@
 import type { ProjectEditorActivity } from "../../../lib/realtime";
 import type { ImageSelection, PixelArtDocumentV2, PixelColor, PixelLayer } from "../types";
 import { parsePixelArtResourceData, PixelArtMigrationError } from "./migrations";
+import { PIXEL_ART_PASTEL_PALETTE } from "./palette";
 
 export type CollaborativeCursor = Readonly<{
   height: number;
@@ -183,10 +184,12 @@ export const readCollaborativeSelection = (
 };
 
 export const collaboratorColor = (identity: string) => {
-  const colors = ["#29e58c", "#58a6ff", "#ff6fae", "#ffd166", "#b794f4", "#33d6ff"];
   let hash = 0;
   for (const character of identity) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   }
-  return colors[hash % colors.length] || colors[0]!;
+  return (
+    PIXEL_ART_PASTEL_PALETTE[hash % PIXEL_ART_PASTEL_PALETTE.length] ||
+    PIXEL_ART_PASTEL_PALETTE[0]
+  );
 };

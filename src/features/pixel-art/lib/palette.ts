@@ -5,7 +5,7 @@ export const PIXEL_ART_WHITE = "#ffffff";
 export const PIXEL_ART_GOLD = "#e8ca7a";
 export const PIXEL_ART_CORAL = "#e18464";
 
-export const PIXEL_ART_PALETTE = [
+export const PIXEL_ART_PASTEL_PALETTE = [
   PIXEL_ART_WHITE,
   "#f7f1e7",
   "#e8dcc3",
@@ -22,6 +22,10 @@ export const PIXEL_ART_PALETTE = [
   "#afe7ef",
   "#bdebd7",
   "#c9e7b8",
+] as const;
+
+export const PIXEL_ART_PALETTE = [
+  ...PIXEL_ART_PASTEL_PALETTE,
   "#5c6461",
   "#1b1d1c",
 ];
