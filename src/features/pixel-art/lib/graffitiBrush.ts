@@ -42,7 +42,7 @@ const normalizePoint = (point: Point): Point => ({
 
 const pointKey = (point: Point) => `${point.x},${point.y}`;
 
-const checkerColor = (point: Point, options: GraffitiBrushOptions) => {
+export const graffitiCheckerColorAt = (point: Point, options: GraffitiBrushOptions) => {
   const phase = options.inverted ? 1 : 0;
   return (point.x + point.y + phase) % 2 === 0
     ? options.primaryColor
@@ -65,7 +65,7 @@ export const graffitiBrushStamp = (
 ): GraffitiPixel[] =>
   brushPoints(center, options.brushSize, options.brushShape, options.bounds).map((point) => ({
     ...point,
-    color: checkerColor(point, options),
+    color: graffitiCheckerColorAt(point, options),
   }));
 
 const strokeCenters = (

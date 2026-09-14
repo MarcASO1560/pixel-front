@@ -4,6 +4,7 @@ import {
   createGraffitiGestureState,
   graffitiBrushStamp,
   graffitiBrushStroke,
+  graffitiCheckerColorAt,
   type GraffitiBrushOptions,
   type GraffitiPixel,
 } from "./graffitiBrush";
@@ -20,6 +21,14 @@ const pixelMap = (pixels: ReadonlyArray<GraffitiPixel>) =>
   new Map(pixels.map((pixel) => [`${pixel.x},${pixel.y}`, pixel.color]));
 
 describe("graffiti checkerboard stamps", () => {
+  it("derives its color from the destination canvas coordinate", () => {
+    expect(graffitiCheckerColorAt({ x: 0, y: 0 }, options())).toBe("#112233");
+    expect(graffitiCheckerColorAt({ x: 1, y: 0 }, options())).toBe("#AABBCC");
+    expect(
+      graffitiCheckerColorAt({ x: 1, y: 0 }, options({ inverted: true })),
+    ).toBe("#112233");
+  });
+
   it("anchors the normal phase to absolute 1x1 canvas coordinates", () => {
     const pixels = graffitiBrushStamp({ x: 2, y: 2 }, options());
 

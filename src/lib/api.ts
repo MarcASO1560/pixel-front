@@ -104,6 +104,18 @@ export type ProjectResourceUpdate = {
   position?: number;
 };
 
+export type ResourceEditorStatePayload = {
+  version: number;
+  state: Record<string, unknown>;
+};
+
+export type ResourceEditorStatePublic = ResourceEditorStatePayload & {
+  user_id: string;
+  resource_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectResourceRevisionConflict = {
   code: "resource_revision_conflict";
   current_revision: number | null;
@@ -201,6 +213,27 @@ export const fetchApi = async <ResponseBody>(
 
   return (await response.json()) as ResponseBody;
 };
+
+const resourceEditorStatePath = (projectId: string, resourceId: string) =>
+  `/projects/${encodeURIComponent(projectId)}/resources/${encodeURIComponent(
+    resourceId,
+  )}/editor-state`;
+
+export const getResourceEditorState = (projectId: string, resourceId: string) =>
+  fetchApi<ResourceEditorStatePublic>(resourceEditorStatePath(projectId, resourceId));
+
+export const putResourceEditorState = (
+  projectId: string,
+  resourceId: string,
+  payload: ResourceEditorStatePayload,
+  options: { keepalive?: boolean } = {},
+) =>
+  fetchApi<ResourceEditorStatePublic>(resourceEditorStatePath(projectId, resourceId), {
+    method: "PUT",
+    keepalive: options.keepalive,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);

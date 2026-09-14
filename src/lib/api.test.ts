@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getResourceEditorState,
   patchCurrentUser,
   patchProjectResource,
+  putResourceEditorState,
   type ProjectResourcePublic,
 } from "./api";
 
@@ -23,6 +25,57 @@ const resource: ProjectResourcePublic = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("resource editor state", () => {
+  it("loads and saves the private state endpoint with encoded identifiers", async () => {
+    const persisted = {
+      version: 1,
+      state: { activeLayerId: "layer-2", primaryColor: "#FF00FF" },
+      user_id: "user-1",
+      resource_id: "resource/1",
+      created_at: "2026-09-14T10:00:00Z",
+      updated_at: "2026-09-14T10:01:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(persisted), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(persisted), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceEditorState("project 1", "resource/1");
+    const saved = await putResourceEditorState("project 1", "resource/1", {
+      version: 1,
+      state: persisted.state,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/v1/projects/project%201/resources/resource%2F1/editor-state",
+    );
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      version: 1,
+      state: persisted.state,
+    });
+    expect(saved).toEqual(persisted);
+  });
 });
 
 describe("patchProjectResource", () => {

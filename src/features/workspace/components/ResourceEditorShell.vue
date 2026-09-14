@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef, watch } from "vue";
 import {
+  ChevronsLeftRight,
+  ChevronsUpDown,
   Download,
   Layers3,
   Link2,
   Link2Off,
+  LockKeyhole,
   MousePointer2,
-  PanelRightOpen,
   Plus,
-  Scaling,
+  Ruler,
   SlidersHorizontal,
   X,
 } from "@lucide/vue";
@@ -19,11 +21,14 @@ import musicNoteIcon from "@iconify-icons/mdi/music-note";
 
 import {
   fetchApi,
+  getResourceEditorState,
   patchCurrentUser,
   patchProjectResource,
+  putResourceEditorState,
   type PixelAvatarData,
   type ProjectPublic,
   type ProjectResourceDetail,
+  type ResourceEditorStatePublic,
   type UserPublic,
   type WorkspaceBootstrap,
 } from "../../../lib/api";
@@ -40,6 +45,12 @@ import {
   normalizeImageColorDraft,
 } from "../../pixel-art/lib/color";
 import { createImageCanvasRenderPlan } from "../../pixel-art/lib/canvasRendering";
+import {
+  clampCanvasMirrorAxis,
+  expandCanvasMirrorPoints,
+  wrapCanvasPoint,
+  wrapCanvasPoints,
+} from "../../pixel-art/lib/canvasModes";
 import {
   brushPoints,
   clearRect,
@@ -67,7 +78,10 @@ import {
   getImageGridKeylineColor,
   type ImageGridLineStyle,
 } from "../../pixel-art/lib/gridOverlay";
-import { graffitiBrushStamp } from "../../pixel-art/lib/graffitiBrush";
+import {
+  graffitiBrushStamp,
+  graffitiCheckerColorAt,
+} from "../../pixel-art/lib/graffitiBrush";
 import {
   canMutateImageLayerPixels,
   isImagePixelMutationTool,
@@ -126,7 +140,11 @@ import {
   type PngExportScale,
 } from "../../pixel-art/lib/importExport";
 import { useImageAutosave } from "../../pixel-art/composables/useImageAutosave";
-import { useImagePreferences } from "../../pixel-art/composables/useImagePreferences";
+import {
+  normalizeImagePreferences,
+  useImagePreferences,
+  type ImagePreferences,
+} from "../../pixel-art/composables/useImagePreferences";
 import {
   getImageKeyboardAction,
   isEditableKeyboardTarget,
@@ -141,8 +159,18 @@ import type {
   PixelColor,
   PixelLayer,
 } from "../../pixel-art/types";
+import {
+  IMAGE_EDITOR_SESSION_VERSION,
+  normalizeImageEditorSession,
+  type ImageEditorSession,
+  type ImageInspectorPanel,
+  type ImageZoomMode,
+} from "../../pixel-art/lib/editorSession";
 import ImageImportExportPanel from "../../pixel-art/components/ImageImportExportPanel.vue";
+import ImageCanvasModesMenu from "../../pixel-art/components/ImageCanvasModesMenu.vue";
 import ImageLayersPanel from "../../pixel-art/components/ImageLayersPanel.vue";
+import ImageOptionsDialog from "../../pixel-art/components/ImageOptionsDialog.vue";
+import ImageOptionsToolbar from "../../pixel-art/components/ImageOptionsToolbar.vue";
 import ImageSaveStatus from "../../pixel-art/components/ImageSaveStatus.vue";
 import ImageToolbar from "../../pixel-art/components/ImageToolbar.vue";
 import ImageToolOptions from "../../pixel-art/components/ImageToolOptions.vue";
@@ -170,8 +198,7 @@ type EditorMeta = {
 
 type ImagePixelSnapshot = PixelColor[];
 type ImageAnchorArrowDirection = "down" | "left" | "right" | "up";
-type ImageInspectorPanel = "preferences" | "resize" | "transfer" | "transform";
-type ImageZoomMode = "actual" | "custom" | "fit";
+type ImageMirrorAxis = "horizontal" | "vertical";
 type ImageGridGap = 1 | 2 | 3;
 type ImageGridSubdivisionThickness = 1 | 2 | 3;
 type ImageSubdivisionLine = {
@@ -304,6 +331,8 @@ const project = ref<ProjectPublic | null>(null);
 const resource = ref<ProjectResourceDetail | null>(null);
 const imageGridWidth = ref(DEFAULT_IMAGE_WIDTH);
 const imageGridHeight = ref(DEFAULT_IMAGE_HEIGHT);
+const imageHorizontalMirrorAxisY = ref(DEFAULT_IMAGE_HEIGHT / 2);
+const imageVerticalMirrorAxisX = ref(DEFAULT_IMAGE_WIDTH / 2);
 const imageGridWidthDraft = ref(String(DEFAULT_IMAGE_WIDTH));
 const imageGridHeightDraft = ref(String(DEFAULT_IMAGE_HEIGHT));
 const initialImageDocument = createPixelArtDocument(DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT);
@@ -326,17 +355,23 @@ const imagePointerEnd = ref<Point | null>(null);
 const imageClipboard = ref<PixelBlock | null>(null);
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
-const isImageMobileDockOpen = ref(false);
+const lastImageInspectorPanel = ref<ImageInspectorPanel>("resize");
 const isImageMobileColorControlsOpen = ref(false);
 const isImageLayersDialogOpen = ref(false);
-const imageMobileDockCloseRef = ref<HTMLButtonElement | null>(null);
-const imageMobileDockTriggerRef = ref<HTMLButtonElement | null>(null);
 const imageMobileColorCloseRef = ref<HTMLButtonElement | null>(null);
 const imageMobileColorTriggerRef = ref<HTMLButtonElement | null>(null);
 const imageLayersCloseRef = ref<HTMLButtonElement | null>(null);
 const imageLayersTriggerRef = ref<HTMLButtonElement | null>(null);
 const customImageBackground = ref(DEFAULT_CUSTOM_IMAGE_BACKGROUND);
 const isImageGridVisible = ref(true);
+const isImageHorizontalMirrorEnabled = ref(false);
+const isImageVerticalMirrorEnabled = ref(false);
+const isImageHorizontalMirrorLineVisible = ref(true);
+const isImageVerticalMirrorLineVisible = ref(true);
+const isImageHorizontalMirrorLineLocked = ref(false);
+const isImageVerticalMirrorLineLocked = ref(false);
+const isImageWrapAroundEnabled = ref(false);
+const imageWrapTileDataUrl = ref("");
 const customImageGridColor = ref(DEFAULT_CUSTOM_IMAGE_GRID_COLOR);
 const customImageSubdivisionColor = ref(DEFAULT_CUSTOM_IMAGE_SUBDIVISION_COLOR);
 const imageGridLineStyle = ref<ImageGridLineStyle>("solid");
@@ -356,14 +391,8 @@ const imagePanX = ref(0);
 const imagePanY = ref(0);
 const imageViewportWidth = ref(0);
 const imageViewportHeight = ref(0);
-const isImageCoarsePointer = ref(false);
 const isImageMobileViewport = computed(
   () => imageViewportWidth.value > 0 && imageViewportWidth.value <= 768,
-);
-const isImageDockOverlayViewport = computed(
-  () =>
-    imageViewportWidth.value > 0 &&
-    (imageViewportWidth.value <= 1120 || isImageCoarsePointer.value),
 );
 const imageStageWidth = ref(0);
 const imageStageHeight = ref(0);
@@ -371,9 +400,11 @@ const areImageDimensionsLinked = ref(true);
 const isPaintingImage = ref(false);
 const isPanningImage = ref(false);
 const isImagePinching = ref(false);
+const draggingImageMirrorAxis = ref<ImageMirrorAxis | null>(null);
 const isImageSpacePressed = ref(false);
 const imageInteractionKind = ref<"paint" | "shape" | "select" | "move" | null>(null);
 const hoveredImagePixelIndex = ref<number | null>(null);
+const hoveredImageVirtualPoint = ref<Point | null>(null);
 const imageGraffitiPreviewGesture = ref<ImageGraffitiPreviewGesture | null>(null);
 const imageStageRef = ref<HTMLElement | null>(null);
 const imageArtboardRef = ref<HTMLElement | null>(null);
@@ -411,6 +442,9 @@ let imagePanPointerId: number | null = null;
 let imagePanPointerClientX = 0;
 let imagePanPointerClientY = 0;
 let imageViewportPaintPointerId: number | null = null;
+let imageMirrorAxisPointerId: number | null = null;
+let imageMirrorAxisCaptureTarget: HTMLElement | null = null;
+let imageMirrorAxisDragStartValue: number | null = null;
 let imageViewportPaintButtonMask = 0;
 let imagePointerColorChannel: ImageColorChannel = "primary";
 let imageInteractionColor: PixelColor = DEFAULT_PENCIL_COLOR;
@@ -434,6 +468,11 @@ let imageSingleTouchStartPrimaryColor: string | null = null;
 let imageSingleTouchStartSecondaryColor: string | null = null;
 let imagePreferencesController: ReturnType<typeof useImagePreferences> | null = null;
 let isApplyingImagePreferences = false;
+let isImageEditorSessionReady = false;
+let imageEditorSessionSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+let imageEditorSessionSaveInFlight: Promise<void> | null = null;
+let imageEditorSessionSaveQueued = false;
+let lastSavedImageEditorSession = "";
 let imageAutosaveSequence = 0;
 let resourceMutationQueue: Promise<void> = Promise.resolve();
 let personalImagePaletteMutationQueue: Promise<void> = Promise.resolve();
@@ -757,7 +796,7 @@ const activeImageInspectorLabel = computed(() => {
   }
 
   if (activeImageInspectorPanel.value === "preferences") {
-    return "Preferences";
+    return "View";
   }
 
   if (activeImageInspectorPanel.value === "transform") {
@@ -765,7 +804,7 @@ const activeImageInspectorLabel = computed(() => {
   }
 
   if (activeImageInspectorPanel.value === "transfer") {
-    return "Import & export";
+    return "Files";
   }
 
   return "Options";
@@ -892,6 +931,61 @@ const imageBrushPreviewTools: ReadonlySet<ImageTool> = new Set([
   "rectangle",
   "ellipse",
 ]);
+const imageCanvasBounds = computed(() => ({
+  height: imageGridHeight.value,
+  width: imageGridWidth.value,
+}));
+const imageMirrorModes = computed(() => ({
+  horizontal: isImageHorizontalMirrorEnabled.value,
+  horizontalAxisY: imageHorizontalMirrorAxisY.value,
+  vertical: isImageVerticalMirrorEnabled.value,
+  verticalAxisX: imageVerticalMirrorAxisX.value,
+}));
+const prepareImageCanvasStrokePoints = (points: ReadonlyArray<Point>) =>
+  expandCanvasMirrorPoints(
+    isImageWrapAroundEnabled.value
+      ? wrapCanvasPoints(points, imageCanvasBounds.value)
+      : points,
+    imageCanvasBounds.value,
+    imageMirrorModes.value,
+    { wrapAround: isImageWrapAroundEnabled.value },
+  );
+const expandImageCanvasPreviewPoints = (points: ReadonlyArray<Point>) => {
+  if (!isImageWrapAroundEnabled.value) {
+    return expandCanvasMirrorPoints(
+      points,
+      imageCanvasBounds.value,
+      imageMirrorModes.value,
+    );
+  }
+
+  const width = imageGridWidth.value;
+  const height = imageGridHeight.value;
+  const seen = new Set<string>();
+  const result: Point[] = [];
+  for (const point of points) {
+    const tileX = Math.floor(point.x / width);
+    const tileY = Math.floor(point.y / height);
+    const wrapped = wrapCanvasPoint(point, imageCanvasBounds.value);
+    const mirrored = expandCanvasMirrorPoints(
+      [wrapped],
+      imageCanvasBounds.value,
+      imageMirrorModes.value,
+      { wrapAround: true },
+    );
+    for (const copy of mirrored) {
+      const virtualCopy = {
+        x: copy.x + tileX * width,
+        y: copy.y + tileY * height,
+      };
+      const key = `${virtualCopy.x},${virtualCopy.y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(virtualCopy);
+    }
+  }
+  return result;
+};
 const isImageBrushHoverPreview = computed(
   () =>
     hoveredImagePixelIndex.value !== null &&
@@ -908,15 +1002,20 @@ const imageBrushHoverCells = computed(() => {
   }
 
   const cellSize = imageArtboardMetrics.value.cellSize;
-  return brushPoints(
-    {
-      x: hoveredIndex % imageGridWidth.value,
-      y: Math.floor(hoveredIndex / imageGridWidth.value),
-    },
+  const center =
+    isImageWrapAroundEnabled.value && hoveredImageVirtualPoint.value
+      ? hoveredImageVirtualPoint.value
+      : {
+          x: hoveredIndex % imageGridWidth.value,
+          y: Math.floor(hoveredIndex / imageGridWidth.value),
+        };
+  const points = brushPoints(
+    center,
     imageBrushSize.value,
     imageBrushShape.value,
-    { width: imageGridWidth.value, height: imageGridHeight.value },
-  ).map((point) => ({
+    isImageWrapAroundEnabled.value ? undefined : imageCanvasBounds.value,
+  );
+  return expandImageCanvasPreviewPoints(points).map((point) => ({
     key: `${point.x}-${point.y}`,
     style: {
       height: `${cellSize}px`,
@@ -926,17 +1025,27 @@ const imageBrushHoverCells = computed(() => {
     },
   }));
 });
-const imageSingleHoverCellStyle = computed(() => {
+const imageSingleHoverCells = computed(() => {
   const hoveredIndex = hoveredImagePixelIndex.value;
-  if (hoveredIndex === null) return {};
+  if (hoveredIndex === null) return [];
 
   const cellSize = imageArtboardMetrics.value.cellSize;
-  return {
-    height: `${cellSize}px`,
-    left: `${(hoveredIndex % imageGridWidth.value) * cellSize}px`,
-    top: `${Math.floor(hoveredIndex / imageGridWidth.value) * cellSize}px`,
-    width: `${cellSize}px`,
-  };
+  const point =
+    isImageWrapAroundEnabled.value && hoveredImageVirtualPoint.value
+      ? hoveredImageVirtualPoint.value
+      : {
+          x: hoveredIndex % imageGridWidth.value,
+          y: Math.floor(hoveredIndex / imageGridWidth.value),
+        };
+  return [point].map((copy) => ({
+    key: `${copy.x}-${copy.y}`,
+    style: {
+      height: `${cellSize}px`,
+      left: `${copy.x * cellSize}px`,
+      top: `${copy.y * cellSize}px`,
+      width: `${cellSize}px`,
+    },
+  }));
 });
 const isImageGraffitiHoverPreview = computed(
   () =>
@@ -955,33 +1064,43 @@ const imageGraffitiHoverCells = computed(() => {
 
   const cellSize = imageArtboardMetrics.value.cellSize;
   const gesture = imageGraffitiPreviewGesture.value;
-  const pixels = graffitiBrushStamp(
-    {
-      x: hoveredIndex % imageGridWidth.value,
-      y: Math.floor(hoveredIndex / imageGridWidth.value),
-    },
-    {
-      bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
-      brushSize: imageBrushSize.value,
-      brushShape: imageBrushShape.value,
-      inverted: gesture?.inverted ?? false,
-      primaryColor: gesture?.primaryColor ?? selectedImageColor.value,
-      secondaryColor: gesture?.secondaryColor ?? secondaryImageColor.value,
-    },
-  );
+  const center =
+    isImageWrapAroundEnabled.value && hoveredImageVirtualPoint.value
+      ? hoveredImageVirtualPoint.value
+      : {
+          x: hoveredIndex % imageGridWidth.value,
+          y: Math.floor(hoveredIndex / imageGridWidth.value),
+        };
+  const options = {
+    bounds: isImageWrapAroundEnabled.value ? undefined : imageCanvasBounds.value,
+    brushSize: imageBrushSize.value,
+    brushShape: imageBrushShape.value,
+    inverted: gesture?.inverted ?? false,
+    primaryColor: gesture?.primaryColor ?? selectedImageColor.value,
+    secondaryColor: gesture?.secondaryColor ?? secondaryImageColor.value,
+  };
+  const pixels = graffitiBrushStamp(center, options);
 
-  return pixels.map((pixel) => ({
-    key: `${pixel.x}-${pixel.y}`,
-    style: {
-      backgroundColor: pixel.color,
-      borderColor: getImageGridKeylineColor(pixel.color),
-      borderWidth: cellSize >= 4 ? "1px" : "0",
-      height: `${cellSize}px`,
-      left: `${pixel.x * cellSize}px`,
-      top: `${pixel.y * cellSize}px`,
-      width: `${cellSize}px`,
-    },
-  }));
+  return pixels.flatMap((pixel) => {
+    const basePoint = isImageWrapAroundEnabled.value
+      ? wrapCanvasPoint(pixel, imageCanvasBounds.value)
+      : pixel;
+    const color = isImageWrapAroundEnabled.value
+      ? graffitiCheckerColorAt(basePoint, options)
+      : pixel.color;
+    return expandImageCanvasPreviewPoints([pixel]).map((copy) => ({
+      key: `${copy.x}-${copy.y}`,
+      style: {
+        backgroundColor: color,
+        borderColor: getImageGridKeylineColor(color),
+        borderWidth: cellSize >= 4 ? "1px" : "0",
+        height: `${cellSize}px`,
+        left: `${copy.x * cellSize}px`,
+        top: `${copy.y * cellSize}px`,
+        width: `${cellSize}px`,
+      },
+    }));
+  });
 });
 const imageArtboardAriaLabel = computed(() => {
   const base = `Pixel art drawing grid, ${imageGridWidth.value} by ${imageGridHeight.value} pixels. ${activeImageTool.value} tool on ${activeImageLayer.value?.name || "active layer"}, primary color ${selectedImageColor.value}, secondary color ${secondaryImageColor.value}.`;
@@ -996,7 +1115,14 @@ const imageArtboardAriaLabel = computed(() => {
         ? " The active layer is locked; unlock it to edit pixels."
         : "";
 
-  return `${base}${toolDescription}${layerState}`;
+  const canvasModes = [
+    isImageHorizontalMirrorEnabled.value ? "horizontal mirror enabled" : "",
+    isImageVerticalMirrorEnabled.value ? "vertical mirror enabled" : "",
+    isImageWrapAroundEnabled.value ? "wrap-around enabled" : "",
+  ].filter(Boolean);
+  const modeDescription = canvasModes.length > 0 ? ` Canvas modes: ${canvasModes.join(", ")}.` : "";
+
+  return `${base}${toolDescription}${layerState}${modeDescription}`;
 });
 const imageViewportAriaLabel = computed(() => {
   const navigation =
@@ -1025,6 +1151,42 @@ const imageSelectionStyle = computed(() => {
     width: `${selection.width * cellSize}px`,
   };
 });
+const imageHorizontalMirrorAxisStyle = computed(() => ({
+  top: `${imageHorizontalMirrorAxisY.value * imageArtboardMetrics.value.cellSize}px`,
+}));
+const imageVerticalMirrorAxisStyle = computed(() => ({
+  left: `${imageVerticalMirrorAxisX.value * imageArtboardMetrics.value.cellSize}px`,
+}));
+const describeImageMirrorAxisPosition = (
+  axis: ImageMirrorAxis,
+  position: number,
+  dimension: number,
+) => {
+  const unit = axis === "horizontal" ? "row" : "column";
+  if (position <= 0) return `Before the first ${unit}`;
+  if (position >= dimension) return `After the last ${unit}`;
+  if (Number.isInteger(position)) {
+    return `Between ${unit}s ${position} and ${position + 1}`;
+  }
+
+  return `Through ${unit} ${Math.floor(position) + 1}`;
+};
+const imageHorizontalMirrorAxisValueText = computed(
+  () =>
+    describeImageMirrorAxisPosition(
+      "horizontal",
+      imageHorizontalMirrorAxisY.value,
+      imageGridHeight.value,
+    ),
+);
+const imageVerticalMirrorAxisValueText = computed(
+  () =>
+    describeImageMirrorAxisPosition(
+      "vertical",
+      imageVerticalMirrorAxisX.value,
+      imageGridWidth.value,
+    ),
+);
 const imageCanvasGridStyle = computed(() => {
   return {
     gap: "0px",
@@ -1049,6 +1211,12 @@ const imageCanvasGridStyle = computed(() => {
 const imageCanvasBitmapStyle = computed(() => ({
   height: `${imageGridOverlayPlan.value.cssHeight}px`,
   width: `${imageGridOverlayPlan.value.cssWidth}px`,
+}));
+const imageWrapSurfaceStyle = computed(() => ({
+  backgroundImage: imageWrapTileDataUrl.value
+    ? `url(${JSON.stringify(imageWrapTileDataUrl.value)})`
+    : "none",
+  backgroundSize: `${imageArtboardWidth.value}px ${imageArtboardHeight.value}px`,
 }));
 const imagePreviewGridStyle = computed(() => ({
   aspectRatio: `${imageGridWidth.value} / ${imageGridHeight.value}`,
@@ -1174,6 +1342,16 @@ const renderImageCanvas = () => {
       );
     }
     context.restore();
+  }
+
+  if (isImageWrapAroundEnabled.value) {
+    try {
+      imageWrapTileDataUrl.value = canvas.toDataURL("image/png");
+    } catch {
+      imageWrapTileDataUrl.value = "";
+    }
+  } else if (imageWrapTileDataUrl.value) {
+    imageWrapTileDataUrl.value = "";
   }
 };
 
@@ -1461,7 +1639,18 @@ const openImageConflict = (
 ) => {
   imageConflictOperation.value = operation;
   imageConflictRemoteRevision.value = remoteRevision;
-  isImageConflictOpen.value = true;
+
+  const revealConflict = () => {
+    isImageConflictOpen.value = true;
+  };
+
+  if (activeImageInspectorPanel.value !== null) {
+    activeImageInspectorPanel.value = null;
+    void nextTick(() => window.requestAnimationFrame(revealConflict));
+    return;
+  }
+
+  revealConflict();
 };
 
 const persistResourceName = async (name: string) => {
@@ -1973,9 +2162,45 @@ const mapImageClientPointToUnrotatedArtboard = (
     rotationRadians: -clientSpace.rotationRadians,
   });
 
+const getImageVirtualCanvasPositionFromClientCoordinates = (
+  clientX: number,
+  clientY: number,
+) => {
+  const clientSpace = getImageArtboardClientSpace();
+  if (!clientSpace) return null;
+
+  const point = mapImageClientPointToUnrotatedArtboard({ x: clientX, y: clientY }, clientSpace);
+  const contentLeft = clientSpace.rectLeft + clientSpace.borderLeft;
+  const contentTop = clientSpace.rectTop + clientSpace.borderTop;
+  const cellSize = imageArtboardMetrics.value.cellSize * clientSpace.scale;
+  if (cellSize <= 0) return null;
+
+  return {
+    x: (point.x - contentLeft) / cellSize,
+    y: (point.y - contentTop) / cellSize,
+  };
+};
+
+const getImageVirtualPixelPointFromClientCoordinates = (clientX: number, clientY: number) => {
+  const position = getImageVirtualCanvasPositionFromClientCoordinates(clientX, clientY);
+  if (!position) return null;
+
+  return {
+    x: Math.floor(position.x),
+    y: Math.floor(position.y),
+  };
+};
+
 const getImagePixelIndexFromClientCoordinates = (clientX: number, clientY: number) => {
   const clientSpace = getImageArtboardClientSpace();
   if (!clientSpace) return null;
+
+  if (isImageWrapAroundEnabled.value) {
+    const virtualPoint = getImageVirtualPixelPointFromClientCoordinates(clientX, clientY);
+    if (!virtualPoint) return null;
+    const point = wrapCanvasPoint(virtualPoint, imageCanvasBounds.value);
+    return imagePixelIndexFor(point.y, point.x);
+  }
 
   const point = mapImageClientPointToUnrotatedArtboard({ x: clientX, y: clientY }, clientSpace);
   return getImagePixelIndexFromClientPoint({
@@ -1998,9 +2223,14 @@ const getImagePixelIndexFromPointer = (event: PointerEvent) =>
 
 const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
   const pixelIndex = getImagePixelIndexFromPointer(event);
+  const virtualPoint =
+    pixelIndex !== null
+      ? getImageVirtualPixelPointFromClientCoordinates(event.clientX, event.clientY)
+      : null;
   if (hoveredImagePixelIndex.value !== pixelIndex) {
     hoveredImagePixelIndex.value = pixelIndex;
   }
+  hoveredImageVirtualPoint.value = virtualPoint;
   return pixelIndex;
 };
 
@@ -2227,9 +2457,6 @@ const updateImageViewportSize = () => {
 
   imageViewportWidth.value = window.innerWidth;
   imageViewportHeight.value = window.innerHeight;
-  isImageCoarsePointer.value =
-    window.matchMedia("(pointer: coarse)").matches &&
-    window.matchMedia("(hover: none)").matches;
   syncImageStageSize();
 };
 
@@ -2332,6 +2559,7 @@ const startPanningImageFromPointer = (event: PointerEvent) => {
   imagePanPointerClientY = event.clientY;
   isPanningImage.value = true;
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
   focusAndCaptureImagePointer(event);
 };
 
@@ -2362,10 +2590,24 @@ const startImageViewportInteractionFromPointer = (
 
   imageViewportPaintPointerId = event.pointerId;
   captureImagePointerInteractionIntent(event);
-  isImageViewportPaintAwaitingArtboard = true;
-  imageViewportPaintClientX = startPoint?.x ?? event.clientX;
-  imageViewportPaintClientY = startPoint?.y ?? event.clientY;
+  const clientX = startPoint?.x ?? event.clientX;
+  const clientY = startPoint?.y ?? event.clientY;
+  imageViewportPaintClientX = clientX;
+  imageViewportPaintClientY = clientY;
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
+
+  if (isImageWrapAroundEnabled.value) {
+    const initialPixelIndex = getImagePixelIndexFromClientCoordinates(clientX, clientY);
+    const initialVirtualPoint = getImageVirtualPixelPointFromClientCoordinates(clientX, clientY);
+    isImageViewportPaintAwaitingArtboard = initialPixelIndex === null;
+    if (initialPixelIndex !== null) {
+      startPaintingImageFromPointer(event, false, initialPixelIndex, initialVirtualPoint ?? undefined);
+      return;
+    }
+  } else {
+    isImageViewportPaintAwaitingArtboard = true;
+  }
   focusAndCaptureImagePointer(event);
 };
 
@@ -2401,13 +2643,15 @@ const startImageArtboardInteractionFromPointer = (
   imageViewportPaintClientX = clientX;
   imageViewportPaintClientY = clientY;
   const initialPixelIndex = getImagePixelIndexFromClientCoordinates(clientX, clientY);
+  const initialVirtualPoint = getImageVirtualPixelPointFromClientCoordinates(clientX, clientY);
   isImageViewportPaintAwaitingArtboard = initialPixelIndex === null;
   if (initialPixelIndex === null) {
     hoveredImagePixelIndex.value = null;
+    hoveredImageVirtualPoint.value = null;
     focusAndCaptureImagePointer(event);
     return;
   }
-  startPaintingImageFromPointer(event, false, initialPixelIndex);
+  startPaintingImageFromPointer(event, false, initialPixelIndex, initialVirtualPoint ?? undefined);
 };
 
 const continuePanningImageFromPointer = (event: PointerEvent) => {
@@ -2443,6 +2687,34 @@ const processImagePointerSegment = (
   imageViewportPaintClientY = to.y;
   const unrotatedFrom = mapImageClientPointToUnrotatedArtboard(from, clientSpace);
   const unrotatedTo = mapImageClientPointToUnrotatedArtboard(to, clientSpace);
+
+  if (isImageWrapAroundEnabled.value) {
+    const virtualFrom = getImageVirtualPixelPointFromClientCoordinates(from.x, from.y);
+    const virtualTo = getImageVirtualPixelPointFromClientCoordinates(to.x, to.y);
+    if (!virtualFrom || !virtualTo) return;
+
+    const virtualStroke = linePoints(virtualFrom, virtualTo);
+    const wrappedStroke = virtualStroke.map((point) => {
+      const wrappedPoint = wrapCanvasPoint(point, imageCanvasBounds.value);
+      return imagePixelIndexFor(wrappedPoint.y, wrappedPoint.x);
+    });
+    const firstIndex = wrappedStroke[0];
+    const lastIndex = wrappedStroke[wrappedStroke.length - 1];
+    if (firstIndex === undefined || lastIndex === undefined) return;
+
+    if (isImageViewportPaintAwaitingArtboard) {
+      isImageViewportPaintAwaitingArtboard = false;
+      startPaintingImageFromPointer(event, false, firstIndex, virtualStroke[0]);
+      if (virtualStroke.length > 1) {
+        continuePaintingImageFromPointer(event, lastIndex, wrappedStroke.slice(1), virtualTo);
+      }
+      return;
+    }
+
+    continuePaintingImageFromPointer(event, lastIndex, wrappedStroke, virtualTo);
+    return;
+  }
+
   const contentLeft = clientSpace.rectLeft + clientSpace.borderLeft;
   const contentTop = clientSpace.rectTop + clientSpace.borderTop;
   const pixelSegment = getImagePixelSegmentFromClientSegment({
@@ -2510,6 +2782,9 @@ const continueImageViewportInteractionFromPointer = (event: PointerEvent) => {
   }
 
   if (imageViewportPaintPointerId !== event.pointerId) {
+    if (isImageWrapAroundEnabled.value && imageViewportPaintPointerId === null) {
+      updateHoveredImagePixelFromPointer(event);
+    }
     return;
   }
 
@@ -2630,10 +2905,17 @@ const finishImageTransformGesture = () => {
   imageTransformGesture = null;
   isImagePinching.value = false;
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
 };
 
 const updateImageTransformGesture = (frame: TouchViewportGestureFrame) => {
-  if (!imageTouchNavigationActive || imageTouchPointers.size < 2) return false;
+  if (
+    draggingImageMirrorAxis.value !== null ||
+    !imageTouchNavigationActive ||
+    imageTouchPointers.size < 2
+  ) {
+    return false;
+  }
 
   const stageCenter = getImageStageCenter();
   if (!stageCenter) return false;
@@ -2689,7 +2971,13 @@ const bindImageTouchViewportGesture = () => {
 };
 
 const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) => {
-  if (imageTouchNavigationActive || imageTouchPointers.size >= 2) return;
+  if (
+    draggingImageMirrorAxis.value !== null ||
+    imageTouchNavigationActive ||
+    imageTouchPointers.size >= 2
+  ) {
+    return;
+  }
 
   const existingTouch = [...imageTouchPointers.values()][0];
   const activePointerId = imagePanPointerId ?? imageViewportPaintPointerId;
@@ -2729,6 +3017,7 @@ const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) 
     imageSingleTouchStartPrimaryColor = null;
     imageSingleTouchStartSecondaryColor = null;
     hoveredImagePixelIndex.value = null;
+    hoveredImageVirtualPoint.value = null;
     return;
   }
 
@@ -2739,6 +3028,7 @@ const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) 
     imagePendingTouchPointerId = null;
     isImagePinching.value = true;
     hoveredImagePixelIndex.value = null;
+    hoveredImageVirtualPoint.value = null;
   }
 };
 
@@ -2833,6 +3123,7 @@ const finishImageTouchPointer = (event: PointerEvent) => {
 };
 
 const startImageViewportPointerInteraction = (event: PointerEvent) => {
+  if (draggingImageMirrorAxis.value !== null) return;
   if (event.pointerType === "touch") {
     startImageTouchPointer(event, false);
     return;
@@ -2841,6 +3132,7 @@ const startImageViewportPointerInteraction = (event: PointerEvent) => {
 };
 
 const startImageArtboardPointerInteraction = (event: PointerEvent) => {
+  if (draggingImageMirrorAxis.value !== null) return;
   if (event.pointerType === "touch") {
     startImageTouchPointer(event, true);
     return;
@@ -2878,10 +3170,12 @@ const paintImagePixels = (indexes: number[], color: PixelColor) => {
       y: Math.floor(index / imageGridWidth.value),
     }));
   const points = centers.flatMap((point) =>
-    brushPoints(point, imageBrushSize.value, imageBrushShape.value, {
-      width: imageGridWidth.value,
-      height: imageGridHeight.value,
-    }),
+    brushPoints(
+      point,
+      imageBrushSize.value,
+      imageBrushShape.value,
+      isImageWrapAroundEnabled.value ? undefined : imageCanvasBounds.value,
+    ),
   );
   const mutation = paintPixels(
     {
@@ -2889,7 +3183,7 @@ const paintImagePixels = (indexes: number[], color: PixelColor) => {
       height: imageGridHeight.value,
       pixels: imagePixels.value,
     },
-    points,
+    prepareImageCanvasStrokePoints(points),
     nextColor,
   );
   const didChange = mutation.changes.length > 0;
@@ -2910,7 +3204,7 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
     .filter((index) => index >= 0 && index < imagePixelCount.value)
     .map((index) => imagePointFromPixelIndex(index));
   const brushOptions = {
-    bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
+    bounds: isImageWrapAroundEnabled.value ? undefined : imageCanvasBounds.value,
     brushSize: imageBrushSize.value,
     brushShape: imageBrushShape.value,
     inverted: imageInteractionGraffitiInverted,
@@ -2920,7 +3214,20 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
   const pixelsByIndex = new Map<number, string>();
   for (const center of centers) {
     for (const pixel of graffitiBrushStamp(center, brushOptions)) {
-      pixelsByIndex.set(pixel.y * imageGridWidth.value + pixel.x, pixel.color);
+      const basePoint = isImageWrapAroundEnabled.value
+        ? wrapCanvasPoint(pixel, imageCanvasBounds.value)
+        : pixel;
+      const color = isImageWrapAroundEnabled.value
+        ? graffitiCheckerColorAt(basePoint, brushOptions)
+        : pixel.color;
+      for (const point of expandCanvasMirrorPoints(
+        [basePoint],
+        imageCanvasBounds.value,
+        imageMirrorModes.value,
+        { wrapAround: isImageWrapAroundEnabled.value },
+      )) {
+        pixelsByIndex.set(point.y * imageGridWidth.value + point.x, color);
+      }
     }
   }
 
@@ -3076,17 +3383,38 @@ const constrainImageShapeEnd = (
   event: PointerEvent,
   tool: ImageTool,
 ) => {
-  if (!event.shiftKey) return end;
-  if (tool === "line") {
-    return constrainPointToEightDirections(start, end);
+  let constrainedEnd = end;
+  if (event.shiftKey) {
+    if (tool === "line") {
+      constrainedEnd = constrainPointToEightDirections(start, end);
+    } else {
+      const deltaX = end.x - start.x;
+      const deltaY = end.y - start.y;
+      const span = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+      constrainedEnd = {
+        x: start.x + (deltaX < 0 ? -span : span),
+        y: start.y + (deltaY < 0 ? -span : span),
+      };
+    }
   }
 
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const span = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+  if (!isImageWrapAroundEnabled.value) return constrainedEnd;
+
+  // Spans beyond one complete tile only repeat pixels already represented in
+  // the canonical document and can make filled previews needlessly enormous.
   return {
-    x: start.x + (deltaX < 0 ? -span : span),
-    y: start.y + (deltaY < 0 ? -span : span),
+    x:
+      start.x +
+      Math.max(
+        -imageGridWidth.value,
+        Math.min(imageGridWidth.value, constrainedEnd.x - start.x),
+      ),
+    y:
+      start.y +
+      Math.max(
+        -imageGridHeight.value,
+        Math.min(imageGridHeight.value, constrainedEnd.y - start.y),
+      ),
   };
 };
 
@@ -3097,12 +3425,12 @@ const updateImageShapePreview = (end: Point, event: PointerEvent) => {
   const constrainedEnd = constrainImageShapeEnd(start, end, event, tool);
   imagePointerEnd.value = constrainedEnd;
   const options = {
-    bounds: { width: imageGridWidth.value, height: imageGridHeight.value },
+    bounds: isImageWrapAroundEnabled.value ? undefined : imageCanvasBounds.value,
     brushSize: imageBrushSize.value,
     brushShape: imageBrushShape.value,
     filled: isImageShapeFilled.value,
   };
-  imageShapePreviewPoints.value =
+  const points =
     tool === "line"
       ? strokePoints(
           linePoints(start, constrainedEnd),
@@ -3113,6 +3441,7 @@ const updateImageShapePreview = (end: Point, event: PointerEvent) => {
       : tool === "rectangle"
         ? rectanglePoints(start, constrainedEnd, options)
         : ellipsePoints(start, constrainedEnd, options);
+  imageShapePreviewPoints.value = prepareImageCanvasStrokePoints(points);
   scheduleImageCanvasRender();
 };
 
@@ -3138,6 +3467,7 @@ const startPaintingImageFromPointer = (
   event: PointerEvent,
   allowPan = true,
   initialPixelIndex?: number,
+  initialVirtualPoint?: Point,
 ) => {
   if (allowPan && isImagePanButton(event)) {
     startPanningImageFromPointer(event);
@@ -3201,11 +3531,12 @@ const startPaintingImageFromPointer = (
   if (isImageShapeTool(tool)) {
     if (!canMutateActiveImageLayerPixels.value) return;
     focusAndCaptureImagePointer(event);
-    imagePointerStart.value = point;
-    imagePointerEnd.value = point;
+    const shapePoint = initialVirtualPoint ?? point;
+    imagePointerStart.value = shapePoint;
+    imagePointerEnd.value = shapePoint;
     imageInteractionKind.value = "shape";
     isPaintingImage.value = true;
-    updateImageShapePreview(point, event);
+    updateImageShapePreview(shapePoint, event);
     return;
   }
 
@@ -3224,7 +3555,12 @@ const startPaintingImageFromPointer = (
   lastPaintedImagePixelIndex = pixelIndex;
 };
 
-const continuePaintingImageFromPointer = (event: PointerEvent, forcedPixelIndex?: number) => {
+const continuePaintingImageFromPointer = (
+  event: PointerEvent,
+  forcedPixelIndex?: number,
+  forcedStrokePixels?: number[],
+  forcedVirtualPoint?: Point,
+) => {
   if (isPanningImage.value) {
     continuePanningImageFromPointer(event);
     return;
@@ -3254,7 +3590,10 @@ const continuePaintingImageFromPointer = (event: PointerEvent, forcedPixelIndex?
   }
 
   if (imageInteractionKind.value === "shape" && pixelIndex !== null) {
-    updateImageShapePreview(imagePointFromPixelIndex(pixelIndex), event);
+    updateImageShapePreview(
+      forcedVirtualPoint ?? imagePointFromPixelIndex(pixelIndex),
+      event,
+    );
     return;
   }
 
@@ -3296,10 +3635,9 @@ const continuePaintingImageFromPointer = (event: PointerEvent, forcedPixelIndex?
     return;
   }
 
-  const strokePixels = imageLineBetweenPixels(
-    lastPaintedImagePixelIndex ?? pixelIndex,
-    pixelIndex,
-  );
+  const strokePixels =
+    forcedStrokePixels ??
+    imageLineBetweenPixels(lastPaintedImagePixelIndex ?? pixelIndex, pixelIndex);
   if (imageInteractionTool === "graffiti") {
     paintImageGraffitiPixels(strokePixels);
   } else {
@@ -3358,6 +3696,7 @@ const stopPaintingImage = (event?: PointerEvent) => {
 
 const leaveImageCanvas = () => {
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
 };
 
 const cancelImageInteraction = (
@@ -3376,6 +3715,7 @@ const cancelImageInteraction = (
   const interactionKind = imageInteractionKind.value;
   const wasMoving = interactionKind === "move";
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
   isPaintingImage.value = false;
   isPanningImage.value = false;
   imagePanPointerId = null;
@@ -3483,6 +3823,7 @@ const resizeImageWorkspace = (nextWidth: number, nextHeight: number) => {
   imageGridWidthDraft.value = String(width);
   imageGridHeightDraft.value = String(height);
   hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
   stopPaintingImage();
   scheduleImageAutosave();
   commitImageHistory();
@@ -3977,17 +4318,235 @@ const openGifAnimationCreation = (file: File) => {
 };
 
 const toggleImageInspectorPanel = (panel: ImageInspectorPanel) => {
-  activeImageInspectorPanel.value =
-    activeImageInspectorPanel.value === panel ? null : panel;
+  closeImageMobileColorControls(false);
+  closeImageLayersDialog(false);
+  if (activeImageInspectorPanel.value === panel) {
+    activeImageInspectorPanel.value = null;
+    return;
+  }
+
+  lastImageInspectorPanel.value = panel;
+  activeImageInspectorPanel.value = panel;
+};
+
+const selectImageInspectorPanel = (panel: ImageInspectorPanel) => {
+  lastImageInspectorPanel.value = panel;
+  activeImageInspectorPanel.value = panel;
+};
+
+const openImageOptionsDialog = () => {
+  closeImageMobileColorControls(false);
+  closeImageLayersDialog(false);
+  activeImageInspectorPanel.value = lastImageInspectorPanel.value;
 };
 
 const closeImageInspectorPanel = () => {
   activeImageInspectorPanel.value = null;
 };
 
+const setImageMirrorAxis = (axis: ImageMirrorAxis, value: number) => {
+  if (axis === "horizontal") {
+    imageHorizontalMirrorAxisY.value = clampCanvasMirrorAxis(value, imageGridHeight.value);
+    return;
+  }
+
+  imageVerticalMirrorAxisX.value = clampCanvasMirrorAxis(value, imageGridWidth.value);
+};
+
+const resetImageMirrorAxisToCenter = (axis: ImageMirrorAxis) => {
+  setImageMirrorAxis(
+    axis,
+    axis === "horizontal" ? imageGridHeight.value / 2 : imageGridWidth.value / 2,
+  );
+};
+
+const isImageMirrorAxisLocked = (axis: ImageMirrorAxis) =>
+  axis === "horizontal"
+    ? isImageHorizontalMirrorLineLocked.value
+    : isImageVerticalMirrorLineLocked.value;
+
+const resetImageMirrorAxisFromHandle = (axis: ImageMirrorAxis) => {
+  if (isImageMirrorAxisLocked(axis)) return;
+  resetImageMirrorAxisToCenter(axis);
+};
+
+const updateImageMirrorAxisFromPointer = (event: PointerEvent, axis: ImageMirrorAxis) => {
+  const position = getImageVirtualCanvasPositionFromClientCoordinates(
+    event.clientX,
+    event.clientY,
+  );
+  if (!position) return;
+
+  setImageMirrorAxis(axis, axis === "horizontal" ? position.y : position.x);
+};
+
+const clearImageMirrorAxisDrag = (restoreStart = false) => {
+  const axis = draggingImageMirrorAxis.value;
+  const pointerId = imageMirrorAxisPointerId;
+  const captureTarget = imageMirrorAxisCaptureTarget;
+  const startValue = imageMirrorAxisDragStartValue;
+  imageMirrorAxisPointerId = null;
+  imageMirrorAxisCaptureTarget = null;
+  imageMirrorAxisDragStartValue = null;
+  draggingImageMirrorAxis.value = null;
+
+  if (restoreStart && axis && startValue !== null) {
+    setImageMirrorAxis(axis, startValue);
+  }
+  if (pointerId !== null && captureTarget?.hasPointerCapture?.(pointerId)) {
+    captureTarget.releasePointerCapture(pointerId);
+  }
+};
+
+const startImageMirrorAxisDrag = (event: PointerEvent, axis: ImageMirrorAxis) => {
+  if (
+    isImageMirrorAxisLocked(axis) ||
+    imageMirrorAxisPointerId !== null ||
+    !event.isPrimary ||
+    (event.pointerType === "mouse" && event.button !== 0)
+  ) {
+    return;
+  }
+
+  finishImageInteractionBeforeCanvasModeChange();
+  const target = event.currentTarget as HTMLElement;
+  imageMirrorAxisPointerId = event.pointerId;
+  imageMirrorAxisCaptureTarget = target;
+  imageMirrorAxisDragStartValue =
+    axis === "horizontal"
+      ? imageHorizontalMirrorAxisY.value
+      : imageVerticalMirrorAxisX.value;
+  draggingImageMirrorAxis.value = axis;
+  target.focus({ preventScroll: true });
+  target.setPointerCapture?.(event.pointerId);
+  updateImageMirrorAxisFromPointer(event, axis);
+};
+
+const continueImageMirrorAxisDrag = (event: PointerEvent, axis: ImageMirrorAxis) => {
+  if (
+    imageMirrorAxisPointerId !== event.pointerId ||
+    draggingImageMirrorAxis.value !== axis
+  ) {
+    return;
+  }
+
+  updateImageMirrorAxisFromPointer(event, axis);
+};
+
+const finishImageMirrorAxisDrag = (event: PointerEvent, axis: ImageMirrorAxis) => {
+  if (
+    imageMirrorAxisPointerId !== event.pointerId ||
+    draggingImageMirrorAxis.value !== axis
+  ) {
+    return;
+  }
+
+  updateImageMirrorAxisFromPointer(event, axis);
+  clearImageMirrorAxisDrag();
+};
+
+const cancelImageMirrorAxisDrag = (event: PointerEvent) => {
+  if (imageMirrorAxisPointerId !== event.pointerId) return;
+  clearImageMirrorAxisDrag(true);
+};
+
+const handleImageMirrorAxisKeydown = (event: KeyboardEvent, axis: ImageMirrorAxis) => {
+  if (event.key === "Escape" && draggingImageMirrorAxis.value === axis) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearImageMirrorAxisDrag(true);
+    return;
+  }
+
+  if (isImageMirrorAxisLocked(axis)) return;
+
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    event.stopPropagation();
+    resetImageMirrorAxisToCenter(axis);
+    return;
+  }
+
+  const dimension = axis === "horizontal" ? imageGridHeight.value : imageGridWidth.value;
+  const current =
+    axis === "horizontal"
+      ? imageHorizontalMirrorAxisY.value
+      : imageVerticalMirrorAxisX.value;
+  const step = event.shiftKey ? 1 : 0.5;
+  let next: number | null = null;
+
+  if (event.key === "Home") next = 0;
+  if (event.key === "End") next = dimension;
+  if (event.key === "PageUp") next = current - Math.max(1, dimension / 10);
+  if (event.key === "PageDown") next = current + Math.max(1, dimension / 10);
+  if (axis === "horizontal" && event.key === "ArrowUp") next = current - step;
+  if (axis === "horizontal" && event.key === "ArrowDown") next = current + step;
+  if (axis === "vertical" && event.key === "ArrowLeft") next = current - step;
+  if (axis === "vertical" && event.key === "ArrowRight") next = current + step;
+  if (next === null) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  setImageMirrorAxis(axis, next);
+};
+
+const finishImageInteractionBeforeCanvasModeChange = () => {
+  clearImageMirrorAxisDrag(true);
+  if (
+    imageInteractionKind.value !== null ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null ||
+    imageTouchPointers.size > 0
+  ) {
+    resetImageTouchPointers();
+    cancelImageInteraction();
+  }
+  hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
+};
+
+const toggleImageHorizontalMirror = () => {
+  finishImageInteractionBeforeCanvasModeChange();
+  isImageHorizontalMirrorEnabled.value = !isImageHorizontalMirrorEnabled.value;
+  scheduleImageCanvasRender();
+};
+
+const toggleImageVerticalMirror = () => {
+  finishImageInteractionBeforeCanvasModeChange();
+  isImageVerticalMirrorEnabled.value = !isImageVerticalMirrorEnabled.value;
+  scheduleImageCanvasRender();
+};
+
+const toggleImageMirrorLineVisibility = (axis: ImageMirrorAxis) => {
+  clearImageMirrorAxisDrag(true);
+  if (axis === "horizontal") {
+    isImageHorizontalMirrorLineVisible.value = !isImageHorizontalMirrorLineVisible.value;
+    return;
+  }
+
+  isImageVerticalMirrorLineVisible.value = !isImageVerticalMirrorLineVisible.value;
+};
+
+const toggleImageMirrorLineLock = (axis: ImageMirrorAxis) => {
+  clearImageMirrorAxisDrag(true);
+  if (axis === "horizontal") {
+    isImageHorizontalMirrorLineLocked.value = !isImageHorizontalMirrorLineLocked.value;
+    return;
+  }
+
+  isImageVerticalMirrorLineLocked.value = !isImageVerticalMirrorLineLocked.value;
+};
+
+const toggleImageWrapAround = () => {
+  finishImageInteractionBeforeCanvasModeChange();
+  isImageWrapAroundEnabled.value = !isImageWrapAroundEnabled.value;
+  scheduleImageCanvasRender();
+  void nextTick(scheduleImagePreviewViewportUpdate);
+};
+
 const openImageLayersDialog = () => {
   closeImageMobileColorControls(false);
-  isImageMobileDockOpen.value = false;
+  closeImageInspectorPanel();
   isImageLayersDialogOpen.value = true;
   void nextTick(() => imageLayersCloseRef.value?.focus({ preventScroll: true }));
 };
@@ -3999,22 +4558,8 @@ const closeImageLayersDialog = (restoreFocus = true) => {
   }
 };
 
-const openImageMobileDock = () => {
-  closeImageMobileColorControls(false);
-  closeImageLayersDialog(false);
-  isImageMobileDockOpen.value = true;
-  void nextTick(() => imageMobileDockCloseRef.value?.focus({ preventScroll: true }));
-};
-
-const closeImageMobileDock = (restoreFocus = true) => {
-  isImageMobileDockOpen.value = false;
-  if (restoreFocus) {
-    void nextTick(() => imageMobileDockTriggerRef.value?.focus({ preventScroll: true }));
-  }
-};
-
 function openImageMobileColorControls() {
-  closeImageMobileDock(false);
+  closeImageInspectorPanel();
   closeImageLayersDialog(false);
   isImageMobileColorControlsOpen.value = true;
   void nextTick(() => imageMobileColorCloseRef.value?.focus({ preventScroll: true }));
@@ -4111,13 +4656,22 @@ const toggleImageDimensionLink = () => {
   areImageDimensionsLinked.value = !areImageDimensionsLinked.value;
 };
 
-const loadStoredImagePreferences = (userId: string) => {
-  imagePreferencesController = useImagePreferences({
-    userId,
-    resourceId: props.resourceId,
-    defaults: { resizeAnchor: imageResizeAnchor.value },
+const currentImagePreferences = (): ImagePreferences =>
+  normalizeImagePreferences({
+    background: customImageBackground.value,
+    gridVisible: isImageGridVisible.value,
+    gridColor: customImageGridColor.value,
+    gridLineStyle: imageGridLineStyle.value,
+    gridOpacity: imageGridLineOpacity.value,
+    gridGap: imageGridGap.value,
+    subdivision: imageGridSubdivision.value,
+    subdivisionColor: customImageSubdivisionColor.value,
+    subdivisionThickness: imageGridSubdivisionThickness.value,
+    resizeAnchor: imageResizeAnchor.value,
+    zoom: imageZoom.value,
   });
-  const preferences = imagePreferencesController.preferences;
+
+const applyImagePreferences = (preferences: ImagePreferences) => {
   isApplyingImagePreferences = true;
   customImageBackground.value = preferences.background;
   isImageGridVisible.value = preferences.gridVisible;
@@ -4140,22 +4694,132 @@ const loadStoredImagePreferences = (userId: string) => {
   isApplyingImagePreferences = false;
 };
 
+const loadStoredImagePreferences = (userId: string) => {
+  imagePreferencesController = useImagePreferences({
+    userId,
+    resourceId: props.resourceId,
+    defaults: { resizeAnchor: imageResizeAnchor.value },
+  });
+  applyImagePreferences(imagePreferencesController.preferences);
+};
+
 const saveStoredImagePreferences = () => {
   if (!imagePreferencesController || isApplyingImagePreferences || isLoading.value) return;
   imagePreferencesController.save({
-    background: customImageBackground.value,
-    gridVisible: isImageGridVisible.value,
-    gridColor: customImageGridColor.value,
-    gridLineStyle: imageGridLineStyle.value,
-    gridOpacity: imageGridLineOpacity.value,
-    gridGap: imageGridGap.value,
-    subdivision: imageGridSubdivision.value,
-    subdivisionColor: customImageSubdivisionColor.value,
-    subdivisionThickness: imageGridSubdivisionThickness.value,
-    resizeAnchor: imageResizeAnchor.value,
-    zoom: imageZoom.value,
+    ...currentImagePreferences(),
   });
 };
+
+const currentImageEditorSession = (): ImageEditorSession => ({
+  activeLayerId: activeImageLayerId.value || null,
+  primaryColor: selectedImageColor.value,
+  secondaryColor: secondaryImageColor.value,
+  activeTool: activeImageTool.value,
+  brushSize: imageBrushSize.value,
+  brushShape: imageBrushShape.value,
+  shapeFilled: isImageShapeFilled.value,
+  lastInspectorPanel: lastImageInspectorPanel.value,
+  preferences: currentImagePreferences(),
+  viewport: {
+    mode: imageZoomMode.value,
+    panX: imagePanX.value,
+    panY: imagePanY.value,
+    rotationRadians: imageRotationRadians.value,
+  },
+  canvasModes: {
+    horizontalMirror: isImageHorizontalMirrorEnabled.value,
+    verticalMirror: isImageVerticalMirrorEnabled.value,
+    wrapAround: isImageWrapAroundEnabled.value,
+    horizontalAxisY: imageHorizontalMirrorAxisY.value,
+    verticalAxisX: imageVerticalMirrorAxisX.value,
+    horizontalLineVisible: isImageHorizontalMirrorLineVisible.value,
+    verticalLineVisible: isImageVerticalMirrorLineVisible.value,
+    horizontalLineLocked: isImageHorizontalMirrorLineLocked.value,
+    verticalLineLocked: isImageVerticalMirrorLineLocked.value,
+  },
+});
+
+const applyImageEditorSession = (value: unknown) => {
+  const session = normalizeImageEditorSession(value, currentImageEditorSession());
+  if (
+    session.activeLayerId &&
+    imageLayers.value.some((layer) => layer.id === session.activeLayerId)
+  ) {
+    activeImageLayerId.value = session.activeLayerId;
+  }
+  setSelectedImageColor(session.primaryColor);
+  secondaryImageColor.value = session.secondaryColor;
+  activeImageTool.value = session.activeTool;
+  imageBrushSize.value = session.brushSize;
+  imageBrushShape.value = session.brushShape;
+  isImageShapeFilled.value = session.shapeFilled;
+  lastImageInspectorPanel.value = session.lastInspectorPanel;
+  applyImagePreferences(session.preferences);
+  imageZoomMode.value = session.viewport.mode;
+  imagePanX.value = session.viewport.panX;
+  imagePanY.value = session.viewport.panY;
+  imageRotationRadians.value = session.viewport.rotationRadians;
+  isImageHorizontalMirrorEnabled.value = session.canvasModes.horizontalMirror;
+  isImageVerticalMirrorEnabled.value = session.canvasModes.verticalMirror;
+  isImageWrapAroundEnabled.value = session.canvasModes.wrapAround;
+  imageHorizontalMirrorAxisY.value = clampCanvasMirrorAxis(
+    session.canvasModes.horizontalAxisY,
+    imageGridHeight.value,
+  );
+  imageVerticalMirrorAxisX.value = clampCanvasMirrorAxis(
+    session.canvasModes.verticalAxisX,
+    imageGridWidth.value,
+  );
+  isImageHorizontalMirrorLineVisible.value = session.canvasModes.horizontalLineVisible;
+  isImageVerticalMirrorLineVisible.value = session.canvasModes.verticalLineVisible;
+  isImageHorizontalMirrorLineLocked.value = session.canvasModes.horizontalLineLocked;
+  isImageVerticalMirrorLineLocked.value = session.canvasModes.verticalLineLocked;
+  return session;
+};
+
+const persistImageEditorSession = (keepalive = false) => {
+  if (!isImageEditorSessionReady || !isImageEditor.value || !resource.value) {
+    return Promise.resolve();
+  }
+  if (imageEditorSessionSaveInFlight) {
+    imageEditorSessionSaveQueued = true;
+    return imageEditorSessionSaveInFlight;
+  }
+
+  const state = currentImageEditorSession();
+  const serialized = JSON.stringify(state);
+  if (serialized === lastSavedImageEditorSession) {
+    return Promise.resolve();
+  }
+
+  imageEditorSessionSaveQueued = false;
+  imageEditorSessionSaveInFlight = putResourceEditorState(
+    props.projectId,
+    props.resourceId,
+    { version: IMAGE_EDITOR_SESSION_VERSION, state },
+    { keepalive },
+  )
+    .then((savedState) => {
+      if (savedState) lastSavedImageEditorSession = serialized;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      imageEditorSessionSaveInFlight = null;
+      if (imageEditorSessionSaveQueued) scheduleImageEditorSessionSave();
+    });
+  return imageEditorSessionSaveInFlight;
+};
+
+function scheduleImageEditorSessionSave() {
+  if (!isImageEditorSessionReady || !isImageEditor.value) return;
+  if (imageEditorSessionSaveTimeout !== null) {
+    window.clearTimeout(imageEditorSessionSaveTimeout);
+  }
+  imageEditorSessionSaveTimeout = window.setTimeout(() => {
+    imageEditorSessionSaveTimeout = null;
+    void persistImageEditorSession();
+  }, 700);
+}
 
 watch(
   [
@@ -4174,12 +4838,29 @@ watch(
   saveStoredImagePreferences,
 );
 
+watch(
+  () => (isImageEditor.value ? currentImageEditorSession() : null),
+  scheduleImageEditorSessionSave,
+  { deep: true },
+);
+
 watch([isImageGridVisible, imageGridLineStyle, imageGridGap], () => {
   scheduleImageCanvasRender();
   void nextTick(scheduleImagePreviewViewportUpdate);
 });
 
-watch([imageGridWidth, imageGridHeight], () => {
+watch([imageGridWidth, imageGridHeight], ([nextWidth, nextHeight], [previousWidth, previousHeight]) => {
+  const horizontalWasCentered =
+    Math.abs(imageHorizontalMirrorAxisY.value - previousHeight / 2) < 0.001;
+  const verticalWasCentered =
+    Math.abs(imageVerticalMirrorAxisX.value - previousWidth / 2) < 0.001;
+  imageHorizontalMirrorAxisY.value = horizontalWasCentered
+    ? nextHeight / 2
+    : clampCanvasMirrorAxis(imageHorizontalMirrorAxisY.value, nextHeight);
+  imageVerticalMirrorAxisX.value = verticalWasCentered
+    ? nextWidth / 2
+    : clampCanvasMirrorAxis(imageVerticalMirrorAxisX.value, nextWidth);
+
   if (imageZoomMode.value === "fit") {
     void nextTick(scheduleImageFitToScreen);
   }
@@ -4220,7 +4901,6 @@ const runImageKeyboardAction = (action: ImageKeyboardAction) => {
       break;
     case "escape":
       if (isImageLayersDialogOpen.value) closeImageLayersDialog();
-      else if (isImageMobileDockOpen.value) closeImageMobileDock();
       else if (isImageMobileColorControlsOpen.value) {
         closeImageMobileColorControls();
       } else if (imageSelection.value) deselectImagePixels();
@@ -4243,6 +4923,7 @@ const handleResourceEditorKeydown = (event: KeyboardEvent) => {
     !isImageEditor.value ||
     event.defaultPrevented ||
     event.isComposing ||
+    activeImageInspectorPanel.value !== null ||
     isImageConflictOpen.value ||
     isProfileDialogOpen.value ||
     isEditableKeyboardTarget(event.target) ||
@@ -4254,6 +4935,18 @@ const handleResourceEditorKeydown = (event: KeyboardEvent) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
     void saveImageNow();
+    return;
+  }
+
+  if (
+    event.shiftKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "w"
+  ) {
+    event.preventDefault();
+    toggleImageWrapAround();
     return;
   }
 
@@ -4316,6 +5009,7 @@ const handleResourceEditorKeyup = (event: KeyboardEvent) => {
 
 const clearImageTemporaryKeys = () => {
   isImageSpacePressed.value = false;
+  clearImageMirrorAxisDrag(true);
   if (
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null ||
@@ -4355,22 +5049,37 @@ const flushImageBeforePageHide = () => {
   if (isPersonalImagePaletteSaving.value) {
     void waitForPersonalImagePaletteMutations();
   }
+  if (imageEditorSessionSaveTimeout !== null) {
+    window.clearTimeout(imageEditorSessionSaveTimeout);
+    imageEditorSessionSaveTimeout = null;
+  }
+  void persistImageEditorSession(true);
 };
 
 const loadEditor = async () => {
   isLoading.value = true;
+  isImageEditorSessionReady = false;
+  lastSavedImageEditorSession = "";
+  if (imageEditorSessionSaveTimeout !== null) {
+    window.clearTimeout(imageEditorSessionSaveTimeout);
+    imageEditorSessionSaveTimeout = null;
+  }
   errorMessage.value = "";
   let shouldFitImageAfterLoad = true;
+  let storedImageEditorState: ResourceEditorStatePublic | null = null;
+  let restoredImageEditorSession: ImageEditorSession | null = null;
 
   try {
-    const [workspace, resourceDetail] = await Promise.all([
+    const [workspace, resourceDetail, editorState] = await Promise.all([
       fetchApi<WorkspaceBootstrap>("/workspace/"),
       fetchApi<ProjectResourceDetail>(
         `/projects/${encodeURIComponent(props.projectId)}/resources/${encodeURIComponent(
           props.resourceId,
         )}`,
       ),
+      getResourceEditorState(props.projectId, props.resourceId),
     ]);
+    storedImageEditorState = editorState;
 
     if (!resourceDetail) {
       errorMessage.value = "This item is no longer available.";
@@ -4396,6 +5105,8 @@ const loadEditor = async () => {
       }
       imageGridWidth.value = imageData.document.width;
       imageGridHeight.value = imageData.document.height;
+      resetImageMirrorAxisToCenter("horizontal");
+      resetImageMirrorAxisToCenter("vertical");
       syncImageDimensionDrafts();
       imageResizeAnchor.value = imageData.anchor;
       imageLayers.value = imageData.document.layers;
@@ -4413,7 +5124,12 @@ const loadEditor = async () => {
       workspace?.projects.find((workspaceProject) => workspaceProject.id === props.projectId) || null;
     if (editorMetaByType[resourceDetail.type]?.routeKind === "image") {
       loadStoredImagePreferences(workspace?.user.id || profileEmail.value || "local-user");
-      shouldFitImageAfterLoad = imagePreferencesController?.preferences.zoom === undefined;
+      if (storedImageEditorState?.version === IMAGE_EDITOR_SESSION_VERSION) {
+        restoredImageEditorSession = applyImageEditorSession(storedImageEditorState.state);
+      }
+      shouldFitImageAfterLoad = restoredImageEditorSession
+        ? restoredImageEditorSession.viewport.mode === "fit"
+        : imagePreferencesController?.preferences.zoom === undefined;
       resetImageHistory();
     }
 
@@ -4450,18 +5166,31 @@ const loadEditor = async () => {
     loadedArtboardMetrics.height <= Math.max(1, imageStageBounds.height - 104),
   );
   imageGestureView = null;
-  imagePanX.value = 0;
-  imagePanY.value = 0;
-  imageRotationRadians.value = 0;
-  void nextTick(writeCommittedImageTransform);
-  if (shouldFitImageAfterLoad || !loadedZoomFitsStage) {
+  if (restoredImageEditorSession?.viewport.mode === "custom") {
+    imagePanX.value = restoredImageEditorSession.viewport.panX;
+    imagePanY.value = restoredImageEditorSession.viewport.panY;
+    imageRotationRadians.value = restoredImageEditorSession.viewport.rotationRadians;
+    imageZoomMode.value = "custom";
+    void nextTick(writeCommittedImageTransform);
+  } else if (restoredImageEditorSession?.viewport.mode === "actual") {
+    showImageAtActualSize();
+  } else if (shouldFitImageAfterLoad || !loadedZoomFitsStage) {
     fitImageToScreen();
   } else {
+    imagePanX.value = 0;
+    imagePanY.value = 0;
+    imageRotationRadians.value = 0;
     imageZoomMode.value = "custom";
+    void nextTick(writeCommittedImageTransform);
   }
   scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
   renderImageColorTriangleCanvas();
+  lastSavedImageEditorSession = restoredImageEditorSession
+    ? JSON.stringify(restoredImageEditorSession)
+    : "";
+  isImageEditorSessionReady = true;
+  scheduleImageEditorSessionSave();
 };
 
 onMounted(() => {
@@ -4490,6 +5219,7 @@ onUnmounted(() => {
   imageStageResizeObserver = null;
   imageTouchViewportGesture?.destroy();
   imageTouchViewportGesture = null;
+  clearImageMirrorAxisDrag();
   resetImageTouchPointers();
   if (imageFitFrame !== null) {
     window.cancelAnimationFrame(imageFitFrame);
@@ -4503,6 +5233,11 @@ onUnmounted(() => {
     window.cancelAnimationFrame(imageCanvasRenderFrame);
     imageCanvasRenderFrame = null;
   }
+  if (imageEditorSessionSaveTimeout !== null) {
+    window.clearTimeout(imageEditorSessionSaveTimeout);
+    imageEditorSessionSaveTimeout = null;
+  }
+  void persistImageEditorSession(true);
   void imageAutosave.flush().finally(imageAutosave.dispose);
 });
 </script>
@@ -4596,6 +5331,27 @@ onUnmounted(() => {
           />
         </aside>
 
+        <ImageCanvasModesMenu
+          v-if="isImageEditor"
+          class="image-editor-canvas-modes"
+          :horizontal-mirror="isImageHorizontalMirrorEnabled"
+          :horizontal-mirror-line-locked="isImageHorizontalMirrorLineLocked"
+          :horizontal-mirror-line-visible="isImageHorizontalMirrorLineVisible"
+          :vertical-mirror="isImageVerticalMirrorEnabled"
+          :vertical-mirror-line-locked="isImageVerticalMirrorLineLocked"
+          :vertical-mirror-line-visible="isImageVerticalMirrorLineVisible"
+          :wrap-around="isImageWrapAroundEnabled"
+          @center-horizontal-mirror-line="resetImageMirrorAxisToCenter('horizontal')"
+          @center-vertical-mirror-line="resetImageMirrorAxisToCenter('vertical')"
+          @toggle-horizontal-mirror="toggleImageHorizontalMirror"
+          @toggle-horizontal-mirror-line-lock="toggleImageMirrorLineLock('horizontal')"
+          @toggle-horizontal-mirror-line-visibility="toggleImageMirrorLineVisibility('horizontal')"
+          @toggle-vertical-mirror="toggleImageVerticalMirror"
+          @toggle-vertical-mirror-line-lock="toggleImageMirrorLineLock('vertical')"
+          @toggle-vertical-mirror-line-visibility="toggleImageMirrorLineVisibility('vertical')"
+          @toggle-wrap-around="toggleImageWrapAround"
+        />
+
         <div
           v-if="isImageEditor"
           id="image-editor-floating-layers"
@@ -4663,31 +5419,23 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <aside
+        <ImageOptionsToolbar
           v-if="isImageEditor"
-          id="image-editor-properties"
-          class="image-editor-right-dock"
-          :class="{
-            'has-active-inspector': activeImageInspectorPanel,
-            'is-mobile-open': isImageMobileDockOpen,
-          }"
-          :aria-hidden="isImageDockOverlayViewport && !isImageMobileDockOpen"
-          :inert="isImageDockOverlayViewport && !isImageMobileDockOpen"
-          aria-label="Image properties"
-        >
-          <div class="image-editor-mobile-dock-header">
-            <strong>Image options</strong>
-            <button
-              ref="imageMobileDockCloseRef"
-              type="button"
-              aria-label="Close image panels"
-              @click="closeImageMobileDock()"
-            >
-              <X :size="20" :stroke-width="2" aria-hidden="true" />
-            </button>
-          </div>
+          id="image-editor-options-rail"
+          class="image-editor-options-rail"
+          :class="{ 'is-dialog-open': activeImageInspectorPanel !== null }"
+          :active-panel="activeImageInspectorPanel"
+          @open="selectImageInspectorPanel"
+        />
 
-          <div class="image-editor-side-inspector" aria-label="Image options">
+        <ImageOptionsDialog
+          v-if="isImageEditor"
+          auxiliary-controls-id="image-editor-options-rail"
+          dialog-id="image-editor-options-dialog"
+          :label="`${activeImageInspectorLabel} options`"
+          :open="activeImageInspectorPanel !== null"
+          @close="closeImageInspectorPanel"
+        >
           <section
             v-if="activeImageInspectorPanel"
             class="image-editor-inspector-panel"
@@ -4695,7 +5443,7 @@ onUnmounted(() => {
           >
             <div class="image-editor-inspector-header">
               <div class="image-editor-inspector-title">
-                <Scaling
+                <Ruler
                   v-if="activeImageInspectorPanel === 'resize'"
                   :size="15"
                   :stroke-width="2.2"
@@ -4724,12 +5472,28 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="image-editor-inspector-close"
+                data-image-dialog-initial-focus
                 aria-label="Close image options"
                 title="Close"
                 @click="closeImageInspectorPanel"
               >
                 <X :size="14" :stroke-width="2.4" aria-hidden="true" />
               </button>
+            </div>
+
+            <ImageOptionsToolbar
+              class="image-editor-options-tabs"
+              variant="tabs"
+              :active-panel="activeImageInspectorPanel"
+              @open="selectImageInspectorPanel"
+            />
+
+            <div class="image-editor-dialog-notice-host">
+              <ImageEditorNotice
+                :message="imageTransferNotice"
+                :tone="imageTransferNoticeTone"
+                @dismiss="imageTransferNotice = ''"
+              />
             </div>
 
             <div
@@ -5024,90 +5788,36 @@ onUnmounted(() => {
               @export-json="exportImageJson"
             />
           </section>
+        </ImageOptionsDialog>
 
-          <div class="image-editor-inspector-rail" role="group" aria-label="Image option panels">
-            <button
-              type="button"
-              class="image-editor-inspector-button"
-              :class="{ 'is-active': activeImageInspectorPanel === 'resize' }"
-              :aria-pressed="activeImageInspectorPanel === 'resize'"
-              aria-label="Resize options"
-              title="Resize"
-              @click="toggleImageInspectorPanel('resize')"
-            >
-              <Scaling :size="19" :stroke-width="2.1" aria-hidden="true" />
-              <span>Resize</span>
-            </button>
-            <button
-              type="button"
-              class="image-editor-inspector-button"
-              :class="{ 'is-active': activeImageInspectorPanel === 'preferences' }"
-              :aria-pressed="activeImageInspectorPanel === 'preferences'"
-              aria-label="Preference options"
-              title="Preferences"
-              @click="toggleImageInspectorPanel('preferences')"
-            >
-              <SlidersHorizontal :size="19" :stroke-width="2.1" aria-hidden="true" />
-              <span>View</span>
-            </button>
-            <button
-              type="button"
-              class="image-editor-inspector-button"
-              :class="{ 'is-active': activeImageInspectorPanel === 'transform' }"
-              :aria-pressed="activeImageInspectorPanel === 'transform'"
-              aria-label="Selection and transform options"
-              title="Transform"
-              @click="toggleImageInspectorPanel('transform')"
-            >
-              <MousePointer2 :size="19" :stroke-width="2.1" aria-hidden="true" />
-              <span>Transform</span>
-            </button>
-            <button
-              type="button"
-              class="image-editor-inspector-button"
-              :class="{ 'is-active': activeImageInspectorPanel === 'transfer' }"
-              :aria-pressed="activeImageInspectorPanel === 'transfer'"
-              aria-label="Import and export"
-              title="Import & export"
-              @click="toggleImageInspectorPanel('transfer')"
-            >
-              <Download :size="19" :stroke-width="2.1" aria-hidden="true" />
-              <span>Files</span>
-            </button>
-          </div>
+        <div v-if="isImageEditor" class="image-editor-context-host">
+          <ImageToolOptions
+            :active-tool="activeImageTool"
+            :brush-size="imageBrushSize"
+            :brush-shape="imageBrushShape"
+            :shape-filled="isImageShapeFilled"
+            :can-undo="canUndoImage"
+            :can-redo="canRedoImage"
+            :can-edit="canEditImage"
+            @update:brush-size="imageBrushSize = $event"
+            @update:brush-shape="imageBrushShape = $event"
+            @update:shape-filled="isImageShapeFilled = $event"
+            @undo="undoImage"
+            @redo="redoImage"
+          />
+          <button
+            type="button"
+            class="image-editor-mobile-options-trigger"
+            aria-haspopup="dialog"
+            aria-controls="image-editor-options-dialog"
+            :aria-expanded="activeImageInspectorPanel !== null"
+            aria-label="Open image options"
+            title="Image options"
+            @click="openImageOptionsDialog"
+          >
+            <SlidersHorizontal :size="18" :stroke-width="2" aria-hidden="true" />
+          </button>
         </div>
-        </aside>
-
-        <ImageToolOptions
-          v-if="isImageEditor"
-          class="image-editor-context-host"
-          :active-tool="activeImageTool"
-          :brush-size="imageBrushSize"
-          :brush-shape="imageBrushShape"
-          :shape-filled="isImageShapeFilled"
-          :can-undo="canUndoImage"
-          :can-redo="canRedoImage"
-          :can-edit="canEditImage"
-          @update:brush-size="imageBrushSize = $event"
-          @update:brush-shape="imageBrushShape = $event"
-          @update:shape-filled="isImageShapeFilled = $event"
-          @undo="undoImage"
-          @redo="redoImage"
-        />
-
-        <button
-          v-if="isImageEditor"
-          ref="imageMobileDockTriggerRef"
-          type="button"
-          class="image-editor-mobile-dock-trigger"
-          aria-controls="image-editor-properties"
-          :aria-expanded="isImageMobileDockOpen"
-          aria-label="Open image options"
-          @click="openImageMobileDock"
-        >
-          <PanelRightOpen :size="17" :stroke-width="2" aria-hidden="true" />
-          <span>Panels</span>
-        </button>
 
         <section
           v-if="isImageEditor"
@@ -5278,13 +5988,14 @@ onUnmounted(() => {
             >
               <canvas ref="imagePreviewCanvasRef"></canvas>
               <span
-                v-if="imagePreviewViewport.visible"
+                v-if="imagePreviewViewport.visible && !isImageWrapAroundEnabled"
                 class="image-editor-preview__viewport"
                 :style="imagePreviewViewportStyle"
               ></span>
             </div>
           </div>
           <ImageEditorNotice
+            v-if="activeImageInspectorPanel === null"
             class="image-editor-notice-host"
             :message="imageTransferNotice"
             :tone="imageTransferNoticeTone"
@@ -5297,6 +6008,10 @@ onUnmounted(() => {
               'is-panning': isPanningImage,
               'is-pinching': isImagePinching,
               'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
+              'is-wrap-around': isImageWrapAroundEnabled,
+              'has-mirror-guides':
+                (isImageHorizontalMirrorEnabled && isImageHorizontalMirrorLineVisible) ||
+                (isImageVerticalMirrorEnabled && isImageVerticalMirrorLineVisible),
             }"
             :style="imageCanvasGridStyle"
             :aria-label="imageArtboardAriaLabel"
@@ -5310,6 +6025,12 @@ onUnmounted(() => {
             @auxclick.prevent
             @contextmenu.prevent
           >
+            <div
+              v-if="isImageWrapAroundEnabled && imageWrapTileDataUrl"
+              class="image-editor-wrap-surface"
+              :style="imageWrapSurfaceStyle"
+              aria-hidden="true"
+            ></div>
             <canvas
               ref="imageCanvasRef"
               class="image-editor-canvas-bitmap"
@@ -5383,17 +6104,22 @@ onUnmounted(() => {
               :style="line.style"
               aria-hidden="true"
             ></span>
-            <span
+            <template
               v-if="
                 hoveredImagePixelIndex !== null &&
                 !isImageBrushHoverPreview &&
                 !isImageGraffitiHoverPreview &&
                 (!isActiveImagePixelMutationTool || canMutateActiveImageLayerPixels)
               "
-              class="image-editor-hover-cell"
-              :style="imageSingleHoverCellStyle"
-              aria-hidden="true"
-            ></span>
+            >
+              <span
+                v-for="cell in imageSingleHoverCells"
+                :key="`image-single-hover-${cell.key}`"
+                class="image-editor-hover-cell"
+                :style="cell.style"
+                aria-hidden="true"
+              ></span>
+            </template>
             <span
               v-for="cell in imageBrushHoverCells"
               :key="`image-brush-hover-${cell.key}`"
@@ -5414,6 +6140,100 @@ onUnmounted(() => {
               :style="imageSelectionStyle"
               aria-hidden="true"
             ></span>
+            <div
+              v-if="isImageHorizontalMirrorEnabled && isImageHorizontalMirrorLineVisible"
+              class="image-editor-mirror-axis is-horizontal"
+              :style="imageHorizontalMirrorAxisStyle"
+            >
+              <span class="image-editor-mirror-axis__line" aria-hidden="true"></span>
+              <span
+                class="image-editor-mirror-axis__handle"
+                :class="{
+                  'is-dragging': draggingImageMirrorAxis === 'horizontal',
+                  'is-locked': isImageHorizontalMirrorLineLocked,
+                }"
+                role="slider"
+                tabindex="0"
+                aria-label="Horizontal mirror axis"
+                :aria-disabled="isImageHorizontalMirrorLineLocked"
+                aria-orientation="vertical"
+                aria-valuemin="0"
+                :aria-valuemax="imageGridHeight"
+                :aria-valuenow="imageHorizontalMirrorAxisY"
+                :aria-valuetext="imageHorizontalMirrorAxisValueText"
+                :title="
+                  isImageHorizontalMirrorLineLocked
+                    ? 'Horizontal mirror axis is locked.'
+                    : 'Drag to move the horizontal mirror axis. Double-click or press Enter to center.'
+                "
+                @dblclick.stop.prevent="resetImageMirrorAxisFromHandle('horizontal')"
+                @keydown="handleImageMirrorAxisKeydown($event, 'horizontal')"
+                @pointerdown.stop.prevent="startImageMirrorAxisDrag($event, 'horizontal')"
+                @pointermove.stop.prevent="continueImageMirrorAxisDrag($event, 'horizontal')"
+                @pointerup.stop.prevent="finishImageMirrorAxisDrag($event, 'horizontal')"
+                @pointercancel.stop.prevent="cancelImageMirrorAxisDrag"
+                @lostpointercapture.stop="cancelImageMirrorAxisDrag"
+                @touchstart.stop
+                @touchmove.stop.prevent
+                @touchend.stop
+                @touchcancel.stop
+              >
+                <LockKeyhole
+                  v-if="isImageHorizontalMirrorLineLocked"
+                  :size="14"
+                  :stroke-width="2.4"
+                  aria-hidden="true"
+                />
+                <ChevronsUpDown v-else :size="17" :stroke-width="2.4" aria-hidden="true" />
+              </span>
+            </div>
+            <div
+              v-if="isImageVerticalMirrorEnabled && isImageVerticalMirrorLineVisible"
+              class="image-editor-mirror-axis is-vertical"
+              :style="imageVerticalMirrorAxisStyle"
+            >
+              <span class="image-editor-mirror-axis__line" aria-hidden="true"></span>
+              <span
+                class="image-editor-mirror-axis__handle"
+                :class="{
+                  'is-dragging': draggingImageMirrorAxis === 'vertical',
+                  'is-locked': isImageVerticalMirrorLineLocked,
+                }"
+                role="slider"
+                tabindex="0"
+                aria-label="Vertical mirror axis"
+                :aria-disabled="isImageVerticalMirrorLineLocked"
+                aria-orientation="horizontal"
+                aria-valuemin="0"
+                :aria-valuemax="imageGridWidth"
+                :aria-valuenow="imageVerticalMirrorAxisX"
+                :aria-valuetext="imageVerticalMirrorAxisValueText"
+                :title="
+                  isImageVerticalMirrorLineLocked
+                    ? 'Vertical mirror axis is locked.'
+                    : 'Drag to move the vertical mirror axis. Double-click or press Enter to center.'
+                "
+                @dblclick.stop.prevent="resetImageMirrorAxisFromHandle('vertical')"
+                @keydown="handleImageMirrorAxisKeydown($event, 'vertical')"
+                @pointerdown.stop.prevent="startImageMirrorAxisDrag($event, 'vertical')"
+                @pointermove.stop.prevent="continueImageMirrorAxisDrag($event, 'vertical')"
+                @pointerup.stop.prevent="finishImageMirrorAxisDrag($event, 'vertical')"
+                @pointercancel.stop.prevent="cancelImageMirrorAxisDrag"
+                @lostpointercapture.stop="cancelImageMirrorAxisDrag"
+                @touchstart.stop
+                @touchmove.stop.prevent
+                @touchend.stop
+                @touchcancel.stop
+              >
+                <LockKeyhole
+                  v-if="isImageVerticalMirrorLineLocked"
+                  :size="14"
+                  :stroke-width="2.4"
+                  aria-hidden="true"
+                />
+                <ChevronsLeftRight v-else :size="17" :stroke-width="2.4" aria-hidden="true" />
+              </span>
+            </div>
           </div>
         </section>
 
@@ -5658,12 +6478,11 @@ onUnmounted(() => {
 
   .resource-editor-canvas {
     --editor-left-dock: 48px;
-    --editor-right-dock: clamp(360px, 24vw, 400px);
     position: absolute;
     inset: 0;
     display: grid;
-    grid-template-columns: var(--editor-left-dock) minmax(0, 1fr) var(--editor-right-dock);
-    grid-template-rows: 36px minmax(0, 1fr) 30px;
+    grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
+    grid-template-rows: 40px minmax(0, 1fr) 30px;
     place-items: stretch;
     min-width: 0;
     min-height: 0;
@@ -5681,7 +6500,7 @@ onUnmounted(() => {
     position: relative;
     z-index: 4;
     grid-column: 1;
-    grid-row: 1 / 4;
+    grid-row: 1 / 3;
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -5696,6 +6515,14 @@ onUnmounted(() => {
     box-shadow: none;
     scrollbar-color: var(--editor-border-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  .image-editor-canvas-modes {
+    z-index: 8;
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+    min-height: 0;
   }
 
   .image-editor-left-dock::before,
@@ -5756,6 +6583,24 @@ onUnmounted(() => {
   .image-editor-layers-trigger[aria-expanded="true"] small {
     color: currentColor;
     opacity: 0.66;
+  }
+
+  .image-editor-options-rail {
+    position: absolute;
+    top: calc(50% + 5px);
+    right: 12px;
+    z-index: 7;
+    pointer-events: auto;
+    transform: translateY(-50%);
+  }
+
+  .image-editor-options-rail.is-dialog-open {
+    z-index: 22;
+  }
+
+  .image-editor-options-tabs,
+  .image-editor-mobile-options-trigger {
+    display: none;
   }
 
   .image-editor-layers-dialog-layer {
@@ -5888,7 +6733,14 @@ onUnmounted(() => {
     z-index: 3;
     grid-column: 2;
     grid-row: 1;
+    display: block;
     width: auto;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--editor-panel);
+  }
+
+  .image-editor-context-host :deep(.image-tool-options) {
     min-width: 0;
   }
 
@@ -5966,80 +6818,8 @@ onUnmounted(() => {
     white-space: nowrap;
   }
 
-  .image-editor-mobile-dock-trigger,
-  .image-editor-mobile-dock-header,
   .image-editor-mobile-color-trigger {
     display: none;
-  }
-
-  .image-editor-mobile-dock-trigger {
-    position: absolute;
-    top: 5px;
-    right: 6px;
-    z-index: 6;
-    flex: 0 0 auto;
-    gap: 5px;
-    align-items: center;
-    justify-content: center;
-    color: var(--editor-muted);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    background: transparent;
-    border: 0;
-    border-radius: var(--editor-radius-sm);
-  }
-
-  .image-editor-mobile-dock-trigger:hover,
-  .image-editor-mobile-dock-trigger:focus-visible,
-  .image-editor-mobile-dock-trigger[aria-expanded="true"] {
-    color: var(--editor-text);
-    background: var(--editor-hover);
-    outline: none;
-  }
-
-  .image-editor-mobile-dock-header {
-    position: sticky;
-    top: 0;
-    z-index: 4;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 48px;
-    padding: 0 8px 0 14px;
-    box-sizing: border-box;
-    color: var(--editor-text);
-    background: var(--editor-panel);
-    border-bottom: 1px solid var(--editor-border);
-  }
-
-  .image-editor-mobile-dock-header strong {
-    overflow: hidden;
-    font-size: 13px;
-    font-weight: 650;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .image-editor-mobile-dock-header button {
-    display: grid;
-    flex: 0 0 auto;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    color: var(--editor-muted);
-    cursor: pointer;
-    background: transparent;
-    border: 0;
-    border-radius: var(--editor-radius-sm);
-  }
-
-  .image-editor-mobile-dock-header button:hover,
-  .image-editor-mobile-dock-header button:focus-visible {
-    color: var(--editor-text);
-    background: var(--editor-hover);
-    outline: none;
   }
 
   .image-editor-mobile-color-trigger {
@@ -6131,22 +6911,6 @@ onUnmounted(() => {
     transform: translateX(-50%);
   }
 
-  .image-editor-right-dock {
-    position: relative;
-    z-index: 4;
-    grid-column: 3;
-    grid-row: 1 / 4;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-    box-sizing: border-box;
-    background: var(--editor-panel);
-    border-left: 1px solid var(--editor-border);
-    box-shadow: none;
-  }
-
   .image-editor-preview {
     position: absolute;
     top: 12px;
@@ -6234,11 +6998,9 @@ onUnmounted(() => {
     left: 12px;
     z-index: 6;
     display: grid;
-    grid-template-areas:
-      "value"
-      "swatches";
+    grid-template-areas: "value";
     grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
+    gap: 0;
     align-items: start;
     width: 196px;
     min-width: 0;
@@ -6250,10 +7012,6 @@ onUnmounted(() => {
     box-shadow: none;
     pointer-events: auto;
     transform: none;
-  }
-
-  .image-editor-inspector-button span {
-    display: none;
   }
 
   .image-editor-color-picker-stage {
@@ -6504,84 +7262,17 @@ onUnmounted(() => {
     transform: none;
   }
 
-  .image-editor-side-inspector {
-    position: static;
-    display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-    min-height: 36px;
-    overflow: hidden;
-    pointer-events: auto;
-    transform: none;
-  }
-
-  .image-editor-inspector-rail {
-    position: static;
-    z-index: 2;
-    order: 0;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 2px;
-    width: 100%;
-    min-height: 42px;
-    padding: 3px;
-    box-sizing: border-box;
-    background: transparent;
-    border: 0;
-    border-bottom: 1px solid var(--editor-border);
-    border-radius: 0;
-    pointer-events: auto;
-  }
-
-  .image-editor-inspector-button {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    min-width: 0;
-    height: 36px;
-    padding: 0;
-    color: var(--editor-quiet);
-    cursor: pointer;
-    background: transparent;
-    border: 0;
-    border-right: 0;
-    border-radius: var(--editor-radius-sm);
-    box-shadow: none;
-    outline: none;
-  }
-
-  .image-editor-inspector-button:last-child {
-    border-right: 0;
-  }
-
-  .image-editor-inspector-button:hover {
-    color: var(--editor-text);
-    background: var(--editor-hover);
-  }
-
-  .image-editor-inspector-button:focus-visible {
-    outline: 1px solid var(--editor-focus);
-    outline-offset: -2px;
-  }
-
-  .image-editor-inspector-button.is-active {
-    color: var(--editor-selected-ink);
-    background: var(--editor-selected);
-  }
-
   .image-editor-inspector-panel {
-    position: static;
-    order: 1;
-    flex: 1 1 auto;
+    position: relative;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
     width: 100%;
+    height: 100%;
     min-width: 0;
     min-height: 0;
     max-height: none;
     padding: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
     box-sizing: border-box;
     color: var(--editor-text);
     background: transparent;
@@ -6592,6 +7283,21 @@ onUnmounted(() => {
     transform: none;
     scrollbar-color: var(--editor-border-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  .image-editor-dialog-notice-host {
+    position: absolute;
+    top: 52px;
+    right: 12px;
+    left: 12px;
+    z-index: 6;
+    display: grid;
+    justify-items: center;
+    pointer-events: none;
+  }
+
+  .image-editor-dialog-notice-host :deep(.image-editor-notice) {
+    pointer-events: auto;
   }
 
   .image-editor-inspector-header {
@@ -6656,7 +7362,13 @@ onUnmounted(() => {
 
   .image-editor-settings-page {
     gap: 16px;
+    align-content: start;
+    min-height: 0;
     padding: 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-color: var(--editor-border-strong) transparent;
+    scrollbar-width: thin;
   }
 
   .image-editor-dimensions,
@@ -6990,7 +7702,10 @@ onUnmounted(() => {
   .image-editor-transform-host,
   .image-editor-transfer-host {
     width: 100%;
+    min-height: 0;
     margin-top: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -7030,6 +7745,25 @@ onUnmounted(() => {
 
   .image-editor-artboard.is-pinching {
     will-change: transform;
+  }
+
+  .image-editor-artboard.is-wrap-around,
+  .image-editor-artboard.has-mirror-guides {
+    overflow: visible;
+  }
+
+  .image-editor-wrap-surface {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 0;
+    width: max(400vw, 4096px);
+    height: max(400vh, 4096px);
+    background-position: center;
+    background-repeat: repeat;
+    image-rendering: pixelated;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
   }
 
   .image-editor-canvas-bitmap {
@@ -7098,6 +7832,112 @@ onUnmounted(() => {
     animation: image-selection-pulse 900ms steps(2, end) infinite;
   }
 
+  .image-editor-mirror-axis {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    filter: drop-shadow(0 0 1px #000000);
+  }
+
+  .image-editor-mirror-axis.is-horizontal {
+    right: 0;
+    left: 0;
+    height: 0;
+  }
+
+  .image-editor-mirror-axis.is-vertical {
+    top: 0;
+    bottom: 0;
+    width: 0;
+  }
+
+  .image-editor-mirror-axis__line {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+  }
+
+  .image-editor-mirror-axis.is-horizontal .image-editor-mirror-axis__line {
+    top: -1px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: repeating-linear-gradient(
+      90deg,
+      var(--editor-selected) 0 6px,
+      transparent 6px 10px
+    );
+  }
+
+  .image-editor-mirror-axis.is-vertical .image-editor-mirror-axis__line {
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 2px;
+    background: repeating-linear-gradient(
+      180deg,
+      var(--editor-selected) 0 6px,
+      transparent 6px 10px
+    );
+  }
+
+  .image-editor-mirror-axis__handle {
+    position: absolute;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    box-sizing: border-box;
+    color: var(--editor-selected-ink);
+    background: var(--editor-selected);
+    border: 1px solid var(--editor-bg);
+    border-radius: 50%;
+    box-shadow:
+      0 0 0 1px var(--editor-selected),
+      0 4px 12px rgba(0, 0, 0, 0.34);
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .image-editor-mirror-axis.is-horizontal .image-editor-mirror-axis__handle {
+    top: 0;
+    left: 0;
+    cursor: ns-resize;
+    transform: translate(-58%, -50%);
+  }
+
+  .image-editor-mirror-axis.is-vertical .image-editor-mirror-axis__handle {
+    top: 0;
+    left: 0;
+    cursor: ew-resize;
+    transform: translate(-50%, -58%);
+  }
+
+  .image-editor-mirror-axis__handle:hover,
+  .image-editor-mirror-axis__handle.is-dragging {
+    background: var(--editor-text);
+    box-shadow:
+      0 0 0 2px var(--editor-focus),
+      0 5px 15px rgba(0, 0, 0, 0.42);
+  }
+
+  .image-editor-mirror-axis__handle.is-locked,
+  .image-editor-mirror-axis__handle.is-locked:hover {
+    color: var(--editor-muted);
+    cursor: not-allowed;
+    background: var(--editor-panel);
+    border-color: var(--editor-border-strong);
+    box-shadow: 0 0 0 1px var(--editor-border-strong);
+  }
+
+  .image-editor-mirror-axis__handle:focus-visible {
+    outline: 2px solid var(--editor-focus);
+    outline-offset: 3px;
+  }
+
   @keyframes image-selection-pulse {
     50% {
       border-color: #111111;
@@ -7151,85 +7991,9 @@ onUnmounted(() => {
     }
   }
 
-  @media (max-width: 1120px), (hover: none) and (pointer: coarse) {
-    .resource-editor-canvas {
-      --editor-right-dock: 320px;
-      grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
-    }
-
-    .image-editor-context-host,
-    .image-editor-viewport,
-    .image-editor-statusbar,
-    .image-editor-floating-layers {
-      grid-column: 2;
-    }
-
-    .image-editor-context-host {
-      padding-right: 86px;
-      box-sizing: border-box;
-    }
-
-    .image-editor-floating-color-picker {
-      bottom: 164px;
-    }
-
-    .image-editor-floating-palette {
-      --image-palette-safe-bottom: 372px;
-    }
-
-    .image-editor-color-swatches-host {
-      display: grid;
-    }
-
-    .image-editor-right-dock {
-      position: absolute;
-      inset: 0 0 0 auto;
-      z-index: 20;
-      grid-column: 2;
-      grid-row: 1 / -1;
-      width: min(360px, calc(100% - var(--editor-left-dock)));
-      max-width: none;
-      padding-bottom: env(safe-area-inset-bottom, 0);
-      overflow-x: hidden;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      visibility: hidden;
-      opacity: 0.86;
-      pointer-events: none;
-      backface-visibility: hidden;
-      transform: translate3d(100%, 0, 0);
-      will-change: transform, opacity;
-      box-shadow: -18px 0 40px rgba(0, 0, 0, 0.38);
-      transition:
-        transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-        opacity 220ms ease-out,
-        visibility 0s linear 320ms;
-    }
-
-    .image-editor-right-dock.is-mobile-open {
-      visibility: visible;
-      opacity: 1;
-      pointer-events: auto;
-      transform: translate3d(0, 0, 0);
-      transition-delay: 0s;
-    }
-
-    .image-editor-mobile-dock-header {
-      display: flex;
-    }
-
-    .image-editor-mobile-dock-trigger {
-      display: inline-flex;
-      min-width: 74px;
-      height: 26px;
-      padding: 0 8px;
-    }
-  }
-
   @media (max-width: 820px) {
     .resource-editor-canvas {
       --editor-left-dock: 44px;
-      --editor-right-dock: 292px;
     }
 
     .image-editor-left-dock {
@@ -7240,6 +8004,19 @@ onUnmounted(() => {
   }
 
   @media (max-width: 768px) {
+    .image-editor-mirror-axis__handle {
+      width: 44px;
+      height: 44px;
+    }
+
+    .image-editor-mirror-axis.is-horizontal .image-editor-mirror-axis__handle {
+      transform: translate(0, -50%);
+    }
+
+    .image-editor-mirror-axis.is-vertical .image-editor-mirror-axis__handle {
+      transform: translate(-50%, 0);
+    }
+
     .resource-editor {
       width: 100%;
       height: 100dvh;
@@ -7293,18 +8070,6 @@ onUnmounted(() => {
       --editor-left-dock: 48px;
       grid-template-columns: var(--editor-left-dock) minmax(0, 1fr);
       grid-template-rows: 44px minmax(0, 1fr) 44px;
-    }
-
-    .image-editor-right-dock {
-      inset: 0;
-      grid-column: 1 / -1;
-      width: 100%;
-      border-left: 0;
-      box-shadow: none;
-    }
-
-    .image-editor-mobile-dock-header {
-      display: flex;
     }
 
     .image-editor-layers-host {
@@ -7500,44 +8265,6 @@ onUnmounted(() => {
       aspect-ratio: 1;
     }
 
-    .image-editor-inspector-button {
-      display: inline-flex;
-      gap: 3px;
-      font-size: 10px;
-      font-weight: 650;
-    }
-
-    .image-editor-inspector-button svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    .image-editor-inspector-button span {
-      display: inline;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .image-editor-side-inspector {
-      flex: 0 0 auto;
-      min-height: 0;
-      overflow: visible;
-    }
-
-    .image-editor-inspector-rail {
-      position: sticky;
-      top: 48px;
-      background: var(--editor-panel);
-    }
-
-    .image-editor-inspector-panel {
-      flex: 0 0 auto;
-      max-height: none;
-      overflow: visible;
-    }
-
     .image-editor-context-host,
     .image-editor-viewport,
     .image-editor-statusbar {
@@ -7545,8 +8272,82 @@ onUnmounted(() => {
     }
 
     .image-editor-context-host {
-      padding-right: 46px;
-      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px;
+    }
+
+    .image-editor-options-rail {
+      display: none;
+    }
+
+    .image-editor-options-tabs {
+      display: grid;
+      grid-row: 1;
+    }
+
+    .image-editor-inspector-panel {
+      position: relative;
+      grid-template-rows: 52px minmax(0, 1fr);
+    }
+
+    .image-editor-inspector-header {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 3;
+      display: block;
+      width: 48px;
+      min-height: 52px;
+      padding: 6px 4px;
+      border-bottom: 0;
+      pointer-events: none;
+    }
+
+    .image-editor-inspector-title {
+      display: none;
+    }
+
+    .image-editor-inspector-close {
+      width: 40px;
+      height: 40px;
+      pointer-events: auto;
+    }
+
+    .image-editor-settings-page,
+    .image-editor-transform-host,
+    .image-editor-transfer-host {
+      grid-row: 2;
+      padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    }
+
+    .image-editor-mobile-options-trigger {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      min-width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      color: var(--editor-muted);
+      font: inherit;
+      cursor: pointer;
+      background: var(--editor-panel);
+      border: 0;
+      border-bottom: 1px solid var(--editor-border);
+      border-left: 1px solid var(--editor-border);
+      outline: none;
+    }
+
+    .image-editor-mobile-options-trigger:hover,
+    .image-editor-mobile-options-trigger:focus-visible,
+    .image-editor-mobile-options-trigger[aria-expanded="true"] {
+      color: var(--editor-selected-ink);
+      background: var(--editor-selected);
+    }
+
+    .image-editor-mobile-options-trigger:focus-visible {
+      outline: 2px solid var(--editor-focus);
+      outline-offset: -3px;
     }
 
     .image-editor-left-dock {
@@ -7566,25 +8367,16 @@ onUnmounted(() => {
       padding-left: 8px;
     }
 
-    .image-editor-statusbar__document,
-    .image-editor-mobile-dock-trigger span {
+    .image-editor-statusbar__document {
       display: none;
     }
 
     .image-editor-mobile-color-trigger {
       display: inline-grid;
     }
-
-    .image-editor-mobile-dock-trigger {
-      display: inline-flex;
-      min-width: 40px;
-      height: 34px;
-      padding: 0;
-    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .image-editor-right-dock,
     .image-editor-layers-dialog-layer {
       transition: none;
     }
@@ -7606,7 +8398,6 @@ onUnmounted(() => {
     .image-editor-preview__grid,
     .image-editor-color-value input,
     .image-editor-color-add,
-    .image-editor-inspector-button,
     .image-editor-inspector-close,
     .image-editor-size-input,
     .image-editor-opacity-input,
@@ -7618,7 +8409,16 @@ onUnmounted(() => {
       border-color: ButtonBorder;
     }
 
-    .image-editor-inspector-button.is-active,
+    .image-editor-mirror-axis__handle {
+      color: ButtonText;
+      background: ButtonFace;
+      border-color: ButtonBorder;
+    }
+
+    .image-editor-mirror-axis__line {
+      background: CanvasText;
+    }
+
     .image-editor-dimension-link.is-active,
     .image-editor-anchor-grid button.is-active,
     .image-editor-gap-button.is-active,
