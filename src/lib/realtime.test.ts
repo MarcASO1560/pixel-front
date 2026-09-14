@@ -9,6 +9,7 @@ vi.mock("@supabase/realtime-js", () => ({
 }));
 
 import {
+  aggregateProjectPresenceByFolder,
   connectProjectPresence,
   connectUserRealtime,
   groupProjectPresenceState,
@@ -229,6 +230,58 @@ describe("project presence", () => {
         expect.objectContaining({ id: "user-2", resource_id: "resource-2" }),
       ],
     });
+  });
+
+  it("propagates resource presence through parent folders without duplicating users", () => {
+    const snapshot = aggregateProjectPresenceByFolder(
+      {
+        "resource-1": [
+          {
+            id: "user-1",
+            email: "one@example.com",
+            username: "One",
+            resource_id: "resource-1",
+            online_at: "2026-09-14T12:00:00Z",
+          },
+        ],
+        "resource-2": [
+          {
+            id: "user-1",
+            email: "one@example.com",
+            username: "One",
+            resource_id: "resource-2",
+            online_at: "2026-09-14T12:01:00Z",
+          },
+          {
+            id: "user-2",
+            email: "two@example.com",
+            username: "Two",
+            resource_id: "resource-2",
+          },
+        ],
+      },
+      [
+        { id: "folder-parent", parent_id: null },
+        { id: "folder-child", parent_id: "folder-parent" },
+      ],
+      [
+        { id: "resource-1", folder_id: "folder-child" },
+        { id: "resource-2", folder_id: "folder-child" },
+      ],
+    );
+
+    expect(snapshot["folder-child"]).toEqual([
+      expect.objectContaining({
+        id: "user-1",
+        resource_id: "resource-2",
+        online_at: "2026-09-14T12:01:00Z",
+      }),
+      expect.objectContaining({ id: "user-2" }),
+    ]);
+    expect(snapshot["folder-parent"]?.map((member) => member.id)).toEqual([
+      "user-1",
+      "user-2",
+    ]);
   });
 
   it("tracks the open resource and publishes synchronized project presence", async () => {

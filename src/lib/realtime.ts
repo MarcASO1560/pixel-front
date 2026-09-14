@@ -1,6 +1,11 @@
 import { RealtimeClient, type RealtimeChannel } from "@supabase/realtime-js";
 
-import { API_V1_URL, type PixelAvatarData } from "./api";
+import {
+  API_V1_URL,
+  type PixelAvatarData,
+  type ProjectFolderPublic,
+  type ProjectResourcePublic,
+} from "./api";
 
 export const REALTIME_EVENT_NAMES = [
   "workspace.updated",
@@ -190,6 +195,49 @@ export const groupProjectPresenceState = (
   return Object.fromEntries(
     [...grouped.entries()].map(([resourceId, members]) => [
       resourceId,
+      [...members.values()].sort((left, right) =>
+        (left.username || left.email || left.id).localeCompare(
+          right.username || right.email || right.id,
+        ),
+      ),
+    ]),
+  );
+};
+
+export const aggregateProjectPresenceByFolder = (
+  resourcePresence: ProjectPresenceSnapshot,
+  folders: Array<Pick<ProjectFolderPublic, "id" | "parent_id">>,
+  resources: Array<Pick<ProjectResourcePublic, "id" | "folder_id">>,
+): ProjectPresenceSnapshot => {
+  const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
+  const membersByFolder = new Map<string, Map<string, ProjectPresenceMember>>();
+
+  for (const resource of resources) {
+    const members = resourcePresence[resource.id] || [];
+    if (members.length === 0) continue;
+
+    let folderId = resource.folder_id || null;
+    const visitedFolderIds = new Set<string>();
+    while (folderId && !visitedFolderIds.has(folderId)) {
+      visitedFolderIds.add(folderId);
+      const folderMembers = membersByFolder.get(folderId) || new Map();
+      for (const member of members) {
+        const existing = folderMembers.get(member.id);
+        if (
+          !existing ||
+          (member.online_at || "").localeCompare(existing.online_at || "") >= 0
+        ) {
+          folderMembers.set(member.id, member);
+        }
+      }
+      membersByFolder.set(folderId, folderMembers);
+      folderId = foldersById.get(folderId)?.parent_id || null;
+    }
+  }
+
+  return Object.fromEntries(
+    [...membersByFolder.entries()].map(([folderId, members]) => [
+      folderId,
       [...members.values()].sort((left, right) =>
         (left.username || left.email || left.id).localeCompare(
           right.username || right.email || right.id,

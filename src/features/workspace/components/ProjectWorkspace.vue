@@ -30,6 +30,7 @@ import {
   type UserPublic,
 } from "../../../lib/api";
 import {
+  aggregateProjectPresenceByFolder,
   connectProjectPresence,
   connectUserRealtime,
   type ProjectPresenceConnection,
@@ -266,6 +267,13 @@ const allProjectResources = computed(() => [
   ...(tree.value?.resources ?? []),
   ...localResources.value,
 ]);
+const projectPresenceByFolder = computed(() =>
+  aggregateProjectPresenceByFolder(
+    projectPresenceByResource.value,
+    allProjectFolders.value,
+    allProjectResources.value,
+  ),
+);
 const currentFolder = computed(
   () => allProjectFolders.value.find((folder) => folder.id === currentFolderId.value) || null,
 );
@@ -345,6 +353,10 @@ const visibleExplorerItems = computed<ExplorerItem[]>(() => {
 
   return [...currentItems].sort(sortExplorerItems);
 });
+const projectPresenceForExplorerItem = (item: ExplorerItem) =>
+  item.kind === "folder"
+    ? projectPresenceByFolder.value[item.id] || []
+    : projectPresenceByResource.value[item.id] || [];
 const hasVisibleProjectItems = computed(() => visibleExplorerItems.value.length > 0);
 const emptyExplorerTitle = computed(() => {
   if (normalizedProjectSearch.value) {
@@ -2329,11 +2341,8 @@ onUnmounted(() => {
                     <Pencil :size="15" :stroke-width="2.2" aria-hidden="true" />
                   </button>
                   <ProjectPresenceAvatars
-                    v-if="
-                      item.kind === 'resource' &&
-                      (projectPresenceByResource[item.id]?.length || 0) > 0
-                    "
-                    :members="projectPresenceByResource[item.id] || []"
+                    v-if="projectPresenceForExplorerItem(item).length > 0"
+                    :members="projectPresenceForExplorerItem(item)"
                   />
                 </span>
               </span>
