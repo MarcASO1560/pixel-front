@@ -114,6 +114,7 @@ import {
   getImageToolColorIntent,
   type ImageColorChannel,
 } from "../../pixel-art/lib/pointerColorIntent";
+import { isSinglePixelSelectionGesture } from "../../pixel-art/lib/selectionInteraction";
 import {
   calculateImagePreviewSize,
   clipImagePreviewPolygonToBounds,
@@ -443,6 +444,7 @@ const resourceNameDraft = ref("");
 let imageMoveSourceBuffer: PixelBuffer | null = null;
 let imageMoveSourceSelection: ImageSelection | null = null;
 let imageMoveDidChange = false;
+let imageSelectionDidDrag = false;
 let imagePanPointerId: number | null = null;
 let imagePanPointerClientX = 0;
 let imagePanPointerClientY = 0;
@@ -3511,6 +3513,7 @@ const startPaintingImageFromPointer = (
     focusAndCaptureImagePointer(event);
     imagePointerStart.value = point;
     imagePointerEnd.value = point;
+    imageSelectionDidDrag = false;
     imageSelection.value = normalizeSelection(point, point, {
       width: imageGridWidth.value,
       height: imageGridHeight.value,
@@ -3589,6 +3592,9 @@ const continuePaintingImageFromPointer = (
 
   if (imageInteractionKind.value === "select" && pixelIndex !== null && imagePointerStart.value) {
     const point = imagePointFromPixelIndex(pixelIndex);
+    if (!isSinglePixelSelectionGesture(imagePointerStart.value, point)) {
+      imageSelectionDidDrag = true;
+    }
     imagePointerEnd.value = point;
     imageSelection.value = normalizeSelection(imagePointerStart.value, point, {
       width: imageGridWidth.value,
@@ -3672,6 +3678,9 @@ const stopPaintingImage = (event?: PointerEvent) => {
   if (interactionKind === "shape" && imageShapePreviewPoints.value.length > 0) {
     applyImagePoints(imageShapePreviewPoints.value, imageInteractionColor);
   }
+  if (interactionKind === "select" && !imageSelectionDidDrag) {
+    imageSelection.value = null;
+  }
   isPaintingImage.value = false;
   isPanningImage.value = false;
   imagePanPointerId = null;
@@ -3694,6 +3703,7 @@ const stopPaintingImage = (event?: PointerEvent) => {
   imageMoveSourceBuffer = null;
   imageMoveSourceSelection = null;
   imageMoveDidChange = false;
+  imageSelectionDidDrag = false;
   lastPaintedImagePixelIndex = null;
   scheduleImageCanvasRender();
   if (shouldCommitHistory) {
@@ -3750,6 +3760,7 @@ const cancelImageInteraction = (
   imageMoveSourceBuffer = null;
   imageMoveSourceSelection = null;
   imageMoveDidChange = false;
+  imageSelectionDidDrag = false;
   lastPaintedImagePixelIndex = null;
   scheduleImageCanvasRender();
   if (interactionKind === "paint" && commitHistory) {
