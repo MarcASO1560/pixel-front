@@ -5543,7 +5543,7 @@ onUnmounted(() => {
 
             <div
               v-if="activeImageInspectorPanel === 'resize'"
-              class="image-editor-settings-page"
+              class="image-editor-settings-page image-editor-resize-settings"
               aria-label="Resize options"
             >
               <div class="image-editor-dimensions">
@@ -7425,6 +7425,14 @@ onUnmounted(() => {
     overflow-y: auto;
     scrollbar-color: var(--editor-border-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  @media (min-width: 769px) {
+    .image-editor-resize-settings {
+      grid-template-columns: minmax(210px, 1fr) 108px;
+      gap: 20px;
+      align-items: start;
+    }
   }
 
   .image-editor-dimensions,
