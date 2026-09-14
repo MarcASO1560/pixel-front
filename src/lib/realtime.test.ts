@@ -171,7 +171,6 @@ describe("connectUserRealtime", () => {
     expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
       channel.subscribe.mock.invocationCallOrder[0]!,
     );
-
     broadcastHandlers.get("project.updated")?.({
       payload: { project_id: "project-1", event_id: 11 },
     });
@@ -286,8 +285,10 @@ describe("project presence", () => {
 
   it("tracks the open resource and publishes synchronized project presence", async () => {
     let presenceSync: (() => void) | undefined;
+    let editorActivity: ((message: { payload: unknown }) => void) | undefined;
     const track = vi.fn(async () => "ok");
     const untrack = vi.fn(async () => "ok");
+    const send = vi.fn(async () => "ok");
     const state = {
       "user-1": [
         {
@@ -303,9 +304,14 @@ describe("project presence", () => {
         (
           type: string,
           filter: { event: string },
-          handler: () => void,
+          handler: ((message: { payload: unknown }) => void) | (() => void),
         ) => {
-          if (type === "presence" && filter.event === "sync") presenceSync = handler;
+          if (type === "presence" && filter.event === "sync") {
+            presenceSync = handler as () => void;
+          }
+          if (type === "broadcast" && filter.event === "editor.activity") {
+            editorActivity = handler as (message: { payload: unknown }) => void;
+          }
           return channel;
         },
       ),
@@ -314,6 +320,7 @@ describe("project presence", () => {
         handler("SUBSCRIBED");
         return channel;
       }),
+      send,
       track,
       untrack,
     };
@@ -354,8 +361,14 @@ describe("project presence", () => {
       ),
     );
     const onSync = vi.fn();
+    const onEditorActivity = vi.fn();
 
-    const connection = connectProjectPresence("project-1", onSync, "resource-1");
+    const connection = connectProjectPresence(
+      "project-1",
+      onSync,
+      "resource-1",
+      onEditorActivity,
+    );
 
     await vi.waitFor(() => {
       expect(track).toHaveBeenCalledWith(
@@ -367,6 +380,7 @@ describe("project presence", () => {
     });
     expect(createChannel).toHaveBeenCalledWith("project:project-1:presence", {
       config: {
+        broadcast: { ack: false, self: false },
         private: true,
         presence: { enabled: true, key: "user-1" },
       },
@@ -375,6 +389,16 @@ describe("project presence", () => {
     expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
       channel.subscribe.mock.invocationCallOrder[0]!,
     );
+    expect(send).toHaveBeenCalledWith({
+      event: "editor.activity",
+      payload: expect.objectContaining({
+        client_id: connection.clientId,
+        kind: "sync-request",
+        resource_id: "resource-1",
+        sequence: 1,
+      }),
+      type: "broadcast",
+    });
 
     presenceSync?.();
     expect(onSync).toHaveBeenLastCalledWith({
@@ -382,6 +406,41 @@ describe("project presence", () => {
         expect.objectContaining({ id: "user-1", resource_id: "resource-1" }),
       ],
     });
+
+    connection.sendEditorActivity("cursor", {
+      height: 32,
+      tool: "pencil",
+      visible: true,
+      width: 32,
+      x: 2,
+      y: 3,
+    });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(send).toHaveBeenCalledWith({
+      event: "editor.activity",
+      payload: expect.objectContaining({
+        client_id: connection.clientId,
+        kind: "cursor",
+        resource_id: "resource-1",
+        sequence: 2,
+      }),
+      type: "broadcast",
+    });
+
+    editorActivity?.({
+      payload: {
+        client_id: "remote-client",
+        kind: "cursor",
+        payload: { height: 32, tool: "pencil", visible: true, width: 32, x: 4, y: 5 },
+        resource_id: "resource-1",
+        sent_at: "2026-09-14T14:00:00Z",
+        sequence: 1,
+        user: { id: "user-2", email: "other@example.com" },
+      },
+    });
+    expect(onEditorActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ client_id: "remote-client", kind: "cursor" }),
+    );
 
     connection.setResourceId(null);
     await vi.waitFor(() => expect(untrack).toHaveBeenCalled());

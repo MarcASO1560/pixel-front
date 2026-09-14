@@ -34,6 +34,7 @@ import {
 } from "../../../lib/api";
 import {
   connectProjectPresence,
+  type ProjectEditorActivity,
   type ProjectPresenceConnection,
 } from "../../../lib/realtime";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
@@ -135,6 +136,14 @@ import {
   type PinnedPaletteColor,
 } from "../../pixel-art/lib/palette";
 import { resizePixelArtDocument } from "../../pixel-art/lib/resize";
+import {
+  applyCollaborativePixelPatch,
+  collaboratorColor,
+  readCollaborativeCursor,
+  readCollaborativeDocument,
+  readCollaborativePixelPatch,
+  readCollaborativeSelection,
+} from "../../pixel-art/lib/collaboration";
 import {
   exportPixelArtJsonBlob,
   exportPixelArtPng,
@@ -248,6 +257,20 @@ type ImageTransformGesture = {
   initialView: ImageViewportTransform;
   lastFrame: TouchViewportGestureFrame;
 };
+type RemoteImageCollaborator = {
+  clientId: string;
+  color: string;
+  height: number;
+  lastSeenAt: number;
+  name: string;
+  selection: ImageSelection | null;
+  tool: string;
+  userId: string;
+  visible: boolean;
+  width: number;
+  x: number;
+  y: number;
+};
 
 const props = defineProps<{
   projectId: string;
@@ -297,6 +320,10 @@ const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_TOUCH_COMMIT_THRESHOLD = 8;
 const IMAGE_AUTOSAVE_MS = 420;
+const IMAGE_COLLABORATION_CURSOR_INTERVAL_MS = 32;
+const IMAGE_COLLABORATION_PIXEL_INTERVAL_MS = 24;
+const IMAGE_COLLABORATION_SELECTION_INTERVAL_MS = 40;
+const IMAGE_COLLABORATOR_STALE_MS = 12000;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
 const IMAGE_COLOR_PICKER_SIZE = 292;
@@ -411,6 +438,7 @@ const isImageSpacePressed = ref(false);
 const imageInteractionKind = ref<"paint" | "shape" | "select" | "move" | null>(null);
 const hoveredImagePixelIndex = ref<number | null>(null);
 const hoveredImageVirtualPoint = ref<Point | null>(null);
+const remoteImageCollaborators = ref<Record<string, RemoteImageCollaborator>>({});
 const imageGraffitiPreviewGesture = ref<ImageGraffitiPreviewGesture | null>(null);
 const imageStageRef = ref<HTMLElement | null>(null);
 const imageArtboardRef = ref<HTMLElement | null>(null);
@@ -481,6 +509,19 @@ let imageEditorSessionSaveInFlight: Promise<void> | null = null;
 let imageEditorSessionSaveQueued = false;
 let lastSavedImageEditorSession = "";
 let projectPresenceConnection: ProjectPresenceConnection | null = null;
+let imageCollaborationCursorTimeout: ReturnType<typeof setTimeout> | null = null;
+let imageCollaborationSelectionTimeout: ReturnType<typeof setTimeout> | null = null;
+let imageCollaborationCleanupInterval: ReturnType<typeof setInterval> | null = null;
+let pendingImageCollaborationCursor: Record<string, unknown> | null = null;
+let pendingImageCollaborationSelection: Record<string, unknown> | null = null;
+let lastImageCollaborationCursorPosition: Readonly<{ x: number; y: number }> | null = null;
+let lastImageCollaborationCursorAt = 0;
+let lastImageCollaborationSelectionAt = 0;
+const pendingImageCollaborationPixels = new Map<string, Map<number, PixelColor>>();
+let imageCollaborationPixelsTimeout: ReturnType<typeof setTimeout> | null = null;
+const lastImageCollaborationSequence = new Map<string, number>();
+const pendingProjectEditorActivities: ProjectEditorActivity[] = [];
+let lastRemoteImageMutationAt = 0;
 let imageAutosaveSequence = 0;
 let resourceMutationQueue: Promise<void> = Promise.resolve();
 let personalImagePaletteMutationQueue: Promise<void> = Promise.resolve();
@@ -1159,6 +1200,30 @@ const imageSelectionStyle = computed(() => {
     width: `${selection.width * cellSize}px`,
   };
 });
+const remoteImageCollaboratorList = computed(() =>
+  Object.values(remoteImageCollaborators.value).filter(
+    (collaborator) =>
+      collaborator.width === imageGridWidth.value &&
+      collaborator.height === imageGridHeight.value,
+  ),
+);
+const remoteImageCursorStyle = (collaborator: RemoteImageCollaborator) => ({
+  "--image-collaborator-color": collaborator.color,
+  left: `${collaborator.x * imageArtboardMetrics.value.cellSize}px`,
+  top: `${collaborator.y * imageArtboardMetrics.value.cellSize}px`,
+});
+const remoteImageSelectionStyle = (collaborator: RemoteImageCollaborator) => {
+  const selection = collaborator.selection;
+  if (!selection) return {};
+  const cellSize = imageArtboardMetrics.value.cellSize;
+  return {
+    "--image-collaborator-color": collaborator.color,
+    height: `${selection.height * cellSize}px`,
+    left: `${selection.x * cellSize}px`,
+    top: `${selection.y * cellSize}px`,
+    width: `${selection.width * cellSize}px`,
+  };
+};
 const imageHorizontalMirrorAxisStyle = computed(() => ({
   top: `${imageHorizontalMirrorAxisY.value * imageArtboardMetrics.value.cellSize}px`,
 }));
@@ -1772,6 +1837,266 @@ const buildImageDocument = (): PixelArtDocumentV2 => ({
   layers: imageLayers.value.map((layer) => ({ ...layer, pixels: layer.pixels })),
 });
 
+const sendImageCollaborationActivity = (
+  kind: ProjectEditorActivity["kind"],
+  payload: Record<string, unknown>,
+) => {
+  if (!isImageEditor.value || document.visibilityState !== "visible") return;
+  projectPresenceConnection?.sendEditorActivity(kind, payload);
+};
+
+const flushImageCollaborationPixels = () => {
+  if (imageCollaborationPixelsTimeout !== null) {
+    window.clearTimeout(imageCollaborationPixelsTimeout);
+    imageCollaborationPixelsTimeout = null;
+  }
+
+  for (const [layerId, pixels] of pendingImageCollaborationPixels) {
+    if (pixels.size === 0) continue;
+    sendImageCollaborationActivity("pixels", {
+      changes: [...pixels.entries()],
+      height: imageGridHeight.value,
+      layer_id: layerId,
+      width: imageGridWidth.value,
+    });
+  }
+  pendingImageCollaborationPixels.clear();
+};
+
+const queueImageCollaborationPixels = (
+  changes: ReadonlyArray<Readonly<{ index: number; after: PixelColor }>>,
+) => {
+  const layerId = activeImageLayer.value?.id;
+  if (!layerId || changes.length === 0) return;
+
+  const pending = pendingImageCollaborationPixels.get(layerId) || new Map<number, PixelColor>();
+  for (const change of changes) pending.set(change.index, change.after);
+  pendingImageCollaborationPixels.set(layerId, pending);
+  if (imageCollaborationPixelsTimeout !== null) return;
+  imageCollaborationPixelsTimeout = window.setTimeout(
+    flushImageCollaborationPixels,
+    IMAGE_COLLABORATION_PIXEL_INTERVAL_MS,
+  );
+};
+
+const broadcastImageDocument = (
+  persistedRevision?: number,
+  targetClientId?: string,
+) => {
+  flushImageCollaborationPixels();
+  sendImageCollaborationActivity("document", {
+    document: buildImageDocument(),
+    ...(persistedRevision === undefined ? {} : { persisted_revision: persistedRevision }),
+    ...(targetClientId ? { target_client_id: targetClientId } : {}),
+  });
+};
+
+const flushImageCollaborationCursor = () => {
+  if (imageCollaborationCursorTimeout !== null) {
+    window.clearTimeout(imageCollaborationCursorTimeout);
+    imageCollaborationCursorTimeout = null;
+  }
+  if (!pendingImageCollaborationCursor) return;
+  const payload = pendingImageCollaborationCursor;
+  pendingImageCollaborationCursor = null;
+  lastImageCollaborationCursorAt = Date.now();
+  sendImageCollaborationActivity("cursor", payload);
+};
+
+const broadcastImageCursor = (
+  pixelIndex: number | null,
+  position: Readonly<{ x: number; y: number }> | null = null,
+) => {
+  if (pixelIndex === null) {
+    lastImageCollaborationCursorPosition = null;
+  } else if (position) {
+    lastImageCollaborationCursorPosition = position;
+  }
+  const cursorPosition = position || lastImageCollaborationCursorPosition;
+  pendingImageCollaborationCursor = {
+    height: imageGridHeight.value,
+    tool: activeImageTool.value,
+    visible: pixelIndex !== null,
+    width: imageGridWidth.value,
+    ...(pixelIndex === null
+      ? {}
+      : {
+          x: cursorPosition?.x ?? (pixelIndex % imageGridWidth.value) + 0.5,
+          y: cursorPosition?.y ?? Math.floor(pixelIndex / imageGridWidth.value) + 0.5,
+        }),
+  };
+
+  const remaining = Math.max(
+    0,
+    IMAGE_COLLABORATION_CURSOR_INTERVAL_MS - (Date.now() - lastImageCollaborationCursorAt),
+  );
+  if (remaining === 0) {
+    flushImageCollaborationCursor();
+  } else if (imageCollaborationCursorTimeout === null) {
+    imageCollaborationCursorTimeout = window.setTimeout(flushImageCollaborationCursor, remaining);
+  }
+};
+
+const flushImageCollaborationSelection = () => {
+  if (imageCollaborationSelectionTimeout !== null) {
+    window.clearTimeout(imageCollaborationSelectionTimeout);
+    imageCollaborationSelectionTimeout = null;
+  }
+  if (!pendingImageCollaborationSelection) return;
+  const payload = pendingImageCollaborationSelection;
+  pendingImageCollaborationSelection = null;
+  lastImageCollaborationSelectionAt = Date.now();
+  sendImageCollaborationActivity("selection", payload);
+};
+
+const broadcastImageSelection = () => {
+  pendingImageCollaborationSelection = {
+    selection: imageSelection.value ? { ...imageSelection.value } : null,
+  };
+  const remaining = Math.max(
+    0,
+    IMAGE_COLLABORATION_SELECTION_INTERVAL_MS -
+      (Date.now() - lastImageCollaborationSelectionAt),
+  );
+  if (remaining === 0) {
+    flushImageCollaborationSelection();
+  } else if (imageCollaborationSelectionTimeout === null) {
+    imageCollaborationSelectionTimeout = window.setTimeout(
+      flushImageCollaborationSelection,
+      remaining,
+    );
+  }
+};
+
+const collaboratorName = (activity: ProjectEditorActivity) =>
+  activity.user.username?.trim() || activity.user.email.split("@")[0] || "Collaborator";
+
+const updateRemoteImageCollaborator = (
+  activity: ProjectEditorActivity,
+  update: Partial<RemoteImageCollaborator>,
+) => {
+  const current = remoteImageCollaborators.value[activity.client_id];
+  remoteImageCollaborators.value = {
+    ...remoteImageCollaborators.value,
+    [activity.client_id]: {
+      clientId: activity.client_id,
+      color: collaboratorColor(activity.user.id || activity.client_id),
+      height: imageGridHeight.value,
+      lastSeenAt: Date.now(),
+      name: collaboratorName(activity),
+      selection: null,
+      tool: "pencil",
+      userId: activity.user.id,
+      visible: false,
+      width: imageGridWidth.value,
+      x: 0,
+      y: 0,
+      ...current,
+      ...update,
+    },
+  };
+};
+
+const applyRemoteImageDocument = (document: PixelArtDocumentV2) => {
+  const currentLayerId = activeImageLayerId.value;
+  imageGridWidth.value = document.width;
+  imageGridHeight.value = document.height;
+  imageLayers.value = document.layers.map((layer) => ({ ...layer, pixels: [...layer.pixels] }));
+  activeImageLayerId.value =
+    document.layers.some((layer) => layer.id === currentLayerId)
+      ? currentLayerId
+      : document.layers[document.layers.length - 1]?.id || "";
+  syncImageDimensionDrafts();
+  resetImageHistory();
+  scheduleImageCanvasRender();
+  void nextTick(scheduleImagePreviewViewportUpdate);
+};
+
+const handleProjectEditorActivity = (activity: ProjectEditorActivity) => {
+  if (activity.resource_id !== props.resourceId) return;
+  if (!resource.value || !isImageEditor.value) {
+    pendingProjectEditorActivities.push(activity);
+    if (pendingProjectEditorActivities.length > 100) pendingProjectEditorActivities.shift();
+    return;
+  }
+  const previousSequence = lastImageCollaborationSequence.get(activity.client_id) || 0;
+  if (activity.sequence <= previousSequence) return;
+  lastImageCollaborationSequence.set(activity.client_id, activity.sequence);
+
+  if (activity.kind === "sync-request") {
+    updateRemoteImageCollaborator(activity, {});
+    if (canEditImage.value) {
+      broadcastImageDocument(resource.value.revision, activity.client_id);
+    }
+    broadcastImageCursor(hoveredImagePixelIndex.value);
+    broadcastImageSelection();
+    return;
+  }
+
+  const cursor = readCollaborativeCursor(activity);
+  if (cursor) {
+    updateRemoteImageCollaborator(activity, {
+      height: cursor.height,
+      tool: cursor.tool,
+      visible: cursor.visible,
+      width: cursor.width,
+      x: cursor.x,
+      y: cursor.y,
+    });
+    return;
+  }
+
+  const selection = readCollaborativeSelection(activity);
+  if (selection !== undefined) {
+    updateRemoteImageCollaborator(activity, { selection });
+    return;
+  }
+
+  const patch = readCollaborativePixelPatch(activity);
+  if (patch) {
+    const nextLayers = applyCollaborativePixelPatch(
+      imageLayers.value,
+      patch,
+      imageGridWidth.value,
+      imageGridHeight.value,
+    );
+    if (nextLayers) {
+      imageLayers.value = nextLayers;
+      lastRemoteImageMutationAt = Date.now();
+      scheduleImageCanvasRender();
+    }
+    updateRemoteImageCollaborator(activity, {});
+    return;
+  }
+
+  const document = readCollaborativeDocument(activity);
+  if (!document) return;
+  const targetClientId = activity.payload.target_client_id;
+  if (
+    typeof targetClientId === "string" &&
+    targetClientId !== projectPresenceConnection?.clientId
+  ) {
+    return;
+  }
+  lastRemoteImageMutationAt = Date.now();
+  applyRemoteImageDocument(document);
+  updateRemoteImageCollaborator(activity, {});
+
+  const persistedRevision = activity.payload.persisted_revision;
+  if (
+    resource.value &&
+    typeof persistedRevision === "number" &&
+    Number.isInteger(persistedRevision) &&
+    persistedRevision > resource.value.revision
+  ) {
+    resource.value = {
+      ...resource.value,
+      data: serializePixelArtResourceData(resource.value.data || {}, document),
+      revision: persistedRevision,
+    };
+  }
+};
+
 const createImageSnapshot = (): ImageEditorSnapshot => ({
   document: buildImageDocument(),
   activeLayerId: activeImageLayerId.value,
@@ -1849,10 +2174,14 @@ const resetImageHistory = () => {
 const commitImageHistory = () => {
   if (!imageHistory.value) {
     resetImageHistory();
+    broadcastImageDocument();
+    broadcastImageSelection();
     return;
   }
 
   imageHistory.value = imageHistory.value.push(createImageSnapshot());
+  broadcastImageDocument();
+  broadcastImageSelection();
 };
 
 const undoImage = () => {
@@ -1860,6 +2189,8 @@ const undoImage = () => {
   imageHistory.value = imageHistory.value.undo();
   applyImageSnapshot(imageHistory.value.current);
   scheduleImageAutosave();
+  broadcastImageDocument();
+  broadcastImageSelection();
 };
 
 const redoImage = () => {
@@ -1867,12 +2198,14 @@ const redoImage = () => {
   imageHistory.value = imageHistory.value.redo();
   applyImageSnapshot(imageHistory.value.current);
   scheduleImageAutosave();
+  broadcastImageDocument();
+  broadcastImageSelection();
 };
 
 const saveImageDocument = async (_sequence: number) => {
   // Capture one immutable view only when the debounced request actually starts;
   // pointermove events merely advance a tiny sequence token.
-  const document = buildImageDocument();
+  let document = buildImageDocument();
 
   await enqueueResourceMutation(async () => {
     const currentResource = resource.value;
@@ -1880,15 +2213,32 @@ const saveImageDocument = async (_sequence: number) => {
       throw new Error("You no longer have permission to save this image.");
     }
 
-    const nextData = serializePixelArtResourceData(
+    let nextData = serializePixelArtResourceData(
       currentResource.data || {},
       document,
     );
 
-    const result = await patchProjectResource(props.projectId, props.resourceId, {
+    let result = await patchProjectResource(props.projectId, props.resourceId, {
       data: nextData,
       base_revision: currentResource.revision,
     });
+
+    if (
+      !result.ok &&
+      result.conflict &&
+      Date.now() - lastRemoteImageMutationAt < 5000
+    ) {
+      const latestKnownResource = resource.value || currentResource;
+      document = buildImageDocument();
+      nextData = serializePixelArtResourceData(latestKnownResource.data || {}, document);
+      result = await patchProjectResource(props.projectId, props.resourceId, {
+        data: nextData,
+        base_revision: Math.max(
+          latestKnownResource.revision,
+          result.conflict.current_revision,
+        ),
+      });
+    }
 
     if (!result.ok) {
       if (result.conflict) {
@@ -1906,10 +2256,11 @@ const saveImageDocument = async (_sequence: number) => {
     }
 
     resource.value = {
-      ...currentResource,
+      ...(resource.value || currentResource),
       ...result.resource,
       data: nextData,
     };
+    broadcastImageDocument(result.resource.revision);
   });
 };
 
@@ -2233,6 +2584,10 @@ const getImagePixelIndexFromPointer = (event: PointerEvent) =>
 
 const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
   const pixelIndex = getImagePixelIndexFromPointer(event);
+  const canvasPosition =
+    pixelIndex !== null
+      ? getImageVirtualCanvasPositionFromClientCoordinates(event.clientX, event.clientY)
+      : null;
   const virtualPoint =
     pixelIndex !== null
       ? getImageVirtualPixelPointFromClientCoordinates(event.clientX, event.clientY)
@@ -2241,6 +2596,19 @@ const updateHoveredImagePixelFromPointer = (event: PointerEvent) => {
     hoveredImagePixelIndex.value = pixelIndex;
   }
   hoveredImageVirtualPoint.value = virtualPoint;
+  broadcastImageCursor(
+    pixelIndex,
+    canvasPosition
+      ? {
+          x:
+            ((canvasPosition.x % imageGridWidth.value) + imageGridWidth.value) %
+            imageGridWidth.value,
+          y:
+            ((canvasPosition.y % imageGridHeight.value) + imageGridHeight.value) %
+            imageGridHeight.value,
+        }
+      : null,
+  );
   return pixelIndex;
 };
 
@@ -2792,7 +3160,7 @@ const continueImageViewportInteractionFromPointer = (event: PointerEvent) => {
   }
 
   if (imageViewportPaintPointerId !== event.pointerId) {
-    if (isImageWrapAroundEnabled.value && imageViewportPaintPointerId === null) {
+    if (imageViewportPaintPointerId === null) {
       updateHoveredImagePixelFromPointer(event);
     }
     return;
@@ -3203,6 +3571,7 @@ const paintImagePixels = (indexes: number[], color: PixelColor) => {
   imagePixels.value = [...mutation.buffer.pixels];
   scheduleImageCanvasRender();
   scheduleImageAutosave();
+  queueImageCollaborationPixels(mutation.changes);
 };
 
 const paintImageGraffitiPixels = (indexes: number[]) => {
@@ -3245,10 +3614,12 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
 
   const nextPixels = [...imagePixels.value];
   let didChange = false;
+  const changes: Array<{ index: number; after: PixelColor }> = [];
   for (const [index, color] of pixelsByIndex) {
     if (nextPixels[index] === color) continue;
     nextPixels[index] = color;
     didChange = true;
+    changes.push({ index, after: color });
   }
 
   if (!didChange) return;
@@ -3256,6 +3627,7 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
   imagePixels.value = nextPixels;
   scheduleImageCanvasRender();
   scheduleImageAutosave();
+  queueImageCollaborationPixels(changes);
 };
 
 const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) => {
@@ -3518,6 +3890,7 @@ const startPaintingImageFromPointer = (
       width: imageGridWidth.value,
       height: imageGridHeight.value,
     });
+    broadcastImageSelection();
     imageInteractionKind.value = "select";
     return;
   }
@@ -3600,6 +3973,7 @@ const continuePaintingImageFromPointer = (
       width: imageGridWidth.value,
       height: imageGridHeight.value,
     });
+    broadcastImageSelection();
     return;
   }
 
@@ -3632,10 +4006,18 @@ const continuePaintingImageFromPointer = (
           mutation: moveLayer(imageMoveSourceBuffer, delta),
           selection: null,
         };
-    imagePixels.value = [...result.mutation.buffer.pixels];
+    const previousPixels = imagePixels.value;
+    const nextPixels = [...result.mutation.buffer.pixels];
+    imagePixels.value = nextPixels;
     imageSelection.value = result.selection;
     imagePointerEnd.value = point;
     imageMoveDidChange = !imagePixelsAreEqual(imageMoveSourceBuffer.pixels, imagePixels.value);
+    const collaborationChanges: Array<{ index: number; after: PixelColor }> = [];
+    for (const [index, after] of nextPixels.entries()) {
+      if (previousPixels[index] !== after) collaborationChanges.push({ index, after });
+    }
+    queueImageCollaborationPixels(collaborationChanges);
+    broadcastImageSelection();
     scheduleImageCanvasRender();
     return;
   }
@@ -3681,6 +4063,10 @@ const stopPaintingImage = (event?: PointerEvent) => {
   if (interactionKind === "select" && !imageSelectionDidDrag) {
     imageSelection.value = null;
   }
+  if (interactionKind === "select") {
+    broadcastImageSelection();
+    flushImageCollaborationSelection();
+  }
   isPaintingImage.value = false;
   isPanningImage.value = false;
   imagePanPointerId = null;
@@ -3715,6 +4101,7 @@ const stopPaintingImage = (event?: PointerEvent) => {
 const leaveImageCanvas = () => {
   hoveredImagePixelIndex.value = null;
   hoveredImageVirtualPoint.value = null;
+  broadcastImageCursor(null);
 };
 
 const cancelImageInteraction = (
@@ -3763,6 +4150,10 @@ const cancelImageInteraction = (
   imageSelectionDidDrag = false;
   lastPaintedImagePixelIndex = null;
   scheduleImageCanvasRender();
+  if (wasMoving) {
+    broadcastImageDocument();
+    broadcastImageSelection();
+  }
   if (interactionKind === "paint" && commitHistory) {
     commitImageHistory();
   }
@@ -4121,10 +4512,12 @@ const selectAllImagePixels = () => {
     height: imageGridHeight.value,
   };
   activeImageTool.value = "select";
+  broadcastImageSelection();
 };
 
 const deselectImagePixels = () => {
   imageSelection.value = null;
+  broadcastImageSelection();
 };
 
 const applyImageMutationPixels = (
@@ -5076,6 +5469,11 @@ const flushImageBeforePageHide = () => {
 };
 
 const syncResourcePresenceVisibility = () => {
+  if (document.visibilityState !== "visible") {
+    broadcastImageCursor(null);
+    flushImageCollaborationCursor();
+    remoteImageCollaborators.value = {};
+  }
   projectPresenceConnection?.setResourceId(
     document.visibilityState === "visible" && resource.value ? props.resourceId : null,
   );
@@ -5087,7 +5485,21 @@ const connectResourcePresence = () => {
     props.projectId,
     () => undefined,
     document.visibilityState === "visible" ? props.resourceId : null,
+    handleProjectEditorActivity,
   );
+};
+
+const removeStaleImageCollaborators = () => {
+  if (document.visibilityState === "visible" && resource.value) {
+    broadcastImageCursor(hoveredImagePixelIndex.value);
+  }
+  const cutoff = Date.now() - IMAGE_COLLABORATOR_STALE_MS;
+  const entries = Object.entries(remoteImageCollaborators.value).filter(
+    ([, collaborator]) => collaborator.lastSeenAt >= cutoff,
+  );
+  if (entries.length !== Object.keys(remoteImageCollaborators.value).length) {
+    remoteImageCollaborators.value = Object.fromEntries(entries);
+  }
 };
 
 const loadEditor = async () => {
@@ -5220,6 +5632,10 @@ const loadEditor = async () => {
   scheduleImageCanvasRender();
   scheduleImagePreviewViewportUpdate();
   renderImageColorTriangleCanvas();
+  for (const activity of pendingProjectEditorActivities.splice(0)) {
+    handleProjectEditorActivity(activity);
+  }
+  sendImageCollaborationActivity("sync-request", {});
   lastSavedImageEditorSession = restoredImageEditorSession
     ? JSON.stringify(restoredImageEditorSession)
     : "";
@@ -5237,6 +5653,10 @@ onMounted(() => {
   window.addEventListener("pagehide", flushImageBeforePageHide);
   window.addEventListener("resize", updateImageViewportSize);
   document.addEventListener("visibilitychange", syncResourcePresenceVisibility);
+  imageCollaborationCleanupInterval = window.setInterval(
+    removeStaleImageCollaborators,
+    4000,
+  );
   updateImageViewportSize();
   // The route already identifies the resource, so announce presence while the
   // document, layers, and per-user editor state load in parallel.
@@ -5247,6 +5667,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  broadcastImageCursor(null);
+  flushImageCollaborationCursor();
+  flushImageCollaborationPixels();
   window.removeEventListener("pointerup", finishImagePointerInteraction);
   window.removeEventListener("pointercancel", cancelImagePointerInteraction);
   window.removeEventListener("keydown", handleResourceEditorKeydown);
@@ -5258,6 +5681,15 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", syncResourcePresenceVisibility);
   projectPresenceConnection?.close();
   projectPresenceConnection = null;
+  remoteImageCollaborators.value = {};
+  if (imageCollaborationCleanupInterval !== null) {
+    window.clearInterval(imageCollaborationCleanupInterval);
+    imageCollaborationCleanupInterval = null;
+  }
+  if (imageCollaborationSelectionTimeout !== null) {
+    window.clearTimeout(imageCollaborationSelectionTimeout);
+    imageCollaborationSelectionTimeout = null;
+  }
   imageStageResizeObserver?.disconnect();
   imageStageResizeObserver = null;
   imageTouchViewportGesture?.destroy();
@@ -6184,6 +6616,31 @@ onUnmounted(() => {
               :style="imageSelectionStyle"
               aria-hidden="true"
             ></span>
+            <template
+              v-for="collaborator in remoteImageCollaboratorList"
+              :key="`remote-collaborator-${collaborator.clientId}`"
+            >
+              <span
+                v-if="collaborator.selection"
+                class="image-editor-remote-selection"
+                :style="remoteImageSelectionStyle(collaborator)"
+                aria-hidden="true"
+              ></span>
+              <span
+                v-if="collaborator.visible"
+                class="image-editor-remote-cursor"
+                :style="remoteImageCursorStyle(collaborator)"
+                aria-hidden="true"
+              >
+                <MousePointer2
+                  class="image-editor-remote-cursor__icon"
+                  :size="20"
+                  :stroke-width="2.4"
+                  aria-hidden="true"
+                />
+                <span class="image-editor-remote-cursor__name">{{ collaborator.name }}</span>
+              </span>
+            </template>
             <div
               v-if="isImageHorizontalMirrorEnabled && isImageHorizontalMirrorLineVisible"
               class="image-editor-mirror-axis is-horizontal"
@@ -7890,6 +8347,47 @@ onUnmounted(() => {
     outline: 1px dashed #111111;
     pointer-events: none;
     animation: image-selection-pulse 900ms steps(2, end) infinite;
+  }
+
+  .image-editor-remote-selection {
+    position: absolute;
+    z-index: 5;
+    box-sizing: border-box;
+    border: 2px solid var(--image-collaborator-color);
+    pointer-events: none;
+    opacity: 0.9;
+  }
+
+  .image-editor-remote-cursor {
+    position: absolute;
+    z-index: 9;
+    display: flex;
+    align-items: flex-start;
+    color: var(--image-collaborator-color);
+    pointer-events: none;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8));
+  }
+
+  .image-editor-remote-cursor__icon {
+    flex: 0 0 auto;
+    fill: var(--image-collaborator-color);
+    stroke: #0b0b0b;
+  }
+
+  .image-editor-remote-cursor__name {
+    display: block;
+    max-width: 160px;
+    padding: 3px 7px;
+    margin: 15px 0 0 -2px;
+    overflow: hidden;
+    color: #07110c;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: var(--image-collaborator-color);
+    border-radius: 4px;
   }
 
   .image-editor-mirror-axis {

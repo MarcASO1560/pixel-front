@@ -72,11 +72,29 @@ type EnabledProjectPresenceConfig = ProjectPresenceConfig & {
 };
 
 export type ProjectPresenceMember = ProjectPresenceUser & {
+  client_id?: string;
   resource_id: string;
   online_at?: string;
 };
 
 export type ProjectPresenceSnapshot = Record<string, ProjectPresenceMember[]>;
+
+export type ProjectEditorActivityKind =
+  | "cursor"
+  | "document"
+  | "pixels"
+  | "selection"
+  | "sync-request";
+
+export type ProjectEditorActivity = {
+  client_id: string;
+  kind: ProjectEditorActivityKind;
+  payload: Record<string, unknown>;
+  resource_id: string;
+  sent_at: string;
+  sequence: number;
+  user: ProjectPresenceUser;
+};
 
 type PersistedRealtimeEvent = {
   id: number;
@@ -90,6 +108,11 @@ export type RealtimeConnection = {
 };
 
 export type ProjectPresenceConnection = RealtimeConnection & {
+  clientId: string;
+  sendEditorActivity: (
+    kind: ProjectEditorActivityKind,
+    payload: Record<string, unknown>,
+  ) => void;
   setResourceId: (resourceId: string | null) => void;
 };
 
@@ -99,6 +122,14 @@ const MAX_CATCH_UP_BATCHES = 20;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const createRealtimeClientId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `realtime-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 const fetchRealtimeConfig = async () => {
   const response = await fetch(`${API_V1_URL}/events/config`, {
@@ -165,6 +196,7 @@ const normalizeProjectPresenceMember = (
     avatar_pixel_art: isObject(value.avatar_pixel_art)
       ? (value.avatar_pixel_art as PixelAvatarData)
       : null,
+    client_id: typeof value.client_id === "string" ? value.client_id : undefined,
     resource_id: resourceId,
     online_at: typeof value.online_at === "string" ? value.online_at : undefined,
   };
@@ -478,9 +510,12 @@ export const connectProjectPresence = (
   projectId: string,
   onSync: (snapshot: ProjectPresenceSnapshot) => void,
   initialResourceId: string | null = null,
+  onEditorActivity: (activity: ProjectEditorActivity) => void = () => undefined,
 ): ProjectPresenceConnection => {
   let closed = false;
   let activeResourceId = initialResourceId;
+  const clientId = createRealtimeClientId();
+  let activitySequence = 0;
   let activeConfig: EnabledProjectPresenceConfig | null = null;
   let client: RealtimeClient | null = null;
   let channel: RealtimeChannel | null = null;
@@ -499,6 +534,7 @@ export const connectProjectPresence = (
 
     await channel.track({
       ...activeConfig.user,
+      client_id: clientId,
       resource_id: activeResourceId,
       online_at: new Date().toISOString(),
     });
@@ -509,6 +545,39 @@ export const connectProjectPresence = (
     void publishPresence().catch((error) => {
       if (!closed) console.warn("Supabase Presence update failed.", error);
     });
+  };
+
+  const sendEditorActivity = (
+    kind: ProjectEditorActivityKind,
+    payload: Record<string, unknown>,
+  ) => {
+    if (closed || !subscribed || !channel || !activeConfig || !activeResourceId) {
+      return;
+    }
+
+    activitySequence += 1;
+    void channel
+      .send({
+        type: "broadcast",
+        event: "editor.activity",
+        payload: {
+          client_id: clientId,
+          kind,
+          payload,
+          resource_id: activeResourceId,
+          sent_at: new Date().toISOString(),
+          sequence: activitySequence,
+          user: {
+            id: activeConfig.user.id,
+            email: activeConfig.user.email,
+            username: activeConfig.user.username,
+            avatar_url: activeConfig.user.avatar_url,
+          },
+        } satisfies ProjectEditorActivity,
+      })
+      .catch((error) => {
+        if (!closed) console.warn("Supabase collaboration update failed.", error);
+      });
   };
 
   if (typeof window !== "undefined") {
@@ -547,9 +616,42 @@ export const connectProjectPresence = (
         }
         channel = client.channel(config.channel, {
           config: {
+            broadcast: { ack: false, self: false },
             private: true,
             presence: { enabled: true, key: config.user.id },
           },
+        });
+        channel.on("broadcast", { event: "editor.activity" }, ({ payload }) => {
+          if (closed || !isObject(payload)) return;
+
+          const kind = payload.kind;
+          const validKind =
+            kind === "cursor" ||
+            kind === "document" ||
+            kind === "pixels" ||
+            kind === "selection" ||
+            kind === "sync-request";
+          if (
+            !validKind ||
+            typeof payload.client_id !== "string" ||
+            payload.client_id === clientId ||
+            typeof payload.resource_id !== "string" ||
+            typeof payload.sent_at !== "string" ||
+            typeof payload.sequence !== "number" ||
+            !Number.isSafeInteger(payload.sequence) ||
+            payload.sequence < 1 ||
+            !isObject(payload.user) ||
+            typeof payload.user.id !== "string" ||
+            typeof payload.user.email !== "string" ||
+            (payload.user.username !== undefined &&
+              payload.user.username !== null &&
+              typeof payload.user.username !== "string") ||
+            !isObject(payload.payload)
+          ) {
+            return;
+          }
+
+          onEditorActivity(payload as ProjectEditorActivity);
         });
         channel.on("presence", { event: "sync" }, () => {
           if (!closed && channel) {
@@ -561,6 +663,7 @@ export const connectProjectPresence = (
           if (status === "SUBSCRIBED") {
             subscribed = true;
             queuePresencePublish();
+            sendEditorActivity("sync-request", {});
           } else if (
             status === "CLOSED" ||
             status === "CHANNEL_ERROR" ||
@@ -580,9 +683,13 @@ export const connectProjectPresence = (
   }
 
   return {
+    clientId,
+    sendEditorActivity,
     setResourceId: (resourceId) => {
+      const changed = activeResourceId !== resourceId;
       activeResourceId = resourceId;
       queuePresencePublish();
+      if (changed && resourceId) sendEditorActivity("sync-request", {});
     },
     close: () => {
       if (closed) return;
