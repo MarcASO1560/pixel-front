@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Paintbrush } from "@lucide/vue";
+import paintbrushIcon from "@iconify-icons/mdi/paintbrush";
+import { Icon } from "@iconify/vue";
 import { computed, ref } from "vue";
 
 import type { ProjectPresenceMember } from "../../../lib/realtime";
@@ -78,10 +79,11 @@ const groupLabel = computed(() => {
       <span v-else class="project-presence-avatar__initials" aria-hidden="true">
         {{ initials(member) }}
       </span>
-      <Paintbrush
+      <Icon
         class="project-presence-avatar__status"
-        :size="15"
-        :stroke-width="3.25"
+        :icon="paintbrushIcon"
+        width="16"
+        height="16"
         aria-hidden="true"
       />
     </span>
@@ -150,6 +152,7 @@ const groupLabel = computed(() => {
     color: #6ef3a5;
     display: block;
     overflow: visible;
+    transform: rotate(180deg);
     filter:
       drop-shadow(0 1px 0 #050605)
       drop-shadow(1px 0 0 #050605)
