@@ -223,9 +223,9 @@ onBeforeUnmount(() => {
   @media (max-width: 768px) {
     .image-options-dialog {
       position: fixed;
-      inset: 0;
+      inset: 56px 0 0;
       width: 100vw;
-      height: 100dvh;
+      height: calc(100dvh - 56px);
       margin: 0;
       border: 0;
       border-radius: 0;
