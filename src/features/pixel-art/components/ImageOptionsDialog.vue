@@ -207,7 +207,7 @@ onBeforeUnmount(() => {
     }
   }
 
-  @media (min-width: 641px) and (max-width: 1120px) {
+  @media (min-width: 769px) and (max-width: 1120px) {
     .image-options-dialog {
       inset: 0 0 0 auto;
       width: min(390px, calc(100vw - 48px));
@@ -220,17 +220,15 @@ onBeforeUnmount(() => {
     }
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 768px) {
     .image-options-dialog {
       position: fixed;
-      inset: auto 0 0;
+      inset: 0;
       width: 100vw;
-      height: min(82dvh, 720px);
+      height: 100dvh;
       margin: 0;
-      border-right: 0;
-      border-bottom: 0;
-      border-left: 0;
-      border-radius: 14px 14px 0 0;
+      border: 0;
+      border-radius: 0;
     }
   }
 

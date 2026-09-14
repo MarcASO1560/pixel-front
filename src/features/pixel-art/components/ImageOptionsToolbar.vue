@@ -204,6 +204,7 @@ const navigateOptions = (event: KeyboardEvent) => {
     grid-template-rows: 18px auto;
     grid-template-columns: minmax(0, 1fr);
     gap: 3px;
+    place-items: center;
     width: 100%;
     min-width: 0;
     height: 50px;
@@ -211,6 +212,12 @@ const navigateOptions = (event: KeyboardEvent) => {
     color: #a9a9a9;
     font-size: 10px;
     font-weight: 600;
+    text-align: center;
+  }
+
+  .image-options-toolbar.is-tabs .image-options-toolbar__button > svg {
+    justify-self: center;
+    align-self: center;
   }
 
   .image-options-toolbar.is-tabs .image-options-toolbar__button.is-active {
