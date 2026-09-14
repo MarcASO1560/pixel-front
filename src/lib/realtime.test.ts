@@ -8,7 +8,11 @@ vi.mock("@supabase/realtime-js", () => ({
   RealtimeClient: supabaseMocks.RealtimeClient,
 }));
 
-import { connectUserRealtime } from "./realtime";
+import {
+  connectProjectPresence,
+  connectUserRealtime,
+  groupProjectPresenceState,
+} from "./realtime";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -174,5 +178,150 @@ describe("connectUserRealtime", () => {
     connection.close();
     expect(removeChannel).toHaveBeenCalledWith(channel);
     await vi.waitFor(() => expect(disconnect).toHaveBeenCalledOnce());
+  });
+});
+
+describe("project presence", () => {
+  it("groups presence by resource and deduplicates multiple tabs for one user", () => {
+    expect(
+      groupProjectPresenceState({
+        "user-1": [
+          {
+            id: "user-1",
+            email: "one@example.com",
+            username: "One",
+            resource_id: "resource-1",
+            online_at: "2026-09-14T12:00:00Z",
+          },
+          {
+            id: "user-1",
+            email: "one@example.com",
+            username: "One",
+            resource_id: "resource-1",
+            online_at: "2026-09-14T12:01:00Z",
+          },
+        ],
+        "user-2": [
+          {
+            id: "user-2",
+            email: "two@example.com",
+            username: "Two",
+            resource_id: "resource-2",
+          },
+        ],
+        invalid: [{ id: "invalid", email: "invalid@example.com" }],
+      }),
+    ).toEqual({
+      "resource-1": [
+        expect.objectContaining({
+          id: "user-1",
+          resource_id: "resource-1",
+          online_at: "2026-09-14T12:01:00Z",
+        }),
+      ],
+      "resource-2": [
+        expect.objectContaining({ id: "user-2", resource_id: "resource-2" }),
+      ],
+    });
+  });
+
+  it("tracks the open resource and publishes synchronized project presence", async () => {
+    let presenceSync: (() => void) | undefined;
+    const track = vi.fn(async () => "ok");
+    const untrack = vi.fn(async () => "ok");
+    const state = {
+      "user-1": [
+        {
+          id: "user-1",
+          email: "artist@example.com",
+          username: "Artist",
+          resource_id: "resource-1",
+        },
+      ],
+    };
+    const channel = {
+      on: vi.fn(
+        (
+          type: string,
+          filter: { event: string },
+          handler: () => void,
+        ) => {
+          if (type === "presence" && filter.event === "sync") presenceSync = handler;
+          return channel;
+        },
+      ),
+      presenceState: vi.fn(() => state),
+      subscribe: vi.fn((handler: (status: string) => void) => {
+        handler("SUBSCRIBED");
+        return channel;
+      }),
+      track,
+      untrack,
+    };
+    const disconnect = vi.fn();
+    const removeChannel = vi.fn(async () => "ok");
+    const createChannel = vi.fn(() => channel);
+    supabaseMocks.RealtimeClient.mockImplementation(
+      class {
+        channel = createChannel;
+        disconnect = disconnect;
+        removeChannel = removeChannel;
+      } as unknown as (...args: any[]) => any,
+    );
+    vi.stubGlobal("window", {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            enabled: true,
+            supabase_url: "https://project.supabase.co",
+            publishable_key: "sb_publishable_test",
+            access_token: "realtime-token",
+            expires_at: "2099-09-14T12:00:00Z",
+            channel: "project:project-1:presence",
+            user: {
+              id: "user-1",
+              email: "artist@example.com",
+              username: "Artist",
+              avatar_url: null,
+              avatar_pixel_art: null,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const onSync = vi.fn();
+
+    const connection = connectProjectPresence("project-1", onSync, "resource-1");
+
+    await vi.waitFor(() => {
+      expect(track).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "user-1",
+          resource_id: "resource-1",
+        }),
+      );
+    });
+    expect(createChannel).toHaveBeenCalledWith("project:project-1:presence", {
+      config: {
+        private: true,
+        presence: { enabled: true, key: "user-1" },
+      },
+    });
+
+    presenceSync?.();
+    expect(onSync).toHaveBeenLastCalledWith({
+      "resource-1": [
+        expect.objectContaining({ id: "user-1", resource_id: "resource-1" }),
+      ],
+    });
+
+    connection.setResourceId(null);
+    await vi.waitFor(() => expect(untrack).toHaveBeenCalled());
+    connection.close();
+    await vi.waitFor(() => expect(removeChannel).toHaveBeenCalledWith(channel));
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

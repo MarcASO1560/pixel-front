@@ -32,6 +32,10 @@ import {
   type UserPublic,
   type WorkspaceBootstrap,
 } from "../../../lib/api";
+import {
+  connectProjectPresence,
+  type ProjectPresenceConnection,
+} from "../../../lib/realtime";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
 import {
   clonePixelArtDocument,
@@ -473,6 +477,7 @@ let imageEditorSessionSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 let imageEditorSessionSaveInFlight: Promise<void> | null = null;
 let imageEditorSessionSaveQueued = false;
 let lastSavedImageEditorSession = "";
+let projectPresenceConnection: ProjectPresenceConnection | null = null;
 let imageAutosaveSequence = 0;
 let resourceMutationQueue: Promise<void> = Promise.resolve();
 let personalImagePaletteMutationQueue: Promise<void> = Promise.resolve();
@@ -1566,6 +1571,7 @@ const updateProfile = (user: UserPublic) => {
   imagePaletteUserId.value = user.id;
   personalImagePalette.value = normalizePinnedPaletteColors(user.pixel_art_palette);
   isProfileDialogOpen.value = false;
+  connectResourcePresence();
 };
 
 const emptyImagePixels = (width = imageGridWidth.value, height = imageGridHeight.value) =>
@@ -5056,6 +5062,21 @@ const flushImageBeforePageHide = () => {
   void persistImageEditorSession(true);
 };
 
+const syncResourcePresenceVisibility = () => {
+  projectPresenceConnection?.setResourceId(
+    document.visibilityState === "visible" && resource.value ? props.resourceId : null,
+  );
+};
+
+const connectResourcePresence = () => {
+  projectPresenceConnection?.close();
+  projectPresenceConnection = connectProjectPresence(
+    props.projectId,
+    () => undefined,
+    document.visibilityState === "visible" ? props.resourceId : null,
+  );
+};
+
 const loadEditor = async () => {
   isLoading.value = true;
   isImageEditorSessionReady = false;
@@ -5202,8 +5223,11 @@ onMounted(() => {
   window.addEventListener("beforeunload", warnBeforeImageUnload);
   window.addEventListener("pagehide", flushImageBeforePageHide);
   window.addEventListener("resize", updateImageViewportSize);
+  document.addEventListener("visibilitychange", syncResourcePresenceVisibility);
   updateImageViewportSize();
-  void loadEditor();
+  void loadEditor().then(() => {
+    if (resource.value) connectResourcePresence();
+  });
 });
 
 onUnmounted(() => {
@@ -5215,6 +5239,9 @@ onUnmounted(() => {
   window.removeEventListener("beforeunload", warnBeforeImageUnload);
   window.removeEventListener("pagehide", flushImageBeforePageHide);
   window.removeEventListener("resize", updateImageViewportSize);
+  document.removeEventListener("visibilitychange", syncResourcePresenceVisibility);
+  projectPresenceConnection?.close();
+  projectPresenceConnection = null;
   imageStageResizeObserver?.disconnect();
   imageStageResizeObserver = null;
   imageTouchViewportGesture?.destroy();

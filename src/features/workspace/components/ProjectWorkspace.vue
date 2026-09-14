@@ -30,7 +30,10 @@ import {
   type UserPublic,
 } from "../../../lib/api";
 import {
+  connectProjectPresence,
   connectUserRealtime,
+  type ProjectPresenceConnection,
+  type ProjectPresenceSnapshot,
   type RealtimeConnection,
   type RealtimeEventPayload,
 } from "../../../lib/realtime";
@@ -39,6 +42,7 @@ import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
 import { createPixelArtDocument } from "../../pixel-art/lib/document";
 import { PIXEL_ART_PALETTE } from "../../pixel-art/lib/palette";
 import ProjectEditorDialog from "./ProjectEditorDialog.vue";
+import ProjectPresenceAvatars from "./ProjectPresenceAvatars.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
 
 type ResourceCreateType = "pixel_art" | "pixel_animation" | "sound_effect";
@@ -148,6 +152,8 @@ const projectSyncStartedAt = ref<number | null>(null);
 const lastProjectSyncAt = ref(props.initialProjectWorkspace ? Date.now() : 0);
 const projectSyncIntervalId = ref<number | null>(null);
 const realtimeConnection = ref<RealtimeConnection | null>(null);
+const projectPresenceConnection = ref<ProjectPresenceConnection | null>(null);
+const projectPresenceByResource = ref<ProjectPresenceSnapshot>({});
 const projectRefreshTimeoutId = ref<number | null>(null);
 const errorMessage = ref("");
 const isCreateResourceOpen = ref(false);
@@ -1959,11 +1965,22 @@ const connectRealtimeEvents = () => {
     "project.deleted": handleRealtimeProjectUnavailable,
     "project.access.updated": handleRealtimeProjectAccessUpdated,
   });
+
+  projectPresenceConnection.value?.close();
+  projectPresenceConnection.value = connectProjectPresence(
+    props.projectId,
+    (snapshot) => {
+      projectPresenceByResource.value = snapshot;
+    },
+  );
 };
 
 const disconnectRealtimeEvents = () => {
   realtimeConnection.value?.close();
   realtimeConnection.value = null;
+  projectPresenceConnection.value?.close();
+  projectPresenceConnection.value = null;
+  projectPresenceByResource.value = {};
 
   if (projectRefreshTimeoutId.value !== null) {
     window.clearTimeout(projectRefreshTimeoutId.value);
@@ -2311,6 +2328,13 @@ onUnmounted(() => {
                   >
                     <Pencil :size="15" :stroke-width="2.2" aria-hidden="true" />
                   </button>
+                  <ProjectPresenceAvatars
+                    v-if="
+                      item.kind === 'resource' &&
+                      (projectPresenceByResource[item.id]?.length || 0) > 0
+                    "
+                    :members="projectPresenceByResource[item.id] || []"
+                  />
                 </span>
               </span>
               <span class="project-explorer-cell" role="cell">

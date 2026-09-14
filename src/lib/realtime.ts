@@ -1,6 +1,6 @@
 import { RealtimeClient, type RealtimeChannel } from "@supabase/realtime-js";
 
-import { API_V1_URL } from "./api";
+import { API_V1_URL, type PixelAvatarData } from "./api";
 
 export const REALTIME_EVENT_NAMES = [
   "workspace.updated",
@@ -39,6 +39,40 @@ type EnabledRealtimeConfig = RealtimeConfig & {
   channel: string;
 };
 
+type ProjectPresenceUser = {
+  id: string;
+  username?: string | null;
+  email: string;
+  avatar_url?: string | null;
+  avatar_pixel_art?: PixelAvatarData | null;
+};
+
+type ProjectPresenceConfig = {
+  enabled: boolean;
+  supabase_url?: string | null;
+  publishable_key?: string | null;
+  access_token?: string | null;
+  expires_at?: string | null;
+  channel?: string | null;
+  user?: ProjectPresenceUser | null;
+};
+
+type EnabledProjectPresenceConfig = ProjectPresenceConfig & {
+  supabase_url: string;
+  publishable_key: string;
+  access_token: string;
+  expires_at: string;
+  channel: string;
+  user: ProjectPresenceUser;
+};
+
+export type ProjectPresenceMember = ProjectPresenceUser & {
+  resource_id: string;
+  online_at?: string;
+};
+
+export type ProjectPresenceSnapshot = Record<string, ProjectPresenceMember[]>;
+
 type PersistedRealtimeEvent = {
   id: number;
   event: string;
@@ -48,6 +82,10 @@ type PersistedRealtimeEvent = {
 
 export type RealtimeConnection = {
   close: () => void;
+};
+
+export type ProjectPresenceConnection = RealtimeConnection & {
+  setResourceId: (resourceId: string | null) => void;
 };
 
 const INITIAL_SUBSCRIPTION_TIMEOUT_MS = 8000;
@@ -68,6 +106,20 @@ const fetchRealtimeConfig = async () => {
   return (await response.json()) as RealtimeConfig;
 };
 
+const fetchProjectPresenceConfig = async (projectId: string) => {
+  const response = await fetch(
+    `${API_V1_URL}/events/presence/config?project_id=${encodeURIComponent(projectId)}`,
+    {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Realtime presence configuration failed with ${response.status}`);
+  }
+  return (await response.json()) as ProjectPresenceConfig;
+};
+
 const isSupabaseConfig = (
   config: RealtimeConfig,
 ): config is EnabledRealtimeConfig =>
@@ -77,6 +129,75 @@ const isSupabaseConfig = (
   Boolean(config.access_token) &&
   Boolean(config.expires_at) &&
   Boolean(config.channel);
+
+const isProjectPresenceConfig = (
+  config: ProjectPresenceConfig,
+): config is EnabledProjectPresenceConfig =>
+  config.enabled &&
+  Boolean(config.supabase_url) &&
+  Boolean(config.publishable_key) &&
+  Boolean(config.access_token) &&
+  Boolean(config.expires_at) &&
+  Boolean(config.channel) &&
+  Boolean(config.user?.id) &&
+  Boolean(config.user?.email);
+
+const normalizeProjectPresenceMember = (
+  value: unknown,
+): ProjectPresenceMember | null => {
+  if (!isObject(value)) return null;
+
+  const id = typeof value.id === "string" ? value.id : "";
+  const email = typeof value.email === "string" ? value.email : "";
+  const resourceId = typeof value.resource_id === "string" ? value.resource_id : "";
+  if (!id || !email || !resourceId) return null;
+
+  return {
+    id,
+    email,
+    username: typeof value.username === "string" ? value.username : null,
+    avatar_url: typeof value.avatar_url === "string" ? value.avatar_url : null,
+    avatar_pixel_art: isObject(value.avatar_pixel_art)
+      ? (value.avatar_pixel_art as PixelAvatarData)
+      : null,
+    resource_id: resourceId,
+    online_at: typeof value.online_at === "string" ? value.online_at : undefined,
+  };
+};
+
+export const groupProjectPresenceState = (
+  state: Record<string, unknown[]>,
+): ProjectPresenceSnapshot => {
+  const grouped = new Map<string, Map<string, ProjectPresenceMember>>();
+
+  for (const presences of Object.values(state)) {
+    for (const presence of presences) {
+      const member = normalizeProjectPresenceMember(presence);
+      if (!member) continue;
+
+      const members = grouped.get(member.resource_id) || new Map();
+      const existing = members.get(member.id);
+      if (
+        !existing ||
+        (member.online_at || "").localeCompare(existing.online_at || "") >= 0
+      ) {
+        members.set(member.id, member);
+      }
+      grouped.set(member.resource_id, members);
+    }
+  }
+
+  return Object.fromEntries(
+    [...grouped.entries()].map(([resourceId, members]) => [
+      resourceId,
+      [...members.values()].sort((left, right) =>
+        (left.username || left.email || left.id).localeCompare(
+          right.username || right.email || right.id,
+        ),
+      ),
+    ]),
+  );
+};
 
 const parseSsePayload = (event: Event): RealtimeEventPayload => {
   try {
@@ -293,6 +414,131 @@ export const connectUserRealtime = (
       closed = true;
       cleanup();
       cleanup = () => undefined;
+    },
+  };
+};
+
+export const connectProjectPresence = (
+  projectId: string,
+  onSync: (snapshot: ProjectPresenceSnapshot) => void,
+  initialResourceId: string | null = null,
+): ProjectPresenceConnection => {
+  let closed = false;
+  let activeResourceId = initialResourceId;
+  let activeConfig: EnabledProjectPresenceConfig | null = null;
+  let client: RealtimeClient | null = null;
+  let channel: RealtimeChannel | null = null;
+  let subscribed = false;
+  let tracked = false;
+
+  const publishPresence = async () => {
+    if (closed || !subscribed || !channel || !activeConfig) return;
+    if (!activeResourceId) {
+      if (tracked) {
+        await channel.untrack();
+        tracked = false;
+      }
+      return;
+    }
+
+    await channel.track({
+      ...activeConfig.user,
+      resource_id: activeResourceId,
+      online_at: new Date().toISOString(),
+    });
+    tracked = true;
+  };
+
+  const queuePresencePublish = () => {
+    void publishPresence().catch((error) => {
+      if (!closed) console.warn("Supabase Presence update failed.", error);
+    });
+  };
+
+  if (typeof window !== "undefined") {
+    void (async () => {
+      try {
+        const config = await fetchProjectPresenceConfig(projectId);
+        if (closed || !isProjectPresenceConfig(config)) {
+          onSync({});
+          return;
+        }
+        activeConfig = config;
+
+        const getAccessToken = async () => {
+          if (!activeConfig) return null;
+          const expiresAt = Date.parse(activeConfig.expires_at);
+          if (Number.isFinite(expiresAt) && expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
+            return activeConfig.access_token;
+          }
+
+          const refreshedConfig = await fetchProjectPresenceConfig(projectId);
+          if (!isProjectPresenceConfig(refreshedConfig)) return null;
+          activeConfig = refreshedConfig;
+          return activeConfig.access_token;
+        };
+
+        const realtimeUrl = `${config.supabase_url.replace(/^http/i, "ws")}/realtime/v1`;
+        client = new RealtimeClient(realtimeUrl, {
+          accessToken: getAccessToken,
+          params: { apikey: config.publishable_key },
+        });
+        channel = client.channel(config.channel, {
+          config: {
+            private: true,
+            presence: { enabled: true, key: config.user.id },
+          },
+        });
+        channel.on("presence", { event: "sync" }, () => {
+          if (!closed && channel) {
+            onSync(groupProjectPresenceState(channel.presenceState()));
+          }
+        });
+        channel.subscribe((status) => {
+          if (closed) return;
+          if (status === "SUBSCRIBED") {
+            subscribed = true;
+            queuePresencePublish();
+          } else if (
+            status === "CLOSED" ||
+            status === "CHANNEL_ERROR" ||
+            status === "TIMED_OUT"
+          ) {
+            subscribed = false;
+            onSync({});
+          }
+        });
+      } catch (error) {
+        if (!closed) {
+          console.warn("Supabase Presence unavailable.", error);
+          onSync({});
+        }
+      }
+    })();
+  }
+
+  return {
+    setResourceId: (resourceId) => {
+      activeResourceId = resourceId;
+      queuePresencePublish();
+    },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      subscribed = false;
+      onSync({});
+
+      const currentChannel = channel;
+      const currentClient = client;
+      channel = null;
+      client = null;
+      if (currentChannel && currentClient) {
+        const untrack = tracked
+          ? currentChannel.untrack().catch(() => undefined)
+          : Promise.resolve();
+        tracked = false;
+        void untrack.finally(() => removeSupabaseConnection(currentClient, currentChannel));
+      }
     },
   };
 };
