@@ -5225,8 +5225,11 @@ onMounted(() => {
   window.addEventListener("resize", updateImageViewportSize);
   document.addEventListener("visibilitychange", syncResourcePresenceVisibility);
   updateImageViewportSize();
+  // The route already identifies the resource, so announce presence while the
+  // document, layers, and per-user editor state load in parallel.
+  connectResourcePresence();
   void loadEditor().then(() => {
-    if (resource.value) connectResourcePresence();
+    if (!resource.value) projectPresenceConnection?.setResourceId(null);
   });
 });
 
