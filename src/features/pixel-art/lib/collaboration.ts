@@ -57,10 +57,8 @@ export const readCollaborativeCursor = (
     !Number.isFinite(payload.x) ||
     typeof payload.y !== "number" ||
     !Number.isFinite(payload.y) ||
-    payload.x < 0 ||
-    payload.x >= payload.width ||
-    payload.y < 0 ||
-    payload.y >= payload.height
+    Math.abs(payload.x) > 100000 ||
+    Math.abs(payload.y) > 100000
   ) {
     return null;
   }

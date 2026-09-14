@@ -25,7 +25,7 @@ const activity = (
 });
 
 describe("pixel-art collaboration", () => {
-  it("validates cursor positions against the sender canvas", () => {
+  it("accepts finite cursor positions across the workspace and rejects unsafe offsets", () => {
     expect(
       readCollaborativeCursor(
         activity("cursor", { height: 16, tool: "pencil", visible: true, width: 16, x: 3, y: 4 }),
@@ -33,7 +33,33 @@ describe("pixel-art collaboration", () => {
     ).toEqual({ height: 16, tool: "pencil", visible: true, width: 16, x: 3, y: 4 });
     expect(
       readCollaborativeCursor(
-        activity("cursor", { height: 16, tool: "pencil", visible: true, width: 16, x: 16, y: 4 }),
+        activity("cursor", {
+          height: 16,
+          tool: "pencil",
+          visible: true,
+          width: 16,
+          x: -8.5,
+          y: 20.25,
+        }),
+      ),
+    ).toEqual({
+      height: 16,
+      tool: "pencil",
+      visible: true,
+      width: 16,
+      x: -8.5,
+      y: 20.25,
+    });
+    expect(
+      readCollaborativeCursor(
+        activity("cursor", {
+          height: 16,
+          tool: "pencil",
+          visible: true,
+          width: 16,
+          x: 100001,
+          y: 4,
+        }),
       ),
     ).toBeNull();
   });

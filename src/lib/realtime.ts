@@ -556,6 +556,9 @@ export const connectProjectPresence = (
     }
 
     activitySequence += 1;
+    const includePixelAvatar =
+      kind === "sync-request" ||
+      (kind === "document" && typeof payload.target_client_id === "string");
     void channel
       .send({
         type: "broadcast",
@@ -572,6 +575,9 @@ export const connectProjectPresence = (
             email: activeConfig.user.email,
             username: activeConfig.user.username,
             avatar_url: activeConfig.user.avatar_url,
+            ...(includePixelAvatar
+              ? { avatar_pixel_art: activeConfig.user.avatar_pixel_art }
+              : {}),
           },
         } satisfies ProjectEditorActivity,
       })
@@ -646,6 +652,9 @@ export const connectProjectPresence = (
             (payload.user.username !== undefined &&
               payload.user.username !== null &&
               typeof payload.user.username !== "string") ||
+            (payload.user.avatar_pixel_art !== undefined &&
+              payload.user.avatar_pixel_art !== null &&
+              !isObject(payload.user.avatar_pixel_art)) ||
             !isObject(payload.payload)
           ) {
             return;
