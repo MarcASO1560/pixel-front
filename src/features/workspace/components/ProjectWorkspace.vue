@@ -29,6 +29,11 @@ import {
   type ProjectWorkspaceBootstrap,
   type UserPublic,
 } from "../../../lib/api";
+import {
+  connectUserRealtime,
+  type RealtimeConnection,
+  type RealtimeEventPayload,
+} from "../../../lib/realtime";
 import StudioTopbarCommandBar from "../../navigation/components/StudioTopbarCommandBar.vue";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
 import { createPixelArtDocument } from "../../pixel-art/lib/document";
@@ -142,7 +147,7 @@ const isSyncingProject = ref(false);
 const projectSyncStartedAt = ref<number | null>(null);
 const lastProjectSyncAt = ref(props.initialProjectWorkspace ? Date.now() : 0);
 const projectSyncIntervalId = ref<number | null>(null);
-const realtimeEventSource = ref<EventSource | null>(null);
+const realtimeConnection = ref<RealtimeConnection | null>(null);
 const projectRefreshTimeoutId = ref<number | null>(null);
 const errorMessage = ref("");
 const isCreateResourceOpen = ref(false);
@@ -1907,30 +1912,18 @@ const scheduleProjectRefresh = ({ showError = false } = {}) => {
   }, REALTIME_REFRESH_DELAY_MS);
 };
 
-const readRealtimePayload = (event: Event) => {
-  try {
-    return JSON.parse((event as MessageEvent<string>).data) as {
-      project_id?: string;
-      actor_id?: string;
-    };
-  } catch {
-    return {};
-  }
-};
-
-const isCurrentProjectRealtimeEvent = (event: Event) => {
-  const payload = readRealtimePayload(event);
+const isCurrentProjectRealtimeEvent = (payload: RealtimeEventPayload) => {
   return payload.project_id === props.projectId;
 };
 
-const handleRealtimeProjectUpdated = (event: Event) => {
-  if (isCurrentProjectRealtimeEvent(event)) {
+const handleRealtimeProjectUpdated = (payload: RealtimeEventPayload) => {
+  if (isCurrentProjectRealtimeEvent(payload)) {
     scheduleProjectRefresh();
   }
 };
 
-const handleRealtimeProjectUnavailable = (event: Event) => {
-  if (!isCurrentProjectRealtimeEvent(event)) {
+const handleRealtimeProjectUnavailable = (payload: RealtimeEventPayload) => {
+  if (!isCurrentProjectRealtimeEvent(payload)) {
     return;
   }
 
@@ -1949,31 +1942,28 @@ const handleRealtimeProjectUnavailable = (event: Event) => {
   errorMessage.value = "This project is no longer available.";
 };
 
-const handleRealtimeProjectAccessUpdated = (event: Event) => {
-  if (isCurrentProjectRealtimeEvent(event)) {
+const handleRealtimeProjectAccessUpdated = (payload: RealtimeEventPayload) => {
+  if (isCurrentProjectRealtimeEvent(payload)) {
     scheduleProjectRefresh({ showError: true });
   }
 };
 
 const connectRealtimeEvents = () => {
-  if (typeof window === "undefined" || !("EventSource" in window)) {
+  if (typeof window === "undefined") {
     return;
   }
 
-  realtimeEventSource.value?.close();
-  const source = new EventSource(`${API_V1_URL}/events/stream`, {
-    withCredentials: true,
+  realtimeConnection.value?.close();
+  realtimeConnection.value = connectUserRealtime({
+    "project.updated": handleRealtimeProjectUpdated,
+    "project.deleted": handleRealtimeProjectUnavailable,
+    "project.access.updated": handleRealtimeProjectAccessUpdated,
   });
-  realtimeEventSource.value = source;
-
-  source.addEventListener("project.updated", handleRealtimeProjectUpdated);
-  source.addEventListener("project.deleted", handleRealtimeProjectUnavailable);
-  source.addEventListener("project.access.updated", handleRealtimeProjectAccessUpdated);
 };
 
 const disconnectRealtimeEvents = () => {
-  realtimeEventSource.value?.close();
-  realtimeEventSource.value = null;
+  realtimeConnection.value?.close();
+  realtimeConnection.value = null;
 
   if (projectRefreshTimeoutId.value !== null) {
     window.clearTimeout(projectRefreshTimeoutId.value);
@@ -1987,10 +1977,7 @@ const syncSharedProjectState = () => {
   }
 
   resetStaleProjectSync();
-  if (
-    realtimeEventSource.value &&
-    realtimeEventSource.value.readyState === EventSource.CLOSED
-  ) {
+  if (!realtimeConnection.value) {
     connectRealtimeEvents();
   }
   if (Date.now() - lastProjectSyncAt.value < PROJECT_SYNC_FOCUS_COOLDOWN_MS) {

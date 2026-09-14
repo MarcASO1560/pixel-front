@@ -11,6 +11,11 @@ import {
   type UserPublic,
   type WorkspaceBootstrap,
 } from "../../../lib/api";
+import {
+  connectUserRealtime,
+  type RealtimeConnection,
+  type RealtimeEventPayload,
+} from "../../../lib/realtime";
 import { WORKSPACE_TRANSITION_STORAGE_KEY } from "../../../lib/routeTransition";
 import StudioTopbarCommandBar from "../../navigation/components/StudioTopbarCommandBar.vue";
 import StudioTopbar from "../../navigation/components/StudioTopbar.vue";
@@ -60,7 +65,7 @@ const loadMessage = ref("");
 const loadMessageTimeoutId = ref<number | null>(null);
 const workspaceSyncIntervalId = ref<number | null>(null);
 const projectAccessSyncIntervalId = ref<number | null>(null);
-const realtimeEventSource = ref<EventSource | null>(null);
+const realtimeConnection = ref<RealtimeConnection | null>(null);
 const workspaceRefreshTimeoutId = ref<number | null>(null);
 const accessRefreshTimeoutId = ref<number | null>(null);
 const activeMenuProjectId = ref<string | null>(null);
@@ -1167,10 +1172,7 @@ const syncSharedState = () => {
 
   resetStaleWorkspaceSync();
   resetStaleProjectAccessSync();
-  if (
-    realtimeEventSource.value &&
-    realtimeEventSource.value.readyState === EventSource.CLOSED
-  ) {
+  if (!realtimeConnection.value) {
     connectRealtimeEvents();
   }
   void refreshWorkspace();
@@ -1203,23 +1205,11 @@ const scheduleProjectAccessRefresh = (projectId?: string) => {
   }, REALTIME_REFRESH_DELAY_MS);
 };
 
-const readRealtimePayload = (event: Event) => {
-  try {
-    return JSON.parse((event as MessageEvent<string>).data) as {
-      project_id?: string;
-      actor_id?: string;
-    };
-  } catch {
-    return {};
-  }
-};
-
 const handleRealtimeWorkspaceEvent = () => {
   scheduleWorkspaceRefresh();
 };
 
-const handleRealtimeProjectEvent = (event: Event) => {
-  const payload = readRealtimePayload(event);
+const handleRealtimeProjectEvent = (payload: RealtimeEventPayload) => {
   scheduleWorkspaceRefresh();
 
   if (payload.project_id) {
@@ -1238,26 +1228,23 @@ const handleRealtimeProjectEvent = (event: Event) => {
 };
 
 const connectRealtimeEvents = () => {
-  if (typeof window === "undefined" || !("EventSource" in window)) {
+  if (typeof window === "undefined") {
     return;
   }
 
-  realtimeEventSource.value?.close();
-  const source = new EventSource(`${API_V1_URL}/events/stream`, {
-    withCredentials: true,
+  realtimeConnection.value?.close();
+  realtimeConnection.value = connectUserRealtime({
+    "workspace.updated": handleRealtimeWorkspaceEvent,
+    "project.updated": handleRealtimeProjectEvent,
+    "project.deleted": handleRealtimeProjectEvent,
+    "project.access.updated": handleRealtimeProjectEvent,
+    "project.share.updated": handleRealtimeProjectEvent,
   });
-  realtimeEventSource.value = source;
-
-  source.addEventListener("workspace.updated", handleRealtimeWorkspaceEvent);
-  source.addEventListener("project.updated", handleRealtimeProjectEvent);
-  source.addEventListener("project.deleted", handleRealtimeProjectEvent);
-  source.addEventListener("project.access.updated", handleRealtimeProjectEvent);
-  source.addEventListener("project.share.updated", handleRealtimeProjectEvent);
 };
 
 const disconnectRealtimeEvents = () => {
-  realtimeEventSource.value?.close();
-  realtimeEventSource.value = null;
+  realtimeConnection.value?.close();
+  realtimeConnection.value = null;
 
   if (workspaceRefreshTimeoutId.value !== null) {
     window.clearTimeout(workspaceRefreshTimeoutId.value);
