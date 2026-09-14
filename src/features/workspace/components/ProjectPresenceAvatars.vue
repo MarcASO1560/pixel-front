@@ -82,8 +82,8 @@ const groupLabel = computed(() => {
       <Icon
         class="project-presence-avatar__status"
         :icon="paintbrushIcon"
-        width="16"
-        height="16"
+        width="18"
+        height="18"
         aria-hidden="true"
       />
     </span>
@@ -105,8 +105,8 @@ const groupLabel = computed(() => {
     display: grid;
     flex: 0 0 auto;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 32px;
+    height: 32px;
     overflow: visible;
     color: #171817;
     background: #c9f56a;
@@ -117,7 +117,7 @@ const groupLabel = computed(() => {
   }
 
   .project-presence-avatar + .project-presence-avatar {
-    margin-left: -7px;
+    margin-left: -9px;
   }
 
   .project-presence-avatar:hover {
@@ -147,8 +147,8 @@ const groupLabel = computed(() => {
 
   .project-presence-avatar__status {
     position: absolute;
-    right: -6px;
-    bottom: -5px;
+    right: -7px;
+    bottom: -6px;
     color: #6ef3a5;
     display: block;
     overflow: visible;
@@ -161,8 +161,8 @@ const groupLabel = computed(() => {
 
   @media (max-width: 720px) {
     .project-presence-avatar {
-      width: 23px;
-      height: 23px;
+      width: 28px;
+      height: 28px;
     }
 
     .project-presence-avatar + .project-presence-avatar {
