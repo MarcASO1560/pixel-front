@@ -359,6 +359,14 @@ export const connectUserRealtime = (
         accessToken: getAccessToken,
         params: { apikey: activeConfig.publishable_key },
       });
+      // RealtimeClient starts resolving callback-based auth when the socket connects.
+      // Resolve the initial token first so a private channel cannot race its first join
+      // with an anonymous payload and be rejected by Realtime Authorization.
+      await client.setAuth(activeConfig.access_token);
+      if (closed) {
+        client.disconnect();
+        return;
+      }
       const channel = client.channel(activeConfig.channel, {
         config: { private: true },
       });
@@ -483,6 +491,12 @@ export const connectProjectPresence = (
           accessToken: getAccessToken,
           params: { apikey: config.publishable_key },
         });
+        await client.setAuth(config.access_token);
+        if (closed) {
+          client.disconnect();
+          client = null;
+          return;
+        }
         channel = client.channel(config.channel, {
           config: {
             private: true,

@@ -92,11 +92,13 @@ describe("connectUserRealtime", () => {
     };
     const disconnect = vi.fn();
     const removeChannel = vi.fn(async () => "ok");
+    const setAuth = vi.fn(async () => undefined);
     supabaseMocks.RealtimeClient.mockImplementation(
       class {
         channel = vi.fn(() => channel);
         disconnect = disconnect;
         removeChannel = removeChannel;
+        setAuth = setAuth;
       } as unknown as (...args: any[]) => any,
     );
     vi.stubGlobal("window", {
@@ -163,6 +165,10 @@ describe("connectUserRealtime", () => {
       "broadcast",
       { event: "project.updated" },
       expect.any(Function),
+    );
+    expect(setAuth).toHaveBeenCalledWith("realtime-token");
+    expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      channel.subscribe.mock.invocationCallOrder[0]!,
     );
 
     broadcastHandlers.get("project.updated")?.({
@@ -261,11 +267,13 @@ describe("project presence", () => {
     const disconnect = vi.fn();
     const removeChannel = vi.fn(async () => "ok");
     const createChannel = vi.fn(() => channel);
+    const setAuth = vi.fn(async () => undefined);
     supabaseMocks.RealtimeClient.mockImplementation(
       class {
         channel = createChannel;
         disconnect = disconnect;
         removeChannel = removeChannel;
+        setAuth = setAuth;
       } as unknown as (...args: any[]) => any,
     );
     vi.stubGlobal("window", {});
@@ -310,6 +318,10 @@ describe("project presence", () => {
         presence: { enabled: true, key: "user-1" },
       },
     });
+    expect(setAuth).toHaveBeenCalledWith("realtime-token");
+    expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      channel.subscribe.mock.invocationCallOrder[0]!,
+    );
 
     presenceSync?.();
     expect(onSync).toHaveBeenLastCalledWith({
