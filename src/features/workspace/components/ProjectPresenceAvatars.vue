@@ -78,9 +78,12 @@ const groupLabel = computed(() => {
       <span v-else class="project-presence-avatar__initials" aria-hidden="true">
         {{ initials(member) }}
       </span>
-      <span class="project-presence-avatar__status" aria-hidden="true">
-        <Paintbrush :size="8" :stroke-width="3" />
-      </span>
+      <Paintbrush
+        class="project-presence-avatar__status"
+        :size="15"
+        :stroke-width="3.25"
+        aria-hidden="true"
+      />
     </span>
   </span>
 </template>
@@ -142,21 +145,15 @@ const groupLabel = computed(() => {
 
   .project-presence-avatar__status {
     position: absolute;
-    right: -4px;
-    bottom: -3px;
-    display: grid;
-    place-items: center;
-    width: 13px;
-    height: 13px;
+    right: -6px;
+    bottom: -5px;
     color: #6ef3a5;
-    background: #111212;
-    border: 1px solid rgba(255, 252, 244, 0.72);
-    border-radius: 50%;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
-  }
-
-  .project-presence-avatar__status svg {
     display: block;
+    overflow: visible;
+    filter:
+      drop-shadow(0 1px 0 #050605)
+      drop-shadow(1px 0 0 #050605)
+      drop-shadow(-1px 0 0 #050605);
   }
 
   @media (max-width: 720px) {
