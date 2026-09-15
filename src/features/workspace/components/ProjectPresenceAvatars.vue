@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import paintbrushIcon from "@iconify-icons/mdi/paintbrush";
-import { Icon } from "@iconify/vue";
+import fileDocumentOutlineIcon from "@iconify-icons/mdi/file-document-outline";
+import fileImageIcon from "@iconify-icons/mdi/file-image";
+import filmstripIcon from "@iconify-icons/mdi/filmstrip";
+import volumeHighIcon from "@iconify-icons/mdi/volume-high";
+import { Icon, type IconifyIcon } from "@iconify/vue";
 import { computed, ref } from "vue";
 
 import type { ProjectPresenceMember } from "../../../lib/realtime";
 
 const props = defineProps<{
   members: ProjectPresenceMember[];
+  resourceTypesById: Record<string, string>;
 }>();
+
+const presenceIconsByResourceType: Record<string, IconifyIcon> = {
+  pixel_art: fileImageIcon,
+  pixel_animation: filmstripIcon,
+  tileset: fileImageIcon,
+  music_track: volumeHighIcon,
+  sound_effect: volumeHighIcon,
+  text: fileDocumentOutlineIcon,
+};
 
 const failedAvatarIds = ref(new Set<string>());
 
@@ -29,6 +42,11 @@ const canShowImageAvatar = (member: ProjectPresenceMember) =>
 
 const markAvatarFailed = (member: ProjectPresenceMember) => {
   failedAvatarIds.value = new Set([...failedAvatarIds.value, member.id]);
+};
+
+const presenceIcon = (member: ProjectPresenceMember) => {
+  const resourceType = props.resourceTypesById[member.resource_id];
+  return presenceIconsByResourceType[resourceType || ""] || fileImageIcon;
 };
 
 const groupLabel = computed(() => {
@@ -81,7 +99,7 @@ const groupLabel = computed(() => {
       </span>
       <Icon
         class="project-presence-avatar__status"
-        :icon="paintbrushIcon"
+        :icon="presenceIcon(member)"
         width="18"
         height="18"
         aria-hidden="true"
@@ -152,7 +170,6 @@ const groupLabel = computed(() => {
     color: #6ef3a5;
     display: block;
     overflow: visible;
-    transform: rotate(180deg);
     filter:
       drop-shadow(0 1px 0 #050605)
       drop-shadow(1px 0 0 #050605)

@@ -276,6 +276,11 @@ const allProjectResources = computed(() => [
   ...(tree.value?.resources ?? []),
   ...localResources.value,
 ]);
+const projectResourceTypesById = computed<Record<string, string>>(() =>
+  Object.fromEntries(
+    allProjectResources.value.map((resource) => [resource.id, resource.type]),
+  ),
+);
 const projectPresenceByFolder = computed(() =>
   aggregateProjectPresenceByFolder(
     projectPresenceByResource.value,
@@ -2356,6 +2361,7 @@ onUnmounted(() => {
                   <ProjectPresenceAvatars
                     v-if="projectPresenceForExplorerItem(item).length > 0"
                     :members="projectPresenceForExplorerItem(item)"
+                    :resource-types-by-id="projectResourceTypesById"
                   />
                 </span>
               </span>
