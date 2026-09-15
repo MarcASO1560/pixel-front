@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import animationPlayIcon from "@iconify-icons/mdi/animation-play";
 import cursorDefaultClickOutlineIcon from "@iconify-icons/mdi/cursor-default-click-outline";
 import featherIcon from "@iconify-icons/mdi/feather";
+import movieOpenIcon from "@iconify-icons/mdi/movie-open";
 import paintbrushIcon from "@iconify-icons/mdi/paintbrush";
-import waveformIcon from "@iconify-icons/mdi/waveform";
 import { Icon, type IconifyIcon } from "@iconify/vue";
 import { computed, ref } from "vue";
 
@@ -14,12 +13,18 @@ const props = defineProps<{
   resourceTypesById: Record<string, string>;
 }>();
 
+const conductorBatonIcon: IconifyIcon = {
+  width: 24,
+  height: 24,
+  body: '<path fill="currentColor" d="M21.65 2.35a1.2 1.2 0 0 0-1.7 0L8.72 13.58l1.7 1.7L21.65 4.05a1.2 1.2 0 0 0 0-1.7M9.9 14.1c1.57 1.57 1.57 4.12 0 5.69l-1.07 1.07a3.2 3.2 0 0 1-4.53-4.53l1.07-1.07A4.02 4.02 0 0 1 9.9 14.1Z"/>',
+};
+
 const presenceIconsByResourceType: Record<string, IconifyIcon> = {
   pixel_art: paintbrushIcon,
-  pixel_animation: animationPlayIcon,
+  pixel_animation: movieOpenIcon,
   tileset: paintbrushIcon,
-  music_track: waveformIcon,
-  sound_effect: waveformIcon,
+  music_track: conductorBatonIcon,
+  sound_effect: conductorBatonIcon,
   text: featherIcon,
 };
 
