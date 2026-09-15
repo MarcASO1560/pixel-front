@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import fileDocumentOutlineIcon from "@iconify-icons/mdi/file-document-outline";
-import fileImageIcon from "@iconify-icons/mdi/file-image";
-import filmstripIcon from "@iconify-icons/mdi/filmstrip";
-import volumeHighIcon from "@iconify-icons/mdi/volume-high";
+import animationPlayIcon from "@iconify-icons/mdi/animation-play";
+import cursorDefaultClickOutlineIcon from "@iconify-icons/mdi/cursor-default-click-outline";
+import featherIcon from "@iconify-icons/mdi/feather";
+import paintbrushIcon from "@iconify-icons/mdi/paintbrush";
+import waveformIcon from "@iconify-icons/mdi/waveform";
 import { Icon, type IconifyIcon } from "@iconify/vue";
 import { computed, ref } from "vue";
 
@@ -14,12 +15,12 @@ const props = defineProps<{
 }>();
 
 const presenceIconsByResourceType: Record<string, IconifyIcon> = {
-  pixel_art: fileImageIcon,
-  pixel_animation: filmstripIcon,
-  tileset: fileImageIcon,
-  music_track: volumeHighIcon,
-  sound_effect: volumeHighIcon,
-  text: fileDocumentOutlineIcon,
+  pixel_art: paintbrushIcon,
+  pixel_animation: animationPlayIcon,
+  tileset: paintbrushIcon,
+  music_track: waveformIcon,
+  sound_effect: waveformIcon,
+  text: featherIcon,
 };
 
 const failedAvatarIds = ref(new Set<string>());
@@ -46,7 +47,12 @@ const markAvatarFailed = (member: ProjectPresenceMember) => {
 
 const presenceIcon = (member: ProjectPresenceMember) => {
   const resourceType = props.resourceTypesById[member.resource_id];
-  return presenceIconsByResourceType[resourceType || ""] || fileImageIcon;
+  return presenceIconsByResourceType[resourceType || ""] || cursorDefaultClickOutlineIcon;
+};
+
+const isDrawingPresence = (member: ProjectPresenceMember) => {
+  const resourceType = props.resourceTypesById[member.resource_id];
+  return resourceType === "pixel_art" || resourceType === "tileset";
 };
 
 const groupLabel = computed(() => {
@@ -99,6 +105,7 @@ const groupLabel = computed(() => {
       </span>
       <Icon
         class="project-presence-avatar__status"
+        :class="{ 'is-drawing': isDrawingPresence(member) }"
         :icon="presenceIcon(member)"
         width="18"
         height="18"
@@ -174,6 +181,10 @@ const groupLabel = computed(() => {
       drop-shadow(0 1px 0 #050605)
       drop-shadow(1px 0 0 #050605)
       drop-shadow(-1px 0 0 #050605);
+  }
+
+  .project-presence-avatar__status.is-drawing {
+    transform: rotate(180deg);
   }
 
   @media (max-width: 720px) {
