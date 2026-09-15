@@ -2,6 +2,7 @@
 import {
   Ellipse,
   Eraser,
+  LassoSelect,
   Minus,
   Move,
   PaintBucket,
@@ -10,14 +11,18 @@ import {
   RectangleHorizontal,
   SprayCan,
   SquareDashed,
+  WandSparkles,
 } from "@lucide/vue";
 
-import type { ImageTool } from "../types";
+import type { ImageSelectionKind, ImageTool } from "../types";
 
-defineProps<{
+const props = withDefaults(defineProps<{
   activeTool: ImageTool;
   canEdit: boolean;
-}>();
+  selectionTool?: ImageSelectionKind;
+}>(), {
+  selectionTool: "rectangle",
+});
 
 const emit = defineEmits<{
   "select-tool": [tool: ImageTool];
@@ -75,11 +80,29 @@ const navigateTools = (event: KeyboardEvent) => {
 };
 
 const getToolAriaLabel = (tool: (typeof tools)[number]) =>
-  tool.value === "graffiti" ? "Graffiti checker brush" : tool.label;
+  tool.value === "graffiti"
+    ? "Graffiti checker brush"
+    : tool.value === "select"
+      ? `${selectionToolLabels[props.selectionTool]} selection`
+      : tool.label;
 const getToolTitle = (tool: (typeof tools)[number]) =>
   tool.value === "graffiti"
     ? `Graffiti · two-color checker · Right click reverses (${tool.shortcut})`
-    : `${tool.label} (${tool.shortcut})`;
+    : tool.value === "select"
+      ? `${selectionToolLabels[props.selectionTool]} selection (${tool.shortcut})`
+      : `${tool.label} (${tool.shortcut})`;
+const selectionToolIcons = {
+  rectangle: SquareDashed,
+  lasso: LassoSelect,
+  wand: WandSparkles,
+} as const satisfies Record<ImageSelectionKind, typeof SquareDashed>;
+const selectionToolLabels: Record<ImageSelectionKind, string> = {
+  rectangle: "Rectangular",
+  lasso: "Freehand",
+  wand: "Magic wand",
+};
+const getToolIcon = (tool: (typeof tools)[number]) =>
+  tool.value === "select" ? selectionToolIcons[props.selectionTool] : tool.icon;
 </script>
 
 <template>
@@ -104,7 +127,7 @@ const getToolTitle = (tool: (typeof tools)[number]) =>
       :title="getToolTitle(tool)"
       @click="emit('select-tool', tool.value)"
     >
-      <component :is="tool.icon" :size="17" :stroke-width="2" aria-hidden="true" />
+      <component :is="getToolIcon(tool)" :size="17" :stroke-width="2" aria-hidden="true" />
     </button>
   </div>
 </template>

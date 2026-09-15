@@ -15,6 +15,11 @@ describe("normalizeImageEditorSession", () => {
       brushSize: 6,
       brushShape: "circle",
       shapeFilled: true,
+      selectionOptions: {
+        kind: "wand",
+        mode: "add",
+        contiguous: false,
+      },
       lastInspectorPanel: "transform",
       preferences: {
         ...DEFAULT_IMAGE_EDITOR_SESSION.preferences,
@@ -43,6 +48,11 @@ describe("normalizeImageEditorSession", () => {
       brushSize: 6,
       brushShape: "circle",
       shapeFilled: true,
+      selectionOptions: {
+        kind: "wand",
+        mode: "add",
+        contiguous: false,
+      },
       lastInspectorPanel: "transform",
       viewport: { mode: "custom", panX: 42, panY: -18 },
       canvasModes: {
@@ -61,6 +71,7 @@ describe("normalizeImageEditorSession", () => {
       activeTool: "laser",
       brushSize: 99,
       primaryColor: "red",
+      selectionOptions: { kind: "polygon", mode: "xor", contiguous: "yes" },
       selection: { x: 0, y: 0, width: 1, height: 1 },
       clipboard: ["#FFFFFF"],
       history: ["old snapshot"],
@@ -70,6 +81,9 @@ describe("normalizeImageEditorSession", () => {
     expect(session.activeTool).toBe("pencil");
     expect(session.brushSize).toBe(8);
     expect(session.primaryColor).toBe("#FFFFFF");
+    expect(session.selectionOptions).toEqual(
+      DEFAULT_IMAGE_EDITOR_SESSION.selectionOptions,
+    );
     expect(session.viewport).toEqual(DEFAULT_IMAGE_EDITOR_SESSION.viewport);
     expect(session).not.toHaveProperty("selection");
     expect(session).not.toHaveProperty("clipboard");

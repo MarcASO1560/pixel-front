@@ -67,8 +67,6 @@ import {
   flipBlock,
   linePoints,
   moveLayer,
-  moveRegion,
-  normalizeSelection,
   paintPixels,
   placeBlock,
   rectanglePoints,
@@ -119,6 +117,16 @@ import {
 } from "../../pixel-art/lib/pointerColorIntent";
 import { isSinglePixelSelectionGesture } from "../../pixel-art/lib/selectionInteraction";
 import {
+  combineSelectionMasks,
+  createLassoSelectionMask,
+  createMagicWandSelectionMask,
+  createPixelSelectionMask,
+  createPointSelectionMask,
+  createRectangleSelectionMask,
+  isPixelSelected,
+  type PixelSelectionMask,
+} from "../../pixel-art/lib/selectionMask";
+import {
   calculateImagePreviewSize,
   clipImagePreviewPolygonToBounds,
   IMAGE_PREVIEW_MAX_SIZE,
@@ -145,6 +153,7 @@ import {
   readCollaborativeDocument,
   readCollaborativePixelPatch,
   readCollaborativeSelection,
+  serializeCollaborativeSelection,
 } from "../../pixel-art/lib/collaboration";
 import {
   exportPixelArtJsonBlob,
@@ -171,6 +180,8 @@ import type {
   ImageEditorSnapshot,
   ImageResizeAnchor,
   ImageSelection,
+  ImageSelectionKind,
+  ImageSelectionMode,
   ImageTool,
   PixelArtDocumentV2,
   PixelColor,
@@ -283,6 +294,11 @@ type RemoteImageCollaborator = {
   x: number;
   y: number;
 };
+type ImageSelectionClipboard = {
+  block: PixelBlock;
+  kind: ImageSelectionKind;
+  mask: PixelSelectionMask;
+};
 
 const props = defineProps<{
   projectId: string;
@@ -336,7 +352,7 @@ const IMAGE_ROTATION_MIN_POINTER_RADIUS = 24;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_COLLABORATION_CURSOR_INTERVAL_MS = 32;
 const IMAGE_COLLABORATION_PIXEL_INTERVAL_MS = 24;
-const IMAGE_COLLABORATION_SELECTION_INTERVAL_MS = 40;
+const IMAGE_COLLABORATION_SELECTION_INTERVAL_MS = 64;
 const IMAGE_COLLABORATOR_STALE_MS = 12000;
 const IMAGE_PALETTE = PIXEL_ART_PALETTE;
 const DEFAULT_PENCIL_COLOR = IMAGE_PALETTE[0] || "#ffffff";
@@ -386,6 +402,9 @@ const initialImageDocument = createPixelArtDocument(DEFAULT_IMAGE_WIDTH, DEFAULT
 const imageLayers = shallowRef<PixelLayer[]>(initialImageDocument.layers);
 const activeImageLayerId = ref(initialImageDocument.layers[0]?.id || "");
 const imageSelection = ref<ImageSelection | null>(null);
+const imageSelectionKind = ref<ImageSelectionKind>("rectangle");
+const imageSelectionMode = ref<ImageSelectionMode>("replace");
+const isImageSelectionContiguous = ref(true);
 const selectedImageColor = ref(DEFAULT_PENCIL_COLOR);
 const selectedImageColorDraft = ref(DEFAULT_PENCIL_COLOR.toUpperCase());
 const secondaryImageColor = ref("#000000");
@@ -399,7 +418,7 @@ const isImageShapeFilled = ref(false);
 const imageShapePreviewPoints = shallowRef<Point[]>([]);
 const imagePointerStart = ref<Point | null>(null);
 const imagePointerEnd = ref<Point | null>(null);
-const imageClipboard = ref<PixelBlock | null>(null);
+const imageClipboard = ref<ImageSelectionClipboard | null>(null);
 const imageResizeAnchor = ref<ImageResizeAnchor>(DEFAULT_IMAGE_RESIZE_ANCHOR);
 const activeImageInspectorPanel = ref<ImageInspectorPanel | null>(null);
 const lastImageInspectorPanel = ref<ImageInspectorPanel>("resize");
@@ -490,6 +509,11 @@ let imageMoveSourceBuffer: PixelBuffer | null = null;
 let imageMoveSourceSelection: ImageSelection | null = null;
 let imageMoveDidChange = false;
 let imageSelectionDidDrag = false;
+let imageSelectionGestureBase: ImageSelection | null = null;
+let imageSelectionGestureKind: ImageSelectionKind = "rectangle";
+let imageSelectionGestureMode: ImageSelectionMode = "replace";
+let imageSelectionLassoPoints: Point[] = [];
+let imageSelectionGestureTileOffset: Point | null = null;
 let imagePanPointerId: number | null = null;
 let imagePanPointerClientX = 0;
 let imagePanPointerClientY = 0;
@@ -533,7 +557,10 @@ let imageCollaborationCursorTimeout: ReturnType<typeof setTimeout> | null = null
 let imageCollaborationSelectionTimeout: ReturnType<typeof setTimeout> | null = null;
 let imageCollaborationCleanupInterval: ReturnType<typeof setInterval> | null = null;
 let pendingImageCollaborationCursor: Record<string, unknown> | null = null;
-let pendingImageCollaborationSelection: Record<string, unknown> | null = null;
+let pendingImageCollaborationSelection: Readonly<{
+  mode: ImageSelectionMode;
+  selection: ImageSelection | null;
+}> | null = null;
 let lastImageCollaborationCursorPosition: Readonly<{ x: number; y: number }> | null = null;
 let lastImageCollaborationCursorAt = 0;
 let lastImageCollaborationSelectionAt = 0;
@@ -1008,6 +1035,174 @@ const imageCanvasBounds = computed(() => ({
   height: imageGridHeight.value,
   width: imageGridWidth.value,
 }));
+const cloneImageSelection = (selection: ImageSelection | null): ImageSelection | null =>
+  selection
+    ? {
+        ...selection,
+        mask: selection.mask
+          ? {
+              width: selection.mask.width,
+              height: selection.mask.height,
+              data: selection.mask.data.slice(),
+            }
+          : undefined,
+      }
+    : null;
+const imageSelectionToPixelMask = (
+  selection: ImageSelection | null,
+  dimensions = imageCanvasBounds.value,
+): PixelSelectionMask | null => {
+  if (!selection || selection.width <= 0 || selection.height <= 0) return null;
+  const mask = selection.mask;
+  if (
+    mask &&
+    mask.width === dimensions.width &&
+    mask.height === dimensions.height &&
+    mask.data.length === mask.width * mask.height
+  ) {
+    return {
+      width: mask.width,
+      height: mask.height,
+      data: mask.data,
+      bounds: {
+        x: selection.x,
+        y: selection.y,
+        width: selection.width,
+        height: selection.height,
+      },
+    };
+  }
+
+  return createRectangleSelectionMask(
+    { x: selection.x, y: selection.y },
+    {
+      x: selection.x + selection.width - 1,
+      y: selection.y + selection.height - 1,
+    },
+    dimensions,
+  );
+};
+const imageSelectionFromPixelMask = (
+  mask: PixelSelectionMask,
+  kind: ImageSelectionKind,
+): ImageSelection | null =>
+  mask.bounds
+    ? {
+        ...mask.bounds,
+        kind,
+        mask: {
+          width: mask.width,
+          height: mask.height,
+          data: mask.data,
+        },
+      }
+    : null;
+const activeImageSelectionMask = computed(() =>
+  imageSelectionToPixelMask(imageSelection.value),
+);
+const imageSelectionMasksAreEqual = (
+  left: ImageSelection | null,
+  right: ImageSelection | null,
+) => {
+  if (!left || !right) return left === right;
+  if (
+    left.x !== right.x ||
+    left.y !== right.y ||
+    left.width !== right.width ||
+    left.height !== right.height ||
+    left.kind !== right.kind
+  ) {
+    return false;
+  }
+  const leftMask = left.mask;
+  const rightMask = right.mask;
+  if (!leftMask || !rightMask) return !leftMask && !rightMask;
+  if (
+    leftMask.width !== rightMask.width ||
+    leftMask.height !== rightMask.height ||
+    leftMask.data.length !== rightMask.data.length
+  ) {
+    return false;
+  }
+  return leftMask.data.every((value, index) => value === rightMask.data[index]);
+};
+const applyImageSelectionCandidate = (
+  candidate: PixelSelectionMask,
+  kind: ImageSelectionKind,
+  mode: ImageSelectionMode,
+  baseSelection: ImageSelection | null = imageSelection.value,
+) => {
+  const effectiveMode =
+    !baseSelection && (mode === "subtract" || mode === "intersect")
+      ? "replace"
+      : mode;
+  const combined = combineSelectionMasks(
+    imageSelectionToPixelMask(baseSelection, candidate),
+    candidate,
+    effectiveMode,
+  );
+  imageSelection.value = imageSelectionFromPixelMask(combined, kind);
+};
+const resolveImageSelectionMode = (event: PointerEvent): ImageSelectionMode => {
+  if (event.shiftKey && event.altKey) return "intersect";
+  if (event.shiftKey) return "add";
+  if (event.altKey) return "subtract";
+  return imageSelectionMode.value;
+};
+const clampImageSelectionPoint = (point: Point): Point => ({
+  x: Math.max(0, Math.min(imageGridWidth.value - 1, Math.round(point.x))),
+  y: Math.max(0, Math.min(imageGridHeight.value - 1, Math.round(point.y))),
+});
+const imageSelectionPointWithinGestureTile = (
+  virtualPoint: Point | undefined,
+  fallbackPoint: Point,
+) => {
+  if (!virtualPoint || !imageSelectionGestureTileOffset) return fallbackPoint;
+  return clampImageSelectionPoint({
+    x: virtualPoint.x - imageSelectionGestureTileOffset.x,
+    y: virtualPoint.y - imageSelectionGestureTileOffset.y,
+  });
+};
+const filterImagePointsToSelection = (points: ReadonlyArray<Point>): Point[] => {
+  const selection = activeImageSelectionMask.value;
+  return selection ? points.filter((point) => isPixelSelected(selection, point)) : [...points];
+};
+const isImagePixelIndexWithinSelection = (index: number) => {
+  const selection = activeImageSelectionMask.value;
+  return (
+    !selection ||
+    isPixelSelected(selection, {
+      x: index % imageGridWidth.value,
+      y: Math.floor(index / imageGridWidth.value),
+    })
+  );
+};
+const createImageSelectionOutlinePath = (selection: ImageSelection | null) => {
+  const mask = imageSelectionToPixelMask(selection);
+  const bounds = mask?.bounds;
+  if (!mask || !bounds) return "";
+
+  const segments: string[] = [];
+  const selected = (x: number, y: number) =>
+    x >= 0 &&
+    x < mask.width &&
+    y >= 0 &&
+    y < mask.height &&
+    mask.data[y * mask.width + x] === 1;
+  for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
+    for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
+      if (!selected(x, y)) continue;
+      if (!selected(x, y - 1)) segments.push(`M${x} ${y}h1`);
+      if (!selected(x + 1, y)) segments.push(`M${x + 1} ${y}v1`);
+      if (!selected(x, y + 1)) segments.push(`M${x + 1} ${y + 1}h-1`);
+      if (!selected(x - 1, y)) segments.push(`M${x} ${y + 1}v-1`);
+    }
+  }
+  return segments.join("");
+};
+const imageSelectionOutlinePath = computed(() =>
+  createImageSelectionOutlinePath(imageSelection.value),
+);
 const imageMirrorModes = computed(() => ({
   horizontal: isImageHorizontalMirrorEnabled.value,
   horizontalAxisY: imageHorizontalMirrorAxisY.value,
@@ -1180,7 +1375,13 @@ const imageArtboardAriaLabel = computed(() => {
   const toolDescription =
     activeImageTool.value === "graffiti"
       ? " Alternates both colors in a 1 by 1 checker pattern. The right button reverses the pattern."
-      : "";
+      : activeImageTool.value === "select"
+        ? ` ${imageSelectionKind.value} selection in ${imageSelectionMode.value} mode.${
+            imageSelectionKind.value === "wand"
+              ? ` ${isImageSelectionContiguous.value ? "Contiguous" : "Global"} exact-color matching.`
+              : ""
+          }`
+        : "";
   const layerState =
     activeImageLayer.value && !activeImageLayer.value.visible
       ? " The active layer is hidden; show it to edit pixels."
@@ -1212,18 +1413,6 @@ const imageViewportAriaLabel = computed(() => {
 
   return `Drawing workspace. Start a stroke here and move onto the canvas. ${navigation}`;
 });
-const imageSelectionStyle = computed(() => {
-  const selection = imageSelection.value;
-  if (!selection || selection.width <= 0 || selection.height <= 0) return {};
-  const cellSize = imageArtboardMetrics.value.cellSize;
-
-  return {
-    height: `${selection.height * cellSize}px`,
-    left: `${selection.x * cellSize}px`,
-    top: `${selection.y * cellSize}px`,
-    width: `${selection.width * cellSize}px`,
-  };
-});
 const remoteImageCollaboratorList = computed(() =>
   Object.values(remoteImageCollaborators.value).filter(
     (collaborator) =>
@@ -1253,18 +1442,8 @@ const remoteImageCursorStyle = (collaborator: RemoteImageCollaborator) => {
     top: `${clientPoint.y - viewportRect.top}px`,
   };
 };
-const remoteImageSelectionStyle = (collaborator: RemoteImageCollaborator) => {
-  const selection = collaborator.selection;
-  if (!selection) return {};
-  const cellSize = imageArtboardMetrics.value.cellSize;
-  return {
-    "--image-collaborator-color": collaborator.color,
-    height: `${selection.height * cellSize}px`,
-    left: `${selection.x * cellSize}px`,
-    top: `${selection.y * cellSize}px`,
-    width: `${selection.width * cellSize}px`,
-  };
-};
+const remoteImageSelectionOutlinePath = (collaborator: RemoteImageCollaborator) =>
+  createImageSelectionOutlinePath(collaborator.selection);
 const imageHorizontalMirrorAxisStyle = computed(() => ({
   top: `${imageHorizontalMirrorAxisY.value * imageArtboardMetrics.value.cellSize}px`,
 }));
@@ -1978,15 +2157,25 @@ const flushImageCollaborationSelection = () => {
     imageCollaborationSelectionTimeout = null;
   }
   if (!pendingImageCollaborationSelection) return;
-  const payload = pendingImageCollaborationSelection;
+  const pending = pendingImageCollaborationSelection;
   pendingImageCollaborationSelection = null;
   lastImageCollaborationSelectionAt = Date.now();
-  sendImageCollaborationActivity("selection", payload);
+  sendImageCollaborationActivity("selection", {
+    selection: serializeCollaborativeSelection(
+      pending.selection
+        ? { ...pending.selection, mode: pending.mode }
+        : null,
+    ),
+  });
 };
 
 const broadcastImageSelection = () => {
   pendingImageCollaborationSelection = {
-    selection: imageSelection.value ? { ...imageSelection.value } : null,
+    // Selection objects and their masks are replaced, never mutated. Keeping
+    // the latest reference lets the throttle discard intermediate pointer
+    // frames without bit-packing a complete 256 x 256 mask for each one.
+    mode: imageSelectionMode.value,
+    selection: imageSelection.value,
   };
   const remaining = Math.max(
     0,
@@ -2095,6 +2284,8 @@ const handleProjectPresenceSync = (snapshot: ProjectPresenceSnapshot) => {
 
 const applyRemoteImageDocument = (document: PixelArtDocumentV2) => {
   const currentLayerId = activeImageLayerId.value;
+  const didResize =
+    document.width !== imageGridWidth.value || document.height !== imageGridHeight.value;
   imageGridWidth.value = document.width;
   imageGridHeight.value = document.height;
   imageLayers.value = document.layers.map((layer) => ({ ...layer, pixels: [...layer.pixels] }));
@@ -2102,6 +2293,10 @@ const applyRemoteImageDocument = (document: PixelArtDocumentV2) => {
     document.layers.some((layer) => layer.id === currentLayerId)
       ? currentLayerId
       : document.layers[document.layers.length - 1]?.id || "";
+  if (didResize) {
+    imageSelection.value = null;
+    broadcastImageSelection();
+  }
   syncImageDimensionDrafts();
   resetImageHistory();
   scheduleImageCanvasRender();
@@ -2158,6 +2353,22 @@ const handleProjectEditorActivity = (activity: ProjectEditorActivity) => {
     );
     if (nextLayers) {
       imageLayers.value = nextLayers;
+      if (imageHistory.value) {
+        imageHistory.value = imageHistory.value.mapSnapshots((snapshot) => {
+          const rebasedLayers = applyCollaborativePixelPatch(
+            snapshot.document.layers,
+            patch,
+            snapshot.document.width,
+            snapshot.document.height,
+          );
+          return rebasedLayers
+            ? {
+                ...snapshot,
+                document: { ...snapshot.document, layers: rebasedLayers },
+              }
+            : snapshot;
+        });
+      }
       lastRemoteImageMutationAt = Date.now();
       scheduleImageCanvasRender();
     }
@@ -2196,12 +2407,13 @@ const handleProjectEditorActivity = (activity: ProjectEditorActivity) => {
 const createImageSnapshot = (): ImageEditorSnapshot => ({
   document: buildImageDocument(),
   activeLayerId: activeImageLayerId.value,
-  selection: imageSelection.value ? { ...imageSelection.value } : null,
+  selection: cloneImageSelection(imageSelection.value),
 });
 
-const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSnapshot) => {
-  const leftDocument = left.document;
-  const rightDocument = right.document;
+const imageSnapshotDocumentsAreEqual = (
+  leftDocument: PixelArtDocumentV2,
+  rightDocument: PixelArtDocumentV2,
+) => {
   if (
     leftDocument.width !== rightDocument.width ||
     leftDocument.height !== rightDocument.height ||
@@ -2211,21 +2423,6 @@ const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSna
   ) {
     return false;
   }
-
-  const leftSelection = left.selection;
-  const rightSelection = right.selection;
-  if (
-    Boolean(leftSelection) !== Boolean(rightSelection) ||
-    (leftSelection &&
-      rightSelection &&
-      (leftSelection.x !== rightSelection.x ||
-        leftSelection.y !== rightSelection.y ||
-        leftSelection.width !== rightSelection.width ||
-        leftSelection.height !== rightSelection.height))
-  ) {
-    return false;
-  }
-
   return leftDocument.layers.every((layer, index) => {
     const other = rightDocument.layers[index];
     return (
@@ -2239,6 +2436,10 @@ const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSna
     );
   });
 };
+
+const imageSnapshotsAreEqual = (left: ImageEditorSnapshot, right: ImageEditorSnapshot) =>
+  imageSnapshotDocumentsAreEqual(left.document, right.document) &&
+  imageSelectionMasksAreEqual(left.selection, right.selection);
 
 const applyImageSnapshot = (snapshot: ImageEditorSnapshot) => {
   const document = snapshot.document;
@@ -2254,7 +2455,7 @@ const applyImageSnapshot = (snapshot: ImageEditorSnapshot) => {
     currentActiveLayerId,
     snapshot.activeLayerId,
   );
-  imageSelection.value = snapshot.selection ? { ...snapshot.selection } : null;
+  imageSelection.value = cloneImageSelection(snapshot.selection);
   syncImageDimensionDrafts();
   scheduleImageCanvasRender();
   void nextTick(scheduleImagePreviewViewportUpdate);
@@ -2280,21 +2481,44 @@ const commitImageHistory = () => {
   broadcastImageSelection();
 };
 
+const commitImageSelectionHistory = () => {
+  if (!imageHistory.value) {
+    resetImageHistory();
+  } else {
+    imageHistory.value = imageHistory.value.push(createImageSnapshot());
+  }
+  broadcastImageSelection();
+};
+
 const undoImage = () => {
   if (!imageHistory.value?.canUndo || !canEditImage.value) return;
+  const previousDocument = imageHistory.value.current.document;
   imageHistory.value = imageHistory.value.undo();
+  const documentChanged = !imageSnapshotDocumentsAreEqual(
+    previousDocument,
+    imageHistory.value.current.document,
+  );
   applyImageSnapshot(imageHistory.value.current);
-  scheduleImageAutosave();
-  broadcastImageDocument();
+  if (documentChanged) {
+    scheduleImageAutosave();
+    broadcastImageDocument();
+  }
   broadcastImageSelection();
 };
 
 const redoImage = () => {
   if (!imageHistory.value?.canRedo || !canEditImage.value) return;
+  const previousDocument = imageHistory.value.current.document;
   imageHistory.value = imageHistory.value.redo();
+  const documentChanged = !imageSnapshotDocumentsAreEqual(
+    previousDocument,
+    imageHistory.value.current.document,
+  );
   applyImageSnapshot(imageHistory.value.current);
-  scheduleImageAutosave();
-  broadcastImageDocument();
+  if (documentChanged) {
+    scheduleImageAutosave();
+    broadcastImageDocument();
+  }
   broadcastImageSelection();
 };
 
@@ -3310,6 +3534,23 @@ const processImagePointerSegment = (
     return;
   }
 
+  const lassoVirtualTo = getImageVirtualPixelPointFromClientCoordinates(to.x, to.y);
+  if (
+    imageInteractionKind.value === "select" &&
+    imageSelectionGestureKind === "lasso" &&
+    !isImageViewportPaintAwaitingArtboard &&
+    lassoVirtualTo
+  ) {
+    const fallbackPoint = clampImageSelectionPoint(lassoVirtualTo);
+    continuePaintingImageFromPointer(
+      event,
+      imagePixelIndexFor(fallbackPoint.y, fallbackPoint.x),
+      undefined,
+      lassoVirtualTo,
+    );
+    return;
+  }
+
   const contentLeft = clientSpace.rectLeft + clientSpace.borderLeft;
   const contentTop = clientSpace.rectTop + clientSpace.borderTop;
   const pixelSegment = getImagePixelSegmentFromClientSegment({
@@ -3345,7 +3586,14 @@ const processImagePointerSegment = (
     isImageViewportPaintAwaitingArtboard = false;
     startPaintingImageFromPointer(event, false, segmentStartIndex);
     if (segmentEndIndex !== segmentStartIndex) {
-      continuePaintingImageFromPointer(event, segmentEndIndex);
+      continuePaintingImageFromPointer(
+        event,
+        segmentEndIndex,
+        undefined,
+        activeImageTool.value === "select" && imageSelectionKind.value === "lasso"
+          ? lassoVirtualTo ?? undefined
+          : undefined,
+      );
     }
     return;
   }
@@ -3790,7 +4038,7 @@ const paintImagePixels = (indexes: number[], color: PixelColor) => {
       height: imageGridHeight.value,
       pixels: imagePixels.value,
     },
-    prepareImageCanvasStrokePoints(points),
+    filterImagePointsToSelection(prepareImageCanvasStrokePoints(points)),
     nextColor,
   );
   const didChange = mutation.changes.length > 0;
@@ -3845,6 +4093,7 @@ const paintImageGraffitiPixels = (indexes: number[]) => {
   let didChange = false;
   const changes: Array<{ index: number; after: PixelColor }> = [];
   for (const [index, color] of pixelsByIndex) {
+    if (!isImagePixelIndexWithinSelection(index)) continue;
     if (nextPixels[index] === color) continue;
     nextPixels[index] = color;
     didChange = true;
@@ -3863,7 +4112,8 @@ const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) =
   if (
     !canMutateActiveImageLayerPixels.value ||
     startIndex < 0 ||
-    startIndex >= imagePixelCount.value
+    startIndex >= imagePixelCount.value ||
+    !isImagePixelIndexWithinSelection(startIndex)
   ) {
     return;
   }
@@ -3878,7 +4128,12 @@ const fillImagePixelsFrom = (startIndex: number, replacementColor: PixelColor) =
   while (pending.length > 0) {
     const index = pending.pop();
 
-    if (index === undefined || visited.has(index) || nextPixels[index] !== targetColor) {
+    if (
+      index === undefined ||
+      visited.has(index) ||
+      !isImagePixelIndexWithinSelection(index) ||
+      nextPixels[index] !== targetColor
+    ) {
       continue;
     }
 
@@ -4052,7 +4307,9 @@ const updateImageShapePreview = (end: Point, event: PointerEvent) => {
       : tool === "rectangle"
         ? rectanglePoints(start, constrainedEnd, options)
         : ellipsePoints(start, constrainedEnd, options);
-  imageShapePreviewPoints.value = prepareImageCanvasStrokePoints(points);
+  imageShapePreviewPoints.value = filterImagePointsToSelection(
+    prepareImageCanvasStrokePoints(points),
+  );
   scheduleImageCanvasRender();
 };
 
@@ -4064,7 +4321,7 @@ const applyImagePoints = (points: Point[], color: PixelColor) => {
       height: imageGridHeight.value,
       pixels: imagePixels.value,
     },
-    points,
+    filterImagePointsToSelection(points),
     color,
   );
   if (mutation.changes.length === 0) return false;
@@ -4111,14 +4368,38 @@ const startPaintingImageFromPointer = (
   }
 
   if (tool === "select") {
+    imageSelectionGestureTileOffset =
+      imageSelectionKind.value !== "wand" && initialVirtualPoint
+        ? {
+            x: initialVirtualPoint.x - point.x,
+            y: initialVirtualPoint.y - point.y,
+          }
+        : null;
+    const selectionPoint = point;
     focusAndCaptureImagePointer(event);
-    imagePointerStart.value = point;
-    imagePointerEnd.value = point;
+    imagePointerStart.value = selectionPoint;
+    imagePointerEnd.value = selectionPoint;
     imageSelectionDidDrag = false;
-    imageSelection.value = normalizeSelection(point, point, {
-      width: imageGridWidth.value,
-      height: imageGridHeight.value,
-    });
+    imageSelectionGestureBase = cloneImageSelection(imageSelection.value);
+    imageSelectionGestureKind = imageSelectionKind.value;
+    imageSelectionGestureMode = resolveImageSelectionMode(event);
+    imageSelectionLassoPoints = [selectionPoint];
+    const dimensions = imageCanvasBounds.value;
+    const candidate =
+      imageSelectionGestureKind === "wand"
+        ? createMagicWandSelectionMask(activeImageBuffer(), selectionPoint, {
+            contiguous: isImageSelectionContiguous.value,
+          })
+        : imageSelectionGestureKind === "lasso"
+          ? createPointSelectionMask([selectionPoint], dimensions)
+          : createRectangleSelectionMask(selectionPoint, selectionPoint, dimensions);
+    applyImageSelectionCandidate(
+      candidate,
+      imageSelectionGestureKind,
+      imageSelectionGestureMode,
+      imageSelectionGestureBase,
+    );
+    if (imageSelectionGestureKind === "wand") imageSelectionDidDrag = true;
     broadcastImageSelection();
     imageInteractionKind.value = "select";
     return;
@@ -4127,14 +4408,15 @@ const startPaintingImageFromPointer = (
   if (tool === "move") {
     if (!canMutateActiveImageLayerPixels.value) return;
     focusAndCaptureImagePointer(event);
-    imagePointerStart.value = point;
-    imagePointerEnd.value = point;
+    const movePoint = initialVirtualPoint ?? point;
+    imagePointerStart.value = movePoint;
+    imagePointerEnd.value = movePoint;
     imageMoveSourceBuffer = {
       width: imageGridWidth.value,
       height: imageGridHeight.value,
       pixels: [...imagePixels.value],
     };
-    imageMoveSourceSelection = imageSelection.value ? { ...imageSelection.value } : null;
+    imageMoveSourceSelection = cloneImageSelection(imageSelection.value);
     imageMoveDidChange = false;
     imageInteractionKind.value = "move";
     isPaintingImage.value = true;
@@ -4193,15 +4475,44 @@ const continuePaintingImageFromPointer = (
   }
 
   if (imageInteractionKind.value === "select" && pixelIndex !== null && imagePointerStart.value) {
-    const point = imagePointFromPixelIndex(pixelIndex);
+    const point =
+      imageSelectionGestureKind === "lasso" &&
+      forcedVirtualPoint &&
+      !isImageWrapAroundEnabled.value
+        ? { x: Math.round(forcedVirtualPoint.x), y: Math.round(forcedVirtualPoint.y) }
+        : imageSelectionPointWithinGestureTile(
+            forcedVirtualPoint,
+            imagePointFromPixelIndex(pixelIndex),
+          );
+    if (imageSelectionGestureKind === "wand") return;
     if (!isSinglePixelSelectionGesture(imagePointerStart.value, point)) {
       imageSelectionDidDrag = true;
     }
     imagePointerEnd.value = point;
-    imageSelection.value = normalizeSelection(imagePointerStart.value, point, {
-      width: imageGridWidth.value,
-      height: imageGridHeight.value,
-    });
+    let candidate: PixelSelectionMask;
+    if (imageSelectionGestureKind === "lasso") {
+      const previousPoint = imageSelectionLassoPoints.at(-1) || imagePointerStart.value;
+      if (previousPoint.x === point.x && previousPoint.y === point.y) return;
+      // The rasterizer joins sampled points itself. Keeping only pointer samples
+      // avoids an ever-growing list of intermediate Bresenham points.
+      imageSelectionLassoPoints.push(point);
+      candidate = createLassoSelectionMask(
+        imageSelectionLassoPoints,
+        imageCanvasBounds.value,
+      );
+    } else {
+      candidate = createRectangleSelectionMask(
+        imagePointerStart.value,
+        point,
+        imageCanvasBounds.value,
+      );
+    }
+    applyImageSelectionCandidate(
+      candidate,
+      imageSelectionGestureKind,
+      imageSelectionGestureMode,
+      imageSelectionGestureBase,
+    );
     broadcastImageSelection();
     return;
   }
@@ -4224,23 +4535,25 @@ const continuePaintingImageFromPointer = (
       cancelImageInteraction(event);
       return;
     }
-    const point = imagePointFromPixelIndex(pixelIndex);
+    const point = forcedVirtualPoint ?? imagePointFromPixelIndex(pixelIndex);
     const delta = {
       x: point.x - imagePointerStart.value.x,
       y: point.y - imagePointerStart.value.y,
     };
     const result = imageMoveSourceSelection
-      ? moveRegion(imageMoveSourceBuffer, imageMoveSourceSelection, delta)
+      ? moveImageSelectedPixels(imageMoveSourceBuffer, imageMoveSourceSelection, delta)
       : {
-          mutation: moveLayer(imageMoveSourceBuffer, delta),
+          pixels: [...moveLayer(imageMoveSourceBuffer, delta).buffer.pixels],
           selection: null,
         };
     const previousPixels = imagePixels.value;
-    const nextPixels = [...result.mutation.buffer.pixels];
+    const nextPixels = [...result.pixels];
     imagePixels.value = nextPixels;
     imageSelection.value = result.selection;
     imagePointerEnd.value = point;
-    imageMoveDidChange = !imagePixelsAreEqual(imageMoveSourceBuffer.pixels, imagePixels.value);
+    imageMoveDidChange =
+      !imagePixelsAreEqual(imageMoveSourceBuffer.pixels, imagePixels.value) ||
+      !imageSelectionMasksAreEqual(imageMoveSourceSelection, result.selection);
     const collaborationChanges: Array<{ index: number; after: PixelColor }> = [];
     for (const [index, after] of nextPixels.entries()) {
       if (previousPixels[index] !== after) collaborationChanges.push({ index, after });
@@ -4290,10 +4603,13 @@ const stopPaintingImage = (event?: PointerEvent) => {
     applyImagePoints(imageShapePreviewPoints.value, imageInteractionColor);
   }
   if (interactionKind === "select" && !imageSelectionDidDrag) {
-    imageSelection.value = null;
+    imageSelection.value =
+      imageSelectionGestureMode === "replace"
+        ? null
+        : cloneImageSelection(imageSelectionGestureBase);
   }
   if (interactionKind === "select") {
-    broadcastImageSelection();
+    commitImageSelectionHistory();
     flushImageCollaborationSelection();
   }
   isPaintingImage.value = false;
@@ -4319,6 +4635,11 @@ const stopPaintingImage = (event?: PointerEvent) => {
   imageMoveSourceSelection = null;
   imageMoveDidChange = false;
   imageSelectionDidDrag = false;
+  imageSelectionGestureBase = null;
+  imageSelectionGestureKind = imageSelectionKind.value;
+  imageSelectionGestureMode = imageSelectionMode.value;
+  imageSelectionLassoPoints = [];
+  imageSelectionGestureTileOffset = null;
   lastPaintedImagePixelIndex = null;
   scheduleImageCanvasRender();
   if (shouldCommitHistory) {
@@ -4354,6 +4675,7 @@ const cancelImageInteraction = (
   finishRotatingImageFromPointer(event);
   const interactionKind = imageInteractionKind.value;
   const wasMoving = interactionKind === "move";
+  const wasSelecting = interactionKind === "select";
   hoveredImagePixelIndex.value = null;
   hoveredImageVirtualPoint.value = null;
   isPaintingImage.value = false;
@@ -4377,18 +4699,24 @@ const cancelImageInteraction = (
   imageShapePreviewPoints.value = [];
   if (wasMoving && imageMoveSourceBuffer) {
     imagePixels.value = [...imageMoveSourceBuffer.pixels];
-    imageSelection.value = imageMoveSourceSelection ? { ...imageMoveSourceSelection } : null;
+    imageSelection.value = cloneImageSelection(imageMoveSourceSelection);
+  }
+  if (wasSelecting) {
+    imageSelection.value = cloneImageSelection(imageSelectionGestureBase);
   }
   imageMoveSourceBuffer = null;
   imageMoveSourceSelection = null;
   imageMoveDidChange = false;
   imageSelectionDidDrag = false;
+  imageSelectionGestureBase = null;
+  imageSelectionGestureKind = imageSelectionKind.value;
+  imageSelectionGestureMode = imageSelectionMode.value;
+  imageSelectionLassoPoints = [];
+  imageSelectionGestureTileOffset = null;
   lastPaintedImagePixelIndex = null;
   scheduleImageCanvasRender();
-  if (wasMoving) {
-    broadcastImageDocument();
-    broadcastImageSelection();
-  }
+  if (wasMoving) broadcastImageDocument();
+  if (wasMoving || wasSelecting) broadcastImageSelection();
   if (interactionKind === "paint" && commitHistory) {
     commitImageHistory();
   }
@@ -4592,7 +4920,6 @@ const selectImageLayer = (layerId: string) => {
   ) {
     cancelImageInteractionBeforeLayerChange();
     activeImageLayerId.value = layerId;
-    imageSelection.value = null;
   }
 };
 
@@ -4638,7 +4965,6 @@ const removeImageLayer = (layerId: string) => {
   if (activeImageLayerId.value === layerId) {
     activeImageLayerId.value = layers[Math.min(index, layers.length - 1)]?.id || "";
   }
-  imageSelection.value = null;
   finishImageLayerMutation();
 };
 
@@ -4740,20 +5066,138 @@ const activeImageBuffer = () => ({
   pixels: imagePixels.value,
 });
 
-const selectAllImagePixels = () => {
-  imageSelection.value = {
-    x: 0,
-    y: 0,
-    width: imageGridWidth.value,
-    height: imageGridHeight.value,
+const createImageSelectionClipboard = (
+  buffer: PixelBuffer,
+  selection: ImageSelection,
+): ImageSelectionClipboard | null => {
+  const mask = imageSelectionToPixelMask(selection, buffer);
+  const bounds = mask?.bounds;
+  if (!mask || !bounds) return null;
+
+  const pixels: PixelColor[] = [];
+  const relativeMask = new Uint8Array(bounds.width * bounds.height);
+  for (let y = 0; y < bounds.height; y += 1) {
+    for (let x = 0; x < bounds.width; x += 1) {
+      const relativeIndex = y * bounds.width + x;
+      const sourceX = bounds.x + x;
+      const sourceY = bounds.y + y;
+      const sourceIndex = sourceY * buffer.width + sourceX;
+      const selected = mask.data[sourceIndex] === 1;
+      relativeMask[relativeIndex] = selected ? 1 : 0;
+      pixels.push(selected ? (buffer.pixels[sourceIndex] ?? null) : null);
+    }
+  }
+
+  return {
+    block: { width: bounds.width, height: bounds.height, pixels },
+    kind: selection.kind ?? "rectangle",
+    mask: createPixelSelectionMask(
+      { width: bounds.width, height: bounds.height },
+      relativeMask,
+    ),
   };
+};
+
+const clearImageSelectionPixels = (
+  buffer: PixelBuffer,
+  mask: PixelSelectionMask,
+) => {
+  const pixels = [...buffer.pixels];
+  for (let index = 0; index < mask.data.length; index += 1) {
+    if (mask.data[index] === 1) pixels[index] = null;
+  }
+  return pixels;
+};
+
+const placeImageSelectionClipboard = (
+  pixels: ReadonlyArray<PixelColor>,
+  dimensions: Readonly<{ width: number; height: number }>,
+  clipboard: ImageSelectionClipboard,
+  origin: Point,
+  transparent: "ignore" | "replace" = "ignore",
+) => {
+  const nextPixels = [...pixels];
+  for (let y = 0; y < clipboard.block.height; y += 1) {
+    for (let x = 0; x < clipboard.block.width; x += 1) {
+      const sourceIndex = y * clipboard.block.width + x;
+      if (clipboard.mask.data[sourceIndex] !== 1) continue;
+      const destinationX = origin.x + x;
+      const destinationY = origin.y + y;
+      if (
+        destinationX < 0 ||
+        destinationX >= dimensions.width ||
+        destinationY < 0 ||
+        destinationY >= dimensions.height
+      ) {
+        continue;
+      }
+      const color = clipboard.block.pixels[sourceIndex] ?? null;
+      if (color === null && transparent === "ignore") continue;
+      nextPixels[destinationY * dimensions.width + destinationX] = color;
+    }
+  }
+  return nextPixels;
+};
+
+const positionImageClipboardMask = (
+  mask: PixelSelectionMask,
+  origin: Point,
+  dimensions = imageCanvasBounds.value,
+) => {
+  const points: Point[] = [];
+  for (let index = 0; index < mask.data.length; index += 1) {
+    if (mask.data[index] !== 1) continue;
+    points.push({
+      x: origin.x + (index % mask.width),
+      y: origin.y + Math.floor(index / mask.width),
+    });
+  }
+  return createPointSelectionMask(points, dimensions);
+};
+
+const moveImageSelectedPixels = (
+  buffer: PixelBuffer,
+  selection: ImageSelection,
+  delta: Point,
+) => {
+  const mask = imageSelectionToPixelMask(selection, buffer);
+  const clipboard = createImageSelectionClipboard(buffer, selection);
+  if (!mask || !clipboard || !mask.bounds) {
+    return { pixels: [...buffer.pixels], selection: null as ImageSelection | null };
+  }
+  const origin = {
+    x: mask.bounds.x + Math.round(delta.x),
+    y: mask.bounds.y + Math.round(delta.y),
+  };
+  const cleared = clearImageSelectionPixels(buffer, mask);
+  const pixels = placeImageSelectionClipboard(cleared, buffer, clipboard, origin);
+  const positionedMask = positionImageClipboardMask(clipboard.mask, origin, buffer);
+  return {
+    pixels,
+    selection: imageSelectionFromPixelMask(
+      positionedMask,
+      selection.kind ?? "rectangle",
+    ),
+  };
+};
+
+const selectAllImagePixels = () => {
+  imageSelectionKind.value = "rectangle";
+  imageSelection.value = imageSelectionFromPixelMask(
+    createRectangleSelectionMask(
+      { x: 0, y: 0 },
+      { x: imageGridWidth.value - 1, y: imageGridHeight.value - 1 },
+      imageCanvasBounds.value,
+    ),
+    "rectangle",
+  );
   activeImageTool.value = "select";
-  broadcastImageSelection();
+  commitImageSelectionHistory();
 };
 
 const deselectImagePixels = () => {
   imageSelection.value = null;
-  broadcastImageSelection();
+  commitImageSelectionHistory();
 };
 
 const applyImageMutationPixels = (
@@ -4767,13 +5211,17 @@ const applyImageMutationPixels = (
 
 const deleteImageSelection = () => {
   if (!imageSelection.value || !canMutateActiveImageLayerPixels.value) return;
-  const mutation = clearRect(activeImageBuffer(), imageSelection.value);
-  applyImageMutationPixels(mutation.buffer.pixels);
+  const mask = activeImageSelectionMask.value;
+  if (!mask) return;
+  applyImageMutationPixels(clearImageSelectionPixels(activeImageBuffer(), mask));
 };
 
 const copyImageSelection = () => {
   if (!imageSelection.value) return;
-  imageClipboard.value = extractBlock(activeImageBuffer(), imageSelection.value);
+  imageClipboard.value = createImageSelectionClipboard(
+    activeImageBuffer(),
+    imageSelection.value,
+  );
 };
 
 const cutImageSelection = () => {
@@ -4783,21 +5231,31 @@ const cutImageSelection = () => {
 };
 
 const pasteImageSelection = () => {
-  const block = imageClipboard.value;
-  if (!block || !canMutateActiveImageLayerPixels.value) return;
+  const clipboard = imageClipboard.value;
+  if (!clipboard || !canMutateActiveImageLayerPixels.value) return;
   const origin = imageSelection.value
     ? { x: imageSelection.value.x, y: imageSelection.value.y }
     : {
-        x: Math.floor((imageGridWidth.value - block.width) / 2),
-        y: Math.floor((imageGridHeight.value - block.height) / 2),
+        x: Math.floor((imageGridWidth.value - clipboard.block.width) / 2),
+        y: Math.floor((imageGridHeight.value - clipboard.block.height) / 2),
       };
-  const mutation = placeBlock(activeImageBuffer(), block, origin);
-  if (applyImageMutationPixels(mutation.buffer.pixels, { commitHistory: false })) {
-    imageSelection.value = normalizeSelection(
-      origin,
-      { x: origin.x + block.width - 1, y: origin.y + block.height - 1 },
-      { width: imageGridWidth.value, height: imageGridHeight.value },
-    );
+  const pixels = placeImageSelectionClipboard(
+    imagePixels.value,
+    imageCanvasBounds.value,
+    clipboard,
+    origin,
+  );
+  const nextSelection = imageSelectionFromPixelMask(
+    positionImageClipboardMask(clipboard.mask, origin),
+    clipboard.kind,
+  );
+  const didChangePixels = applyImageMutationPixels(pixels, { commitHistory: false });
+  const didChangeSelection = !imageSelectionMasksAreEqual(
+    imageSelection.value,
+    nextSelection,
+  );
+  imageSelection.value = nextSelection;
+  if (didChangePixels || didChangeSelection) {
     commitImageHistory();
   }
 };
@@ -4805,12 +5263,13 @@ const pasteImageSelection = () => {
 const nudgeImageSelection = ({ x, y }: { x: number; y: number }) => {
   if (!canMutateActiveImageLayerPixels.value) return;
   if (imageSelection.value) {
-    const result = moveRegion(activeImageBuffer(), imageSelection.value, { x, y });
-    const didChangePixels = applyImageMutationPixels(result.mutation.buffer.pixels, {
+    const previousSelection = imageSelection.value;
+    const result = moveImageSelectedPixels(activeImageBuffer(), previousSelection, { x, y });
+    const didChangePixels = applyImageMutationPixels(result.pixels, {
       commitHistory: false,
     });
     imageSelection.value = result.selection;
-    if (didChangePixels) {
+    if (didChangePixels || !imageSelectionMasksAreEqual(previousSelection, result.selection)) {
       commitImageHistory();
     }
     return;
@@ -4824,6 +5283,55 @@ const transformImagePixels = (
   transform: (block: PixelBlock) => PixelBlock,
 ) => {
   if (!canMutateActiveImageLayerPixels.value) return;
+  if (imageSelection.value) {
+    const previousSelection = imageSelection.value;
+    const sourceMask = activeImageSelectionMask.value;
+    const clipboard = createImageSelectionClipboard(
+      activeImageBuffer(),
+      previousSelection,
+    );
+    if (!sourceMask || !sourceMask.bounds || !clipboard) return;
+
+    const block = transform(clipboard.block);
+    const transformedMaskBlock = transform({
+      width: clipboard.mask.width,
+      height: clipboard.mask.height,
+      pixels: Array.from(clipboard.mask.data, (selected) =>
+        selected === 1 ? "#ffffff" : null,
+      ),
+    });
+    const transformedMask = createPixelSelectionMask(
+      { width: transformedMaskBlock.width, height: transformedMaskBlock.height },
+      transformedMaskBlock.pixels.map((pixel) => (pixel === null ? 0 : 1)),
+    );
+    const transformedClipboard: ImageSelectionClipboard = {
+      block,
+      kind: clipboard.kind,
+      mask: transformedMask,
+    };
+    const origin = { x: sourceMask.bounds.x, y: sourceMask.bounds.y };
+    const cleared = clearImageSelectionPixels(activeImageBuffer(), sourceMask);
+    const pixels = placeImageSelectionClipboard(
+      cleared,
+      imageCanvasBounds.value,
+      transformedClipboard,
+      origin,
+      "replace",
+    );
+    const nextSelection = imageSelectionFromPixelMask(
+      positionImageClipboardMask(transformedMask, origin),
+      clipboard.kind,
+    );
+    const didChangePixels = applyImageMutationPixels(pixels, { commitHistory: false });
+    const didChangeSelection = !imageSelectionMasksAreEqual(
+      previousSelection,
+      nextSelection,
+    );
+    imageSelection.value = nextSelection;
+    if (didChangePixels || didChangeSelection) commitImageHistory();
+    return;
+  }
+
   const sourceRect = imageSelection.value || {
     x: 0,
     y: 0,
@@ -4833,21 +5341,12 @@ const transformImagePixels = (
   const sourceBuffer = activeImageBuffer();
   const block = transform(extractBlock(sourceBuffer, sourceRect));
   const cleared = clearRect(sourceBuffer, sourceRect);
-  const origin = imageSelection.value
-    ? { x: sourceRect.x, y: sourceRect.y }
-    : {
-        x: Math.floor((imageGridWidth.value - block.width) / 2),
-        y: Math.floor((imageGridHeight.value - block.height) / 2),
-      };
+  const origin = {
+    x: Math.floor((imageGridWidth.value - block.width) / 2),
+    y: Math.floor((imageGridHeight.value - block.height) / 2),
+  };
   const placed = placeBlock(cleared.buffer, block, origin, { transparent: "replace" });
   if (applyImageMutationPixels(placed.buffer.pixels, { commitHistory: false })) {
-    if (imageSelection.value) {
-      imageSelection.value = normalizeSelection(
-        origin,
-        { x: origin.x + block.width - 1, y: origin.y + block.height - 1 },
-        { width: imageGridWidth.value, height: imageGridHeight.value },
-      );
-    }
     commitImageHistory();
   }
 };
@@ -5367,6 +5866,11 @@ const currentImageEditorSession = (): ImageEditorSession => ({
   brushSize: imageBrushSize.value,
   brushShape: imageBrushShape.value,
   shapeFilled: isImageShapeFilled.value,
+  selectionOptions: {
+    kind: imageSelectionKind.value,
+    mode: imageSelectionMode.value,
+    contiguous: isImageSelectionContiguous.value,
+  },
   lastInspectorPanel: lastImageInspectorPanel.value,
   preferences: currentImagePreferences(),
   viewport: {
@@ -5402,6 +5906,14 @@ const applyImageEditorSession = (value: unknown) => {
   imageBrushSize.value = session.brushSize;
   imageBrushShape.value = session.brushShape;
   isImageShapeFilled.value = session.shapeFilled;
+  imageSelectionKind.value = session.selectionOptions.kind;
+  imageSelectionMode.value =
+    !imageSelection.value &&
+    (session.selectionOptions.mode === "subtract" ||
+      session.selectionOptions.mode === "intersect")
+      ? "replace"
+      : session.selectionOptions.mode;
+  isImageSelectionContiguous.value = session.selectionOptions.contiguous;
   lastImageInspectorPanel.value = session.lastInspectorPanel;
   applyImagePreferences(session.preferences);
   imageZoomMode.value = session.viewport.mode;
@@ -5492,6 +6004,15 @@ watch(
   scheduleImageEditorSessionSave,
   { deep: true },
 );
+
+watch(imageSelection, (selection) => {
+  if (
+    !selection &&
+    (imageSelectionMode.value === "subtract" || imageSelectionMode.value === "intersect")
+  ) {
+    imageSelectionMode.value = "replace";
+  }
+});
 
 watch([isImageGridVisible, imageGridLineStyle, imageGridGap], () => {
   scheduleImageCanvasRender();
@@ -6053,6 +6574,7 @@ onUnmounted(() => {
             class="image-editor-toolbar"
             :active-tool="activeImageTool"
             :can-edit="canEditImage"
+            :selection-tool="imageSelectionKind"
             @select-tool="activeImageTool = $event"
           />
         </aside>
@@ -6523,12 +7045,19 @@ onUnmounted(() => {
             :brush-size="imageBrushSize"
             :brush-shape="imageBrushShape"
             :shape-filled="isImageShapeFilled"
+            :selection-tool="imageSelectionKind"
+            :selection-mode="imageSelectionMode"
+            :selection-contiguous="isImageSelectionContiguous"
+            :has-selection="imageSelection !== null"
             :can-undo="canUndoImage"
             :can-redo="canRedoImage"
             :can-edit="canEditImage"
             @update:brush-size="imageBrushSize = $event"
             @update:brush-shape="imageBrushShape = $event"
             @update:shape-filled="isImageShapeFilled = $event"
+            @update:selection-tool="imageSelectionKind = $event"
+            @update:selection-mode="imageSelectionMode = $event"
+            @update:selection-contiguous="isImageSelectionContiguous = $event"
             @undo="undoImage"
             @redo="redoImage"
           />
@@ -6872,22 +7401,41 @@ onUnmounted(() => {
               :style="cell.style"
               aria-hidden="true"
             ></span>
-            <span
-              v-if="imageSelection"
+            <svg
+              v-if="imageSelectionOutlinePath"
               class="image-editor-selection"
-              :style="imageSelectionStyle"
+              :viewBox="`0 0 ${imageGridWidth} ${imageGridHeight}`"
+              preserveAspectRatio="none"
               aria-hidden="true"
-            ></span>
+            >
+              <path
+                class="image-editor-selection__base"
+                :d="imageSelectionOutlinePath"
+                vector-effect="non-scaling-stroke"
+              />
+              <path
+                class="image-editor-selection__ants"
+                :d="imageSelectionOutlinePath"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
             <template
               v-for="collaborator in remoteImageCollaboratorList"
               :key="`remote-collaborator-${collaborator.clientId}`"
             >
-              <span
-                v-if="collaborator.selection"
+              <svg
+                v-if="remoteImageSelectionOutlinePath(collaborator)"
                 class="image-editor-remote-selection"
-                :style="remoteImageSelectionStyle(collaborator)"
+                :style="{ '--image-collaborator-color': collaborator.color }"
+                :viewBox="`0 0 ${imageGridWidth} ${imageGridHeight}`"
+                preserveAspectRatio="none"
                 aria-hidden="true"
-              ></span>
+              >
+                <path
+                  :d="remoteImageSelectionOutlinePath(collaborator)"
+                  vector-effect="non-scaling-stroke"
+                />
+              </svg>
             </template>
             <div
               v-if="isImageHorizontalMirrorEnabled && isImageHorizontalMirrorLineVisible"
@@ -8649,21 +9197,49 @@ onUnmounted(() => {
 
   .image-editor-selection {
     position: absolute;
+    inset: 0;
     z-index: 5;
-    box-sizing: border-box;
-    border: 1px solid #ffffff;
-    outline: 1px dashed #111111;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
     pointer-events: none;
-    animation: image-selection-pulse 900ms steps(2, end) infinite;
+  }
+
+  .image-editor-selection path {
+    fill: none;
+    stroke-linecap: square;
+    stroke-linejoin: miter;
+  }
+
+  .image-editor-selection__base {
+    stroke: #ffffff;
+    stroke-width: 2px;
+  }
+
+  .image-editor-selection__ants {
+    stroke: #111111;
+    stroke-width: 2px;
+    stroke-dasharray: 4 4;
+    animation: image-selection-march 700ms linear infinite;
   }
 
   .image-editor-remote-selection {
     position: absolute;
+    inset: 0;
     z-index: 5;
-    box-sizing: border-box;
-    border: 2px solid var(--image-collaborator-color);
+    width: 100%;
+    height: 100%;
+    overflow: visible;
     pointer-events: none;
     opacity: 0.9;
+  }
+
+  .image-editor-remote-selection path {
+    fill: none;
+    stroke: var(--image-collaborator-color);
+    stroke-linecap: square;
+    stroke-linejoin: miter;
+    stroke-width: 2px;
   }
 
   .image-editor-remote-cursor {
@@ -8819,10 +9395,9 @@ onUnmounted(() => {
     outline-offset: 3px;
   }
 
-  @keyframes image-selection-pulse {
-    50% {
-      border-color: #111111;
-      outline-color: #ffffff;
+  @keyframes image-selection-march {
+    to {
+      stroke-dashoffset: -8;
     }
   }
 
@@ -9268,7 +9843,7 @@ onUnmounted(() => {
       transition: none;
     }
 
-    .image-editor-selection,
+    .image-editor-selection__ants,
     .resource-editor-loader span {
       animation: none;
     }

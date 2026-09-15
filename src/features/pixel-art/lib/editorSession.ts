@@ -4,7 +4,7 @@ import {
   normalizeImagePreferences,
   type ImagePreferences,
 } from "../composables/useImagePreferences";
-import type { ImageTool } from "../types";
+import type { ImageSelectionKind, ImageSelectionMode, ImageTool } from "../types";
 
 export const IMAGE_EDITOR_SESSION_VERSION = 1;
 
@@ -19,6 +19,11 @@ export type ImageEditorSession = {
   brushSize: number;
   brushShape: BrushShape;
   shapeFilled: boolean;
+  selectionOptions: {
+    kind: ImageSelectionKind;
+    mode: ImageSelectionMode;
+    contiguous: boolean;
+  };
   lastInspectorPanel: ImageInspectorPanel;
   preferences: ImagePreferences;
   viewport: {
@@ -53,6 +58,17 @@ const IMAGE_TOOLS: ReadonlySet<ImageTool> = new Set([
   "move",
 ]);
 const BRUSH_SHAPES: ReadonlySet<BrushShape> = new Set(["square", "circle", "diamond"]);
+const SELECTION_KINDS: ReadonlySet<ImageSelectionKind> = new Set([
+  "rectangle",
+  "lasso",
+  "wand",
+]);
+const SELECTION_MODES: ReadonlySet<ImageSelectionMode> = new Set([
+  "replace",
+  "add",
+  "subtract",
+  "intersect",
+]);
 const INSPECTOR_PANELS: ReadonlySet<ImageInspectorPanel> = new Set([
   "preferences",
   "resize",
@@ -93,6 +109,11 @@ const defaultImageEditorSession: ImageEditorSession = {
   brushSize: 1,
   brushShape: "square",
   shapeFilled: false,
+  selectionOptions: {
+    kind: "rectangle",
+    mode: "replace",
+    contiguous: true,
+  },
   lastInspectorPanel: "resize",
   preferences: DEFAULT_IMAGE_PREFERENCES,
   viewport: {
@@ -125,6 +146,9 @@ export const normalizeImageEditorSession = (
   const source = isRecord(value) ? value : {};
   const viewport = isRecord(source.viewport) ? source.viewport : {};
   const canvasModes = isRecord(source.canvasModes) ? source.canvasModes : {};
+  const selectionOptions = isRecord(source.selectionOptions)
+    ? source.selectionOptions
+    : {};
   const activeLayerId =
     typeof source.activeLayerId === "string" && source.activeLayerId.trim()
       ? source.activeLayerId
@@ -142,6 +166,18 @@ export const normalizeImageEditorSession = (
       ? (source.brushShape as BrushShape)
       : fallback.brushShape,
     shapeFilled: booleanValue(source.shapeFilled, fallback.shapeFilled),
+    selectionOptions: {
+      kind: SELECTION_KINDS.has(selectionOptions.kind as ImageSelectionKind)
+        ? (selectionOptions.kind as ImageSelectionKind)
+        : fallback.selectionOptions.kind,
+      mode: SELECTION_MODES.has(selectionOptions.mode as ImageSelectionMode)
+        ? (selectionOptions.mode as ImageSelectionMode)
+        : fallback.selectionOptions.mode,
+      contiguous: booleanValue(
+        selectionOptions.contiguous,
+        fallback.selectionOptions.contiguous,
+      ),
+    },
     lastInspectorPanel: INSPECTOR_PANELS.has(
       source.lastInspectorPanel as ImageInspectorPanel,
     )

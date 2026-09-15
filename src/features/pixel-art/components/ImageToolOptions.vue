@@ -4,8 +4,13 @@ import { computed } from "vue";
 
 import type { BrushShape } from "../lib/drawing";
 import type { ImageTool } from "../types";
+import ImageSelectionControls from "./ImageSelectionControls.vue";
+import type {
+  ImageSelectionMode,
+  ImageSelectionTool,
+} from "./ImageSelectionControls.types";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   activeTool: ImageTool;
   brushSize: number;
   brushShape: BrushShape;
@@ -13,12 +18,24 @@ const props = defineProps<{
   canEdit: boolean;
   canUndo: boolean;
   canRedo: boolean;
-}>();
+  selectionTool?: ImageSelectionTool;
+  selectionMode?: ImageSelectionMode;
+  selectionContiguous?: boolean;
+  hasSelection?: boolean;
+}>(), {
+  selectionTool: "rectangle",
+  selectionMode: "replace",
+  selectionContiguous: true,
+  hasSelection: false,
+});
 
 const emit = defineEmits<{
   "update:brushSize": [size: number];
   "update:brushShape": [shape: BrushShape];
   "update:shapeFilled": [filled: boolean];
+  "update:selectionTool": [tool: ImageSelectionTool];
+  "update:selectionMode": [mode: ImageSelectionMode];
+  "update:selectionContiguous": [contiguous: boolean];
   undo: [];
   redo: [];
 }>();
@@ -67,7 +84,12 @@ const updateBrushSize = (event: Event) => {
 </script>
 
 <template>
-  <div class="image-tool-options" role="toolbar" aria-label="Tool options">
+  <div
+    class="image-tool-options"
+    :class="{ 'is-selection': activeTool === 'select' }"
+    role="toolbar"
+    aria-label="Tool options"
+  >
     <div class="image-tool-options__history" role="group" aria-label="Edit history">
       <button
         type="button"
@@ -95,6 +117,18 @@ const updateBrushSize = (event: Event) => {
 
     <span class="image-tool-options__separator" aria-hidden="true"></span>
     <span class="image-tool-options__tool">{{ toolLabels[activeTool] }}</span>
+
+    <ImageSelectionControls
+      v-if="activeTool === 'select'"
+      :tool="selectionTool"
+      :mode="selectionMode"
+      :contiguous="selectionContiguous"
+      :has-selection="hasSelection"
+      :can-edit="canEdit"
+      @update:tool="emit('update:selectionTool', $event)"
+      @update:mode="emit('update:selectionMode', $event)"
+      @update:contiguous="emit('update:selectionContiguous', $event)"
+    />
 
     <label v-if="supportsBrushSize" class="image-tool-options__size">
       <span>Size</span>
@@ -404,6 +438,10 @@ const updateBrushSize = (event: Event) => {
     .image-tool-options__filled,
     .image-tool-options__shape {
       flex-shrink: 0;
+    }
+
+    .image-tool-options.is-selection .image-tool-options__history {
+      display: none;
     }
 
     .image-tool-options__button {

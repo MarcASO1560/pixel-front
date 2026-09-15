@@ -25,6 +25,16 @@ export type ImageTool =
 
 export type SaveStatus = "saved" | "saving" | "dirty" | "error" | "offline";
 
+export type ImageSelectionKind = "rectangle" | "lasso" | "wand";
+
+export type ImageSelectionMode = "replace" | "add" | "subtract" | "intersect";
+
+export type ImageSelectionMask = {
+  width: number;
+  height: number;
+  data: Uint8Array;
+};
+
 export type PixelLayer = {
   id: string;
   name: string;
@@ -47,6 +57,10 @@ export type ImageSelection = {
   y: number;
   width: number;
   height: number;
+  /** Missing on legacy collaboration messages, which are treated as rectangles. */
+  kind?: ImageSelectionKind;
+  /** Full-canvas, row-major binary mask. Missing legacy selections use the bounds. */
+  mask?: ImageSelectionMask;
 };
 
 export type ImageEditorSnapshot = {

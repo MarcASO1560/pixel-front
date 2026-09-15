@@ -96,6 +96,15 @@ describe("snapshot history", () => {
     expect(replaced.canRedo).toBe(false);
   });
 
+  it("rebases every snapshot without losing the undo and redo position", () => {
+    const history = createHistory(0).push(1).push(2).undo();
+    const rebased = history.mapSnapshots((snapshot) => snapshot + 10);
+
+    expect(rebased.current).toBe(11);
+    expect(rebased.undo().current).toBe(10);
+    expect(rebased.redo().current).toBe(12);
+  });
+
   it("rejects invalid limits", () => {
     expect(() => createHistory(0, { limit: 0 })).toThrow(RangeError);
     expect(() => createHistory(0, { limit: Number.POSITIVE_INFINITY })).toThrow(RangeError);

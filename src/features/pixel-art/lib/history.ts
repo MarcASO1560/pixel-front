@@ -91,6 +91,21 @@ export class SnapshotHistory<T> {
     return this.withState(snapshot, [], []);
   }
 
+  /**
+   * Rebases every snapshot while preserving the current undo/redo position.
+   * Useful for external changes that must survive subsequent history travel.
+   */
+  mapSnapshots(transform: (snapshot: T) => T): SnapshotHistory<T> {
+    const current = transform(this.current);
+    const past = this.past.map(transform);
+    const future = this.future.map(transform);
+    const changed =
+      current !== this.current ||
+      past.some((snapshot, index) => snapshot !== this.past[index]) ||
+      future.some((snapshot, index) => snapshot !== this.future[index]);
+    return changed ? this.withState(current, past, future) : this;
+  }
+
   private withState(
     current: T,
     past: readonly T[],
