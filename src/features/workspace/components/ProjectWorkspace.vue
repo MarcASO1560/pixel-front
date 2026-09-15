@@ -487,7 +487,7 @@ const resourceRouteKind = (resourceType: string) => {
   return "image";
 };
 
-const openResourceEditor = (item: ExplorerItem) => {
+const openResourceEditor = (item: Pick<ExplorerItem, "id" | "type">) => {
   window.location.assign(
     `/studio/${encodeURIComponent(props.projectId)}/${resourceRouteKind(item.type)}/${encodeURIComponent(
       item.id,
@@ -1852,8 +1852,8 @@ const createProjectItem = async () => {
       );
 
       appendSavedFolder(savedFolder);
-      selectedExplorerItemKey.value = `folder-${savedFolder.id}`;
       closeCreateResourceDialog(true);
+      openFolder(savedFolder.id);
       return;
     }
 
@@ -1881,8 +1881,8 @@ const createProjectItem = async () => {
     );
 
     appendSavedResource(savedResource);
-    selectedExplorerItemKey.value = `resource-${savedResource.id}`;
     closeCreateResourceDialog(true);
+    openResourceEditor(savedResource);
   } catch {
     createResourceErrorMessage.value = "Item could not be saved. Please try again.";
   } finally {
