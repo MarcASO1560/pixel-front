@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Maximize2, Minus, Plus, ScanLine } from "@lucide/vue";
+import { Maximize2, Minus, Plus, RotateCcw, RotateCw, ScanLine } from "@lucide/vue";
 import { computed } from "vue";
 
 const props = defineProps<{
   zoom: number;
   min: number;
   max: number;
+  rotationRadians: number;
 }>();
 
 const emit = defineEmits<{
@@ -13,6 +14,9 @@ const emit = defineEmits<{
   "zoom-out": [];
   fit: [];
   "actual-size": [];
+  "rotate-left": [];
+  "rotate-right": [];
+  "reset-rotation": [];
 }>();
 
 const normalizedMinimum = computed(() =>
@@ -31,10 +35,20 @@ const normalizedZoom = computed(() =>
 const zoomPercentage = computed(() => Math.round(normalizedZoom.value * 100));
 const canZoomOut = computed(() => normalizedZoom.value > normalizedMinimum.value + 1e-9);
 const canZoomIn = computed(() => normalizedZoom.value < normalizedMaximum.value - 1e-9);
+const rotationDegrees = computed(() => {
+  if (!Number.isFinite(props.rotationRadians)) return 0;
+
+  const normalizedRadians = Math.atan2(
+    Math.sin(props.rotationRadians),
+    Math.cos(props.rotationRadians),
+  );
+  const roundedDegrees = Math.round((normalizedRadians * 180) / Math.PI);
+  return Object.is(roundedDegrees, -0) ? 0 : roundedDegrees;
+});
 </script>
 
 <template>
-  <div class="image-zoom-controls" role="group" aria-label="Canvas zoom controls">
+  <div class="image-zoom-controls" role="group" aria-label="Canvas view controls">
     <button
       type="button"
       class="image-zoom-controls__button"
@@ -92,6 +106,44 @@ const canZoomIn = computed(() => normalizedZoom.value < normalizedMaximum.value 
     >
       <ScanLine aria-hidden="true" />
     </button>
+
+    <span
+      class="image-zoom-controls__rotation"
+      role="group"
+      aria-label="Canvas rotation controls"
+    >
+      <span class="image-zoom-controls__separator" aria-hidden="true"></span>
+
+      <button
+        type="button"
+        class="image-zoom-controls__button"
+        aria-label="Rotate canvas view left by 15 degrees"
+        title="Rotate view left 15°"
+        @click="emit('rotate-left')"
+      >
+        <RotateCcw aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        class="image-zoom-controls__button image-zoom-controls__rotation-value"
+        :aria-label="`Canvas rotation ${rotationDegrees} degrees. Reset rotation to 0 degrees. Hold Shift and Space, then drag to rotate`"
+        title="Reset canvas rotation to 0° · Shift + Space + drag to rotate"
+        @click="emit('reset-rotation')"
+      >
+        {{ rotationDegrees }}°
+      </button>
+
+      <button
+        type="button"
+        class="image-zoom-controls__button"
+        aria-label="Rotate canvas view right by 15 degrees"
+        title="Rotate view right 15°"
+        @click="emit('rotate-right')"
+      >
+        <RotateCw aria-hidden="true" />
+      </button>
+    </span>
   </div>
 </template>
 
@@ -164,6 +216,22 @@ const canZoomIn = computed(() => normalizedZoom.value < normalizedMaximum.value 
     text-align: center;
   }
 
+  .image-zoom-controls__rotation {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+  }
+
+  .image-zoom-controls__rotation-value {
+    width: auto;
+    min-width: 48px;
+    padding: 0 4px;
+    color: #c9c9c9;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
   .image-zoom-controls__separator {
     width: 1px;
     height: 16px;
@@ -193,6 +261,10 @@ const canZoomIn = computed(() => normalizedZoom.value < normalizedMaximum.value 
     .image-zoom-controls__separator {
       margin-right: 2px;
       margin-left: 2px;
+    }
+
+    .image-zoom-controls__rotation {
+      display: none;
     }
   }
 

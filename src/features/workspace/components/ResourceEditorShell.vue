@@ -259,6 +259,14 @@ type ImageTransformGesture = {
   initialView: ImageViewportTransform;
   lastFrame: TouchViewportGestureFrame;
 };
+type ImageDesktopRotationGesture = {
+  buttonMask: number;
+  captureTarget: HTMLElement;
+  center: Readonly<{ x: number; y: number }>;
+  hasPointerAngle: boolean;
+  pointerId: number;
+  previousPointerAngleRadians: number;
+};
 type RemoteImageCollaborator = {
   avatarUrl: string;
   clientId: string;
@@ -323,6 +331,8 @@ const MIN_IMAGE_ZOOM = 0.25;
 const MAX_IMAGE_ZOOM = 64;
 const IMAGE_ZOOM_WHEEL_STEP = 0.0018;
 const IMAGE_TOUCH_COMMIT_THRESHOLD = 8;
+const IMAGE_ROTATION_STEP_RADIANS = Math.PI / 12;
+const IMAGE_ROTATION_MIN_POINTER_RADIUS = 24;
 const IMAGE_AUTOSAVE_MS = 420;
 const IMAGE_COLLABORATION_CURSOR_INTERVAL_MS = 32;
 const IMAGE_COLLABORATION_PIXEL_INTERVAL_MS = 24;
@@ -436,9 +446,11 @@ const imageStageHeight = ref(0);
 const areImageDimensionsLinked = ref(true);
 const isPaintingImage = ref(false);
 const isPanningImage = ref(false);
+const isRotatingImage = ref(false);
 const isImagePinching = ref(false);
 const draggingImageMirrorAxis = ref<ImageMirrorAxis | null>(null);
 const isImageSpacePressed = ref(false);
+const isImageShiftPressed = ref(false);
 const imageInteractionKind = ref<"paint" | "shape" | "select" | "move" | null>(null);
 const hoveredImagePixelIndex = ref<number | null>(null);
 const hoveredImageVirtualPoint = ref<Point | null>(null);
@@ -481,6 +493,7 @@ let imageSelectionDidDrag = false;
 let imagePanPointerId: number | null = null;
 let imagePanPointerClientX = 0;
 let imagePanPointerClientY = 0;
+let imageDesktopRotationGesture: ImageDesktopRotationGesture | null = null;
 let imageViewportPaintPointerId: number | null = null;
 let imageMirrorAxisPointerId: number | null = null;
 let imageMirrorAxisCaptureTarget: HTMLElement | null = null;
@@ -501,6 +514,7 @@ let imageTransformGesture: ImageTransformGesture | null = null;
 let imageTouchNavigationActive = false;
 let imageTouchViewportGesture: TouchViewportGesture | null = null;
 let imageGestureView: ImageViewportTransform | null = null;
+const imageViewportTransformRevision = ref(0);
 let imageSingleTouchStartSnapshot: ImageEditorSnapshot | null = null;
 let imageSingleTouchStartHistory: SnapshotHistory<ImageEditorSnapshot> | null = null;
 let imageSingleTouchStartTool: ImageTool | null = null;
@@ -879,13 +893,17 @@ const imageArtboardMetricsForZoom = (zoom: number) => {
 const imageArtboardMetrics = computed(() => imageArtboardMetricsForZoom(imageZoom.value));
 const imageArtboardWidth = computed(() => imageArtboardMetrics.value.width);
 const imageArtboardHeight = computed(() => imageArtboardMetrics.value.height);
-const getImageViewportTransform = (): ImageViewportTransform =>
-  imageGestureView || {
+const getImageViewportTransform = (): ImageViewportTransform => {
+  // Remote cursors live outside the transformed artboard. Reading this revision
+  // makes Vue reproject them for every imperative touch-transform frame.
+  void imageViewportTransformRevision.value;
+  return imageGestureView || {
     panX: imagePanX.value,
     panY: imagePanY.value,
     rotationRadians: imageRotationRadians.value,
     zoom: imageZoom.value,
   };
+};
 const imageArtboardCenterYRatio = computed(() =>
   imageViewportWidth.value <= 520 ? 0.46 : 0.5,
 );
@@ -1181,7 +1199,7 @@ const imageArtboardAriaLabel = computed(() => {
 });
 const imageViewportAriaLabel = computed(() => {
   const navigation =
-    "Hold Space to pan, use the mouse wheel to zoom, or use two fingers to move, zoom, and rotate.";
+    "Hold Space to pan, hold Shift and Space while dragging to rotate, use the mouse wheel to zoom, or use two fingers to move, zoom, and rotate.";
   if (isImagePixelMutationBlocked.value) {
     const reason =
       activeImageLayer.value && !activeImageLayer.value.visible
@@ -2743,6 +2761,25 @@ const showImageAtActualSize = () => {
 const zoomImageIn = () => setImageZoom(imageZoom.value * 1.25, "custom");
 const zoomImageOut = () => setImageZoom(imageZoom.value / 1.25, "custom");
 
+const setImageViewRotation = (rotationRadians: number) => {
+  if (!Number.isFinite(rotationRadians) || imageTouchNavigationActive) return;
+
+  const nextRotation = normalizeImageRotationRadians(rotationRadians);
+  if (Math.abs(nextRotation - imageRotationRadians.value) < 1e-9) return;
+
+  cancelScheduledImageFitToScreen();
+  imageZoomMode.value = "custom";
+  imageRotationRadians.value = nextRotation;
+  writeCommittedImageTransform();
+  scheduleImagePreviewViewportUpdate();
+};
+
+const rotateImageViewLeft = () =>
+  setImageViewRotation(imageRotationRadians.value - IMAGE_ROTATION_STEP_RADIANS);
+const rotateImageViewRight = () =>
+  setImageViewRotation(imageRotationRadians.value + IMAGE_ROTATION_STEP_RADIANS);
+const resetImageViewRotation = () => setImageViewRotation(0);
+
 let imagePreviewViewportFrame: number | null = null;
 
 const updateImagePreviewViewport = () => {
@@ -2951,6 +2988,7 @@ const getImagePointerEventIntent = (event: PointerEvent) =>
   getImagePointerIntent({
     button: event.button,
     buttons: event.buttons,
+    shiftPressed: event.shiftKey,
     spacePressed: isImageSpacePressed.value,
     startsOnArtboard: event.currentTarget === imageArtboardRef.value,
   });
@@ -2993,8 +3031,111 @@ const captureImagePointerInteractionIntent = (event: PointerEvent) => {
         : selectedImageColor.value;
 };
 
+const imageRotationPointerAngle = (
+  center: Readonly<{ x: number; y: number }>,
+  clientX: number,
+  clientY: number,
+) => Math.atan2(clientY - center.y, clientX - center.x);
+
+const finishRotatingImageFromPointer = (event?: PointerEvent) => {
+  const gesture = imageDesktopRotationGesture;
+  if (!gesture || (event && event.pointerId !== gesture.pointerId)) return false;
+
+  imageDesktopRotationGesture = null;
+  isRotatingImage.value = false;
+  if (gesture.captureTarget.hasPointerCapture?.(gesture.pointerId)) {
+    gesture.captureTarget.releasePointerCapture?.(gesture.pointerId);
+  }
+  imageRotationRadians.value = normalizeImageRotationRadians(imageRotationRadians.value);
+  writeCommittedImageTransform();
+  scheduleImagePreviewViewportUpdate();
+  return true;
+};
+
+const continueRotatingImageFromPointer = (event: PointerEvent) => {
+  const gesture = imageDesktopRotationGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return false;
+
+  if (
+    event.type === "pointermove" &&
+    (event.buttons & gesture.buttonMask) !== gesture.buttonMask
+  ) {
+    finishRotatingImageFromPointer(event);
+    return true;
+  }
+
+  const distanceFromCenter = Math.hypot(
+    event.clientX - gesture.center.x,
+    event.clientY - gesture.center.y,
+  );
+  if (distanceFromCenter < IMAGE_ROTATION_MIN_POINTER_RADIUS) {
+    gesture.hasPointerAngle = false;
+    return true;
+  }
+
+  const pointerAngle = imageRotationPointerAngle(gesture.center, event.clientX, event.clientY);
+  if (!gesture.hasPointerAngle) {
+    gesture.hasPointerAngle = true;
+    gesture.previousPointerAngleRadians = pointerAngle;
+    return true;
+  }
+
+  const rotationDelta = normalizeImageRotationRadians(
+    pointerAngle - gesture.previousPointerAngleRadians,
+  );
+  gesture.previousPointerAngleRadians = pointerAngle;
+  if (Math.abs(rotationDelta) < 1e-9) return true;
+
+  cancelScheduledImageFitToScreen();
+  imageZoomMode.value = "custom";
+  imageRotationRadians.value = normalizeImageRotationRadians(
+    imageRotationRadians.value + rotationDelta,
+  );
+  writeCommittedImageTransform();
+  scheduleImagePreviewViewportUpdate();
+  return true;
+};
+
+const startRotatingImageFromPointer = (event: PointerEvent) => {
+  if (
+    imageDesktopRotationGesture ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null ||
+    imageTouchNavigationActive ||
+    imageTouchPointers.size > 0
+  ) {
+    return;
+  }
+
+  const center = getImageArtboardClientSpace()?.center ?? getImageStageCenter();
+  if (!center) return;
+
+  const distanceFromCenter = Math.hypot(event.clientX - center.x, event.clientY - center.y);
+  imageDesktopRotationGesture = {
+    buttonMask: event.button === 1 || (event.buttons & 4) !== 0 ? 4 : 1,
+    captureTarget: event.currentTarget as HTMLElement,
+    center,
+    hasPointerAngle: distanceFromCenter >= IMAGE_ROTATION_MIN_POINTER_RADIUS,
+    pointerId: event.pointerId,
+    previousPointerAngleRadians: imageRotationPointerAngle(
+      center,
+      event.clientX,
+      event.clientY,
+    ),
+  };
+  isRotatingImage.value = true;
+  hoveredImagePixelIndex.value = null;
+  hoveredImageVirtualPoint.value = null;
+  broadcastImageCursor(null);
+  focusAndCaptureImagePointer(event);
+};
+
 const startPanningImageFromPointer = (event: PointerEvent) => {
-  if (imagePanPointerId !== null || imageViewportPaintPointerId !== null) {
+  if (
+    imageDesktopRotationGesture !== null ||
+    imagePanPointerId !== null ||
+    imageViewportPaintPointerId !== null
+  ) {
     return;
   }
 
@@ -3012,6 +3153,10 @@ const startImageViewportInteractionFromPointer = (
   startPoint?: Readonly<{ x: number; y: number }>,
 ) => {
   const intent = getImagePointerEventIntent(event);
+  if (intent === "rotate") {
+    startRotatingImageFromPointer(event);
+    return;
+  }
   if (intent === "pan") {
     startPanningImageFromPointer(event);
     return;
@@ -3019,6 +3164,7 @@ const startImageViewportInteractionFromPointer = (
 
   if (
     intent !== "paint" ||
+    imageDesktopRotationGesture !== null ||
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null
   ) {
@@ -3060,6 +3206,10 @@ const startImageArtboardInteractionFromPointer = (
   startPoint?: Readonly<{ x: number; y: number }>,
 ) => {
   const intent = getImagePointerEventIntent(event);
+  if (intent === "rotate") {
+    startRotatingImageFromPointer(event);
+    return;
+  }
   if (intent === "pan") {
     startPanningImageFromPointer(event);
     return;
@@ -3067,6 +3217,7 @@ const startImageArtboardInteractionFromPointer = (
 
   if (
     intent !== "paint" ||
+    imageDesktopRotationGesture !== null ||
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null
   ) {
@@ -3220,6 +3371,10 @@ const getImagePointerSamplePoints = (event: PointerEvent) => {
 };
 
 const continueImageViewportInteractionFromPointer = (event: PointerEvent) => {
+  if (continueRotatingImageFromPointer(event)) {
+    return;
+  }
+
   if (isPanningImage.value) {
     continuePanningImageFromPointer(event);
     return;
@@ -3247,6 +3402,12 @@ const continueImageViewportInteractionFromPointer = (event: PointerEvent) => {
 };
 
 const finishImagePointerInteractionFromPointer = (event: PointerEvent) => {
+  if (imageDesktopRotationGesture?.pointerId === event.pointerId) {
+    continueRotatingImageFromPointer(event);
+    finishRotatingImageFromPointer(event);
+    return;
+  }
+
   if (imagePanPointerId === event.pointerId) {
     continuePanningImageFromPointer(event);
     stopPaintingImage(event);
@@ -3273,6 +3434,7 @@ const writeImageGestureTransform = (view: ImageViewportTransform) => {
   artboard.style.setProperty("--image-pan-y", `${view.panY}px`);
   artboard.style.setProperty("--image-rotation", `${view.rotationRadians}rad`);
   artboard.style.setProperty("--image-live-scale", `${liveScale}`);
+  imageViewportTransformRevision.value += 1;
 };
 
 const writeCommittedImageTransform = () => {
@@ -3417,6 +3579,7 @@ const bindImageTouchViewportGesture = () => {
 const startImageTouchPointer = (event: PointerEvent, startsOnArtboard: boolean) => {
   if (
     draggingImageMirrorAxis.value !== null ||
+    imageDesktopRotationGesture !== null ||
     imageTouchNavigationActive ||
     imageTouchPointers.size >= 2
   ) {
@@ -4178,7 +4341,8 @@ const cancelImageInteraction = (
   event?: PointerEvent,
   { commitHistory = true }: Readonly<{ commitHistory?: boolean }> = {},
 ) => {
-  const activePointerId = imagePanPointerId ?? imageViewportPaintPointerId;
+  const activePointerId =
+    imageDesktopRotationGesture?.pointerId ?? imagePanPointerId ?? imageViewportPaintPointerId;
   if (
     event &&
     activePointerId !== null &&
@@ -4187,6 +4351,7 @@ const cancelImageInteraction = (
     return;
   }
 
+  finishRotatingImageFromPointer(event);
   const interactionKind = imageInteractionKind.value;
   const wasMoving = interactionKind === "move";
   hoveredImagePixelIndex.value = null;
@@ -4409,6 +4574,7 @@ const finishImageLayerMutation = () => {
 const cancelImageInteractionBeforeLayerChange = () => {
   if (
     imageInteractionKind.value !== null ||
+    imageDesktopRotationGesture !== null ||
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null ||
     imageTouchPointers.size > 0 ||
@@ -4976,6 +5142,7 @@ const finishImageInteractionBeforeCanvasModeChange = () => {
   clearImageMirrorAxisDrag(true);
   if (
     imageInteractionKind.value !== null ||
+    imageDesktopRotationGesture !== null ||
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null ||
     imageTouchPointers.size > 0
@@ -5401,6 +5568,25 @@ const isImageControlKeyboardTarget = (target: EventTarget | null) => {
 };
 
 const handleResourceEditorKeydown = (event: KeyboardEvent) => {
+  if (isImageEditor.value && event.key === "Shift") {
+    isImageShiftPressed.value = true;
+  }
+
+  if (
+    isImageEditor.value &&
+    event.key === "Escape" &&
+    (imageDesktopRotationGesture !== null ||
+      imagePanPointerId !== null ||
+      imageViewportPaintPointerId !== null ||
+      imageTouchPointers.size > 0 ||
+      imageTransformGesture !== null)
+  ) {
+    event.preventDefault();
+    resetImageTouchPointers();
+    cancelImageInteraction();
+    return;
+  }
+
   if (
     !isImageEditor.value ||
     event.defaultPrevented ||
@@ -5429,19 +5615,6 @@ const handleResourceEditorKeydown = (event: KeyboardEvent) => {
   ) {
     event.preventDefault();
     toggleImageWrapAround();
-    return;
-  }
-
-  if (
-    event.key === "Escape" &&
-    (imagePanPointerId !== null ||
-      imageViewportPaintPointerId !== null ||
-      imageTouchPointers.size > 0 ||
-      imageTransformGesture !== null)
-  ) {
-    event.preventDefault();
-    resetImageTouchPointers();
-    cancelImageInteraction();
     return;
   }
 
@@ -5487,12 +5660,15 @@ const handleResourceEditorKeydown = (event: KeyboardEvent) => {
 
 const handleResourceEditorKeyup = (event: KeyboardEvent) => {
   if (event.code === "Space") isImageSpacePressed.value = false;
+  if (event.key === "Shift") isImageShiftPressed.value = false;
 };
 
 const clearImageTemporaryKeys = () => {
   isImageSpacePressed.value = false;
+  isImageShiftPressed.value = false;
   clearImageMirrorAxisDrag(true);
   if (
+    imageDesktopRotationGesture !== null ||
     imagePanPointerId !== null ||
     imageViewportPaintPointerId !== null ||
     imageTouchPointers.size > 0 ||
@@ -5525,6 +5701,10 @@ const warnBeforeImageUnload = (event: BeforeUnloadEvent) => {
 };
 
 const flushImageBeforePageHide = () => {
+  finishRotatingImageFromPointer();
+  resetImageTouchPointers();
+  isImageSpacePressed.value = false;
+  isImageShiftPressed.value = false;
   if (imageAutosave.hasPendingChanges.value) {
     void imageAutosave.flush();
   }
@@ -5765,6 +5945,7 @@ onUnmounted(() => {
   imageTouchViewportGesture?.destroy();
   imageTouchViewportGesture = null;
   clearImageMirrorAxisDrag();
+  finishRotatingImageFromPointer();
   resetImageTouchPointers();
   if (imageFitFrame !== null) {
     window.cancelAnimationFrame(imageFitFrame);
@@ -6372,11 +6553,20 @@ onUnmounted(() => {
           :class="{
             'is-pan-ready':
               isImageSpacePressed &&
+              !isImageShiftPressed &&
+              !isPaintingImage &&
+              !isImagePinching &&
+              imageInteractionKind === null &&
+              imageViewportPaintPointerId === null,
+            'is-rotate-ready':
+              isImageSpacePressed &&
+              isImageShiftPressed &&
               !isPaintingImage &&
               !isImagePinching &&
               imageInteractionKind === null &&
               imageViewportPaintPointerId === null,
             'is-panning': isPanningImage,
+            'is-rotating': isRotatingImage,
             'is-pinching': isImagePinching,
             'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
           }"
@@ -6553,6 +6743,7 @@ onUnmounted(() => {
             class="image-editor-artboard"
             :class="{
               'is-panning': isPanningImage,
+              'is-rotating': isRotatingImage,
               'is-pinching': isImagePinching,
               'is-pixel-mutation-blocked': isImagePixelMutationBlocked,
               'is-wrap-around': isImageWrapAroundEnabled,
@@ -6870,10 +7061,14 @@ onUnmounted(() => {
             :zoom="imageZoom"
             :min="MIN_IMAGE_ZOOM"
             :max="MAX_IMAGE_ZOOM"
+            :rotation-radians="imageRotationRadians"
             @zoom-in="zoomImageIn"
             @zoom-out="zoomImageOut"
             @fit="fitImageToScreen"
             @actual-size="showImageAtActualSize"
+            @rotate-left="rotateImageViewLeft"
+            @rotate-right="rotateImageViewRight"
+            @reset-rotation="resetImageViewRotation"
           />
         </footer>
       </div>
@@ -7374,20 +7569,24 @@ onUnmounted(() => {
     cursor: not-allowed;
   }
 
-  .image-editor-viewport.is-pan-ready {
+  .image-editor-viewport.is-pan-ready,
+  .image-editor-viewport.is-rotate-ready {
     cursor: grab;
   }
 
   .image-editor-viewport.is-panning,
+  .image-editor-viewport.is-rotating,
   .image-editor-viewport.is-pinching {
     cursor: grabbing;
   }
 
-  .image-editor-viewport.is-pan-ready .image-editor-artboard {
+  .image-editor-viewport.is-pan-ready .image-editor-artboard,
+  .image-editor-viewport.is-rotate-ready .image-editor-artboard {
     cursor: grab;
   }
 
   .image-editor-viewport.is-panning .image-editor-artboard,
+  .image-editor-viewport.is-rotating .image-editor-artboard,
   .image-editor-viewport.is-pinching .image-editor-artboard {
     cursor: grabbing;
   }
@@ -8363,10 +8562,12 @@ onUnmounted(() => {
   }
 
   .image-editor-artboard.is-panning,
+  .image-editor-artboard.is-rotating,
   .image-editor-artboard.is-pinching {
     cursor: grabbing;
   }
 
+  .image-editor-artboard.is-rotating,
   .image-editor-artboard.is-pinching {
     will-change: transform;
   }
