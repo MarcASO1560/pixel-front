@@ -15,6 +15,7 @@ import {
   X,
 } from "@lucide/vue";
 import { Icon, type IconifyIcon } from "@iconify/vue";
+import fileDocumentOutlineIcon from "@iconify-icons/mdi/file-document-outline";
 import fileImageIcon from "@iconify-icons/mdi/file-image";
 import filmstripIcon from "@iconify-icons/mdi/filmstrip";
 import musicNoteIcon from "@iconify-icons/mdi/music-note";
@@ -215,7 +216,7 @@ import ImageEditorNotice from "../../pixel-art/components/ImageEditorNotice.vue"
 import ImageConflictNotice from "../../pixel-art/components/ImageConflictNotice.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
 
-type ResourceRouteKind = "image" | "animation" | "melody";
+type ResourceRouteKind = "image" | "animation" | "melody" | "text";
 
 type EditorMeta = {
   routeKind: ResourceRouteKind;
@@ -329,6 +330,12 @@ const editorMetaByType: Record<string, EditorMeta> = {
     label: "Melody",
     icon: musicNoteIcon,
     color: "#ffd76f",
+  },
+  text: {
+    routeKind: "text",
+    label: "Text",
+    icon: fileDocumentOutlineIcon,
+    color: "#f7f1e7",
   },
 };
 

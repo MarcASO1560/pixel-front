@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "@lucide/vue";
 import { Icon, type IconifyIcon } from "@iconify/vue";
+import fileDocumentOutlineIcon from "@iconify-icons/mdi/file-document-outline";
 import fileImageIcon from "@iconify-icons/mdi/file-image";
 import filmstripIcon from "@iconify-icons/mdi/filmstrip";
 import folderIcon from "@iconify-icons/mdi/folder";
@@ -46,7 +47,7 @@ import ProjectEditorDialog from "./ProjectEditorDialog.vue";
 import ProjectPresenceAvatars from "./ProjectPresenceAvatars.vue";
 import UserProfileDialog from "./UserProfileDialog.vue";
 
-type ResourceCreateType = "pixel_art" | "pixel_animation" | "sound_effect";
+type ResourceCreateType = "pixel_art" | "pixel_animation" | "sound_effect" | "text";
 type ExplorerCreateType = "folder" | ResourceCreateType;
 type ExplorerItemKind = "folder" | "resource";
 type ExplorerSortKey = "name" | "updatedAt" | "type";
@@ -223,6 +224,14 @@ const resourceTypeOptions: ResourceTypeOption[] = [
     defaultName: "Untitled sound",
     color: DEFAULT_ITEM_COLOR,
     icon: volumeHighIcon,
+  },
+  {
+    type: "text",
+    label: "Text",
+    description: "Plain text document",
+    defaultName: "Untitled text",
+    color: DEFAULT_ITEM_COLOR,
+    icon: fileDocumentOutlineIcon,
   },
 ];
 
@@ -469,6 +478,10 @@ const resourceRouteKind = (resourceType: string) => {
 
   if (resourceType === "sound_effect") {
     return "melody";
+  }
+
+  if (resourceType === "text") {
+    return "text";
   }
 
   return "image";
@@ -3294,7 +3307,7 @@ onUnmounted(() => {
   .resource-modal {
     display: grid;
     gap: 0;
-    width: min(620px, calc(100vw - 40px));
+    width: min(720px, calc(100vw - 40px));
     max-height: min(720px, calc(100dvh - 32px));
     overflow: auto;
     color: var(--text);
@@ -3465,7 +3478,7 @@ onUnmounted(() => {
 
   .resource-type-picker__grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 8px;
   }
 
